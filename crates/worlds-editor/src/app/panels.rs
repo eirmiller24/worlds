@@ -465,6 +465,11 @@ pub fn level_inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                 ui.weak("Levels");
                 ui.label(doc.levels.len().to_string());
                 ui.end_row();
+                if doc.project.worlds.len() > 1 {
+                    ui.weak("Worlds");
+                    ui.label(doc.project.worlds.len().to_string());
+                    ui.end_row();
+                }
                 ui.weak("Layers");
                 ui.label(doc.project.layers.len().to_string());
                 ui.end_row();

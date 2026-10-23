@@ -79,6 +79,19 @@ pub enum Action {
         level: crate::doc::LevelIx,
         origin: [i64; 2],
     },
+    /// Show this world, fitted.
+    SwitchWorld(worlds_core::Slug),
+    /// Ask for a slug and a name, then create a world and show it.
+    NewWorld,
+    /// Rename a world (`None`: the one shown).
+    RenameWorld(Option<worlds_core::Slug>),
+    /// Delete a world (`None`: the one shown), after a confirmation.
+    DeleteWorld(Option<worlds_core::Slug>),
+    /// Move a level to another world and follow it there.
+    MoveLevelToWorld {
+        level: worlds_core::Slug,
+        world: worlds_core::Slug,
+    },
 }
 
 impl Action {
@@ -134,6 +147,9 @@ impl Action {
             ),
             ("Edit level fields".into(), "", Action::OpenTypes(None)),
             ("Notes: show the Notes pane".into(), "", Action::ShowNotes),
+            ("New world…".into(), "", Action::NewWorld),
+            ("Rename world…".into(), "", Action::RenameWorld(None)),
+            ("Delete world…".into(), "", Action::DeleteWorld(None)),
         ];
         use super::project_pane::Section;
         for (name, s) in [

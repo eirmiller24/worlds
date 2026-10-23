@@ -61,6 +61,16 @@ pub fn plan(doc: &Document, req: &SnapshotRequest) -> Result<Plan, RpcError> {
                 [rect[2] as f64, rect[3] as f64],
             )
         }
+        ViewTarget::World(w) => {
+            let wi = world_index(doc, w)?;
+            let r = crate::viewport::world_wrect(doc, wi);
+            if r.is_empty() {
+                return Err(RpcError::invalid_params(format!(
+                    "world {w} has no levels or annotations to show"
+                )));
+            }
+            r
+        }
     };
     if req.size[0] == 0 || req.size[1] == 0 {
         return Err(RpcError::invalid_params(format!(
@@ -78,6 +88,30 @@ pub fn plan(doc: &Document, req: &SnapshotRequest) -> Result<Plan, RpcError> {
         ((rect.height() * scale).round() as u32).clamp(1, max[1]),
     ];
     Ok(Plan { rect, scale, size })
+}
+
+/// The index of world `w` in `project.worlds`.
+fn world_index(doc: &Document, w: &Slug) -> Result<usize, RpcError> {
+    doc.project
+        .worlds
+        .iter()
+        .position(|x| x.slug == *w)
+        .ok_or_else(|| RpcError::command(&CommandError::UnknownWorld(w.clone())))
+}
+
+/// The world a target is in (index into `project.worlds`): a level's or
+/// an annotation's world, the named one, else `None` (the view's).
+pub fn target_world(doc: &Document, target: &ViewTarget) -> Option<usize> {
+    match target {
+        ViewTarget::Level(slug) => doc.level_ix(slug.as_str()).map(|ix| doc.levels[ix].world),
+        ViewTarget::Note(id) => {
+            crate::annot::find_note(doc, id).map(|r| crate::annot::note_world(doc, r.at))
+        }
+        ViewTarget::WorldRect { world: Some(w), .. } | ViewTarget::World(w) => {
+            world_index(doc, w).ok()
+        }
+        ViewTarget::WorldRect { world: None, .. } => None,
+    }
 }
 
 fn check_world(doc: &Document, world: Option<&Slug>) -> Result<(), RpcError> {
@@ -163,6 +197,10 @@ impl SnapshotRenderer {
     ) -> Result<Snapshot, RpcError> {
         let plan = plan(doc, req)?;
         let mut view = snapshot_view(doc, view, req.layers.as_deref())?;
+        // Only the target's world is drawn.
+        if let Some(w) = target_world(doc, &req.target) {
+            view.set_world(doc, w);
+        }
         let img = self.render_rgba(doc, &mut view, &plan, req.overlays)?;
         let mut png = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)

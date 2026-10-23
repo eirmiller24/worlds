@@ -309,8 +309,13 @@ struct TilesetInfo {
 #[derive(Debug)]
 pub struct Scene {
     pub levels: Vec<LevelScene>,
-    /// Level indices sorted by depth (back to front), stable.
+    /// The levels of the world shown ([`Self::world`]), sorted by depth
+    /// (back to front), stable. Everything the map draws and hit-tests
+    /// goes through it, so other worlds' levels are never on screen.
     pub draw_order: Vec<LevelIx>,
+    /// The world shown (index into `project.worlds`): see
+    /// [`Self::set_world`].
+    pub world: usize,
     tilesets: HashMap<Slug, TilesetInfo>,
     /// Per project layer: RGBA of each IntGrid value (index - 1).
     value_colors: Vec<Vec<[u8; 4]>>,
@@ -366,6 +371,7 @@ impl Scene {
         let mut scene = Scene {
             levels: Vec::with_capacity(doc.levels.len()),
             draw_order: Vec::new(),
+            world: 0,
             tilesets,
             value_colors,
             next_id: 0,
@@ -380,8 +386,19 @@ impl Scene {
     }
 
     fn sort_levels(&mut self, doc: &Document) {
-        self.draw_order = (0..doc.levels.len()).collect();
+        let w = self.world;
+        self.draw_order = (0..doc.levels.len())
+            .filter(|&i| doc.levels[i].world == w)
+            .collect();
         self.draw_order.sort_by_key(|&i| doc.level(i).depth);
+    }
+
+    /// Show world `w`'s levels (the chunks of every level stay cached).
+    pub fn set_world(&mut self, doc: &Document, w: usize) {
+        if self.world != w {
+            self.world = w;
+            self.sort_levels(doc);
+        }
     }
 
     fn level_scene(&mut self, doc: &Document, ix: LevelIx) -> LevelScene {
