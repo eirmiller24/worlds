@@ -54,7 +54,10 @@ fn copy_of_game(tmp: &Path, name: &str) -> PathBuf {
     if let Some(parent) = game().parent() {
         let assets = parent.join("assets");
         if assets.is_dir() {
+            #[cfg(unix)]
             std::os::unix::fs::symlink(&assets, root.join("assets")).unwrap();
+            #[cfg(not(unix))]
+            copy_dir(&assets, &root.join("assets"));
         }
     }
     dir

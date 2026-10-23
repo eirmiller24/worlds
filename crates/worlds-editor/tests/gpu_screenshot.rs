@@ -80,7 +80,10 @@ fn temp_copy(project: &std::path::Path) -> (tempfile::TempDir, PathBuf) {
         for sib in LINKED_SIBLINGS {
             let src = parent.join(sib);
             if src.is_dir() {
+                #[cfg(unix)]
                 std::os::unix::fs::symlink(&src, tmp.path().join(sib)).unwrap();
+                #[cfg(not(unix))]
+                copy_dir(&src, &tmp.path().join(sib));
             }
         }
         for sib in COPIED_SIBLINGS {

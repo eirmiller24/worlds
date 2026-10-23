@@ -865,11 +865,6 @@ pub fn write_counted(
 /// `<project>`). Both are resolved through the file system when they
 /// exist; with no common root (another drive) it is `to`, absolute.
 fn relative_dir(from: &Path, to: &Path) -> String {
-    let resolve = |p: &Path| {
-        fs::canonicalize(p)
-            .or_else(|_| std::path::absolute(p))
-            .unwrap_or_else(|_| p.to_path_buf())
-    };
     let (from, to) = (resolve(from), resolve(to));
     let (a, b): (Vec<_>, Vec<_>) = (from.components().collect(), to.components().collect());
     let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
@@ -886,6 +881,28 @@ fn relative_dir(from: &Path, to: &Path) -> String {
         ".".into()
     } else {
         parts.join("/")
+    }
+}
+
+/// `p` made absolute, with symlinks resolved as far as it exists: the
+/// deepest existing ancestor is canonicalized and the rest appended. So a
+/// directory not created yet still compares equal to its existing parents
+/// when they sit behind a symlink (macOS's `/var` is `/private/var`).
+fn resolve(p: &Path) -> std::path::PathBuf {
+    let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+    let mut rest = Vec::new();
+    let mut cur = abs.as_path();
+    loop {
+        if let Ok(real) = fs::canonicalize(cur) {
+            return rest.iter().rev().fold(real, |acc, part| acc.join(part));
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => return abs,
+        }
     }
 }
 
@@ -1034,6 +1051,15 @@ mod tests {
             relative_dir(&tmp.path().join("a/out/x"), &proj),
             "../../b/p.worlds"
         );
+        // Behind a symlink (as macOS's /var is), the part that exists is
+        // resolved and the rest kept.
+        #[cfg(unix)]
+        {
+            let link = tmp.path().join("link");
+            std::os::unix::fs::symlink(tmp.path().join("a"), &link).unwrap();
+            assert_eq!(relative_dir(&link.join("out/x"), &proj), "../../b/p.worlds");
+            assert_eq!(relative_dir(&export, &link.join("b/p.worlds")), "..");
+        }
     }
 
     #[test]
