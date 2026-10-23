@@ -196,6 +196,13 @@ pub enum Grab {
     /// selection (Ctrl adds). The gesture's `CellHit`s carry some level
     /// (the active one, else the first); only their `world_px` counts.
     WorldMarquee,
+    /// A geometry handle of the one selected annotation: dragging moves
+    /// that vertex (or a rect region's edges), one `update_note` on release
+    /// ([`crate::annot::plan_vertex_move`]).
+    Vertex(crate::annot::Handle),
+    /// Alt on a segment of the one selected annotation: the release adds a
+    /// point there ([`crate::annot::plan_vertex_insert`]).
+    InsertVertex,
 }
 
 /// What the active tool sees this frame. Read by previews and from

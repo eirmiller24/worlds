@@ -485,7 +485,11 @@ pub fn check(dir: &Path) -> anyhow::Result<Report> {
     let level_slugs: HashSet<&str> = listed.iter().map(|l| l.slug.as_str()).collect();
     let mut ids: HashSet<String> = HashSet::new();
     for n in &notes {
-        if let Err(e) = serde_json::from_value::<worlds_core::Annotation>(n.note.clone()) {
+        let mut note = n.note.clone();
+        if note.get("kind").and_then(Value::as_str) == Some("connector") {
+            connector_ends(&mut report, n, &mut note, &level_slugs, &entity_ids);
+        }
+        if let Err(e) = serde_json::from_value::<worlds_core::Annotation>(note) {
             report.problem(
                 Kind::Format,
                 &n.file,
@@ -1027,4 +1031,71 @@ pub fn fresh(project_dir: &Path, export_dir: &Path, report: &mut Report) -> anyh
         }
     }
     Ok(())
+}
+
+/// An exported connector's resolved parts: each end's `level` (an entity
+/// end's too) names an exported level, an entity end an exported entity,
+/// and `points` is the line, its two ends plus the waypoints. They are
+/// taken out of `note` (the export-only keys), which is then the file form
+/// to parse as an annotation.
+fn connector_ends(
+    report: &mut Report,
+    n: &NoteAt,
+    note: &mut Value,
+    level_slugs: &HashSet<&str>,
+    entity_ids: &HashSet<String>,
+) {
+    let waypoints = note
+        .get("waypoints")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let points = note.as_object_mut().and_then(|m| m.remove("points"));
+    let ok_points = points
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.len() == waypoints + 2 && a.iter().all(|p| ints_of::<2>(p).is_some()));
+    if !ok_points {
+        report.problem(
+            Kind::Format,
+            &n.file,
+            format!("{}.points", n.path),
+            format!(
+                "a connector's points are its line: {} [x, y] (both ends and the waypoints)",
+                waypoints + 2
+            ),
+        );
+    }
+    for key in ["from", "to"] {
+        let Some(end) = note.get_mut(key).and_then(Value::as_object_mut) else {
+            continue; // the annotation parse reports it
+        };
+        let path = format!("{}.{key}", n.path);
+        let level = end.get("level").and_then(Value::as_str).map(str::to_string);
+        match &level {
+            None => report.problem(
+                Kind::Format,
+                &n.file,
+                &path,
+                "a connector end needs \"level\"",
+            ),
+            Some(l) if !level_slugs.contains(l.as_str()) => report.problem(
+                Kind::Reference,
+                &n.file,
+                &path,
+                format!("level {l:?} is not in the export"),
+            ),
+            Some(_) => {}
+        }
+        if let Some(id) = end.get("entity").and_then(Value::as_str) {
+            if !entity_ids.contains(id) {
+                report.problem(
+                    Kind::Reference,
+                    &n.file,
+                    &path,
+                    format!("entity {id} is not in the export"),
+                );
+            }
+            end.remove("level");
+        }
+    }
 }

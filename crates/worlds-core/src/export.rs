@@ -103,7 +103,7 @@ struct LevelFile<'a> {
     tile_layers: Vec<TileLayerOut<'a>>,
     entities: Vec<EntityOut<'a>>,
     /// Level notes flagged `export`, in world pixels.
-    notes: Vec<Annotation>,
+    notes: Vec<NoteOut>,
 }
 
 #[derive(Serialize)]
@@ -224,7 +224,7 @@ struct WorldOut<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
     /// World notes flagged `export`.
-    notes: Vec<Annotation>,
+    notes: Vec<NoteOut>,
     levels: Vec<LevelIndex<'a>>,
 }
 
@@ -417,7 +417,7 @@ fn level_json_with(
         .notes
         .iter()
         .filter(|n| is_exported(n))
-        .map(|n| exported_note(n, level.world_px))
+        .filter_map(|n| exported(project, n, level.world_px))
         .collect();
 
     let (fields, fields_set) = fields(&project.level_fields, &level.fields, entity_levels);
@@ -564,6 +564,112 @@ fn exported_note(n: &Annotation, origin: [i64; 2]) -> Annotation {
     n
 }
 
+/// An exported annotation: the file form ([`exported_note`]), except a
+/// connector, whose ends are resolved ([`ConnectorOut`]).
+#[derive(Serialize)]
+#[serde(untagged)]
+enum NoteOut {
+    Plain(Annotation),
+    Connector(ConnectorOut),
+}
+
+/// An exported connector: the file form in world pixels, an entity end
+/// with the slug of the level holding it, and `points`, the line as drawn
+/// (the computed ends and the waypoints), so a game can read it as a path.
+#[derive(Serialize)]
+struct ConnectorOut {
+    id: crate::Id,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<crate::model::Color>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    links: Vec<String>,
+    #[serde(skip_serializing_if = "is_open")]
+    status: crate::model::NoteStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    from: EndOut,
+    to: EndOut,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    waypoints: Vec<[i64; 2]>,
+    #[serde(skip_serializing_if = "is_arrow")]
+    style: crate::model::ConnectorStyle,
+    points: Vec<[i64; 2]>,
+}
+
+/// A connector end in the export: `{ "level": slug }`, or
+/// `{ "entity": id, "level": slug }` with the level holding the entity.
+#[derive(Serialize)]
+struct EndOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entity: Option<crate::Id>,
+    level: Slug,
+}
+
+fn is_open(s: &crate::model::NoteStatus) -> bool {
+    *s == crate::model::NoteStatus::Open
+}
+
+fn is_arrow(s: &crate::model::ConnectorStyle) -> bool {
+    *s == crate::model::ConnectorStyle::Arrow
+}
+
+/// An annotation as exported (`origin`: its level's position, for a level
+/// note). `None` for a connector with a dangling end (validation reports
+/// it): it has no line to export.
+fn exported(project: &Project, n: &Annotation, origin: [i64; 2]) -> Option<NoteOut> {
+    let n = exported_note(n, origin);
+    let Shape::Connector {
+        from,
+        to,
+        waypoints,
+        label,
+        style,
+    } = n.shape
+    else {
+        return Some(NoteOut::Plain(n));
+    };
+    let end = |e: &crate::model::Endpoint| {
+        let (anchor, _, level) = project.endpoint_anchor(e)?;
+        let entity = match e {
+            crate::model::Endpoint::Entity(id) => Some(id.clone()),
+            crate::model::Endpoint::Level(_) => None,
+        };
+        Some((
+            anchor,
+            EndOut {
+                entity,
+                level: level.slug.clone(),
+            },
+        ))
+    };
+    let (a, from) = end(&from)?;
+    let (b, to) = end(&to)?;
+    let points = crate::model::connector_polyline(a, b, &waypoints);
+    Some(NoteOut::Connector(ConnectorOut {
+        id: n.id,
+        kind: "connector",
+        title: n.title,
+        body: n.body,
+        tags: n.tags,
+        color: n.color,
+        links: n.links,
+        status: n.status,
+        label,
+        from,
+        to,
+        waypoints,
+        style,
+        points,
+    }))
+}
+
 // ---- world index ----
 
 /// `export/world.json`.
@@ -602,7 +708,7 @@ pub fn world_json(project: &Project) -> String {
                 .notes
                 .iter()
                 .filter(|n| is_exported(n))
-                .map(|n| exported_note(n, [0, 0]))
+                .filter_map(|n| exported(project, n, [0, 0]))
                 .collect(),
             levels: w
                 .levels

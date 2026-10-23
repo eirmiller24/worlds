@@ -112,7 +112,7 @@
       "description": "Same as the directory name; also the Godot room name."
     },
     "tags": {
-      "description": "Free tags (`knowledge`), the same vocabulary as annotation tags.\nNon-empty, no repeats (validation).",
+      "description": "Free tags (`forest`), the same vocabulary as annotation tags.\nNon-empty, no repeats (validation).",
       "items": {
         "type": "string"
       },

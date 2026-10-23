@@ -769,7 +769,7 @@ impl Viewport {
                 let cmd = if moved > crate::annot::DRAG_PX {
                     crate::annot::tool_drag(doc, cx.view, from, to, under, ctrl)
                 } else {
-                    crate::annot::tool_click(doc, cx.view, from, under, ctrl)
+                    crate::annot::tool_click_shift(doc, cx.view, from, under, ctrl, modifiers.shift)
                 };
                 if let Some(c) = cmd {
                     cx.actions.push(Action::Apply(Box::new(c)));
@@ -792,7 +792,7 @@ impl Viewport {
             if tool == Tool::Select {
                 if let Some(wp) = pointer_world {
                     let layer = hit_layer;
-                    self.gesture = select_press(
+                    self.gesture = select_press_alt(
                         doc,
                         cx.view,
                         SelectPress {
@@ -804,6 +804,7 @@ impl Viewport {
                             add,
                             zoom: cam.zoom,
                         },
+                        modifiers.alt,
                     )
                     .map(|(ix, grab)| begin(hit_in(ix, layer, wp), grab, cx.events));
                 }
@@ -1012,6 +1013,15 @@ impl Viewport {
                 CursorIcon::Crosshair
             } else if let Some(Grab::Handle(e)) = self.gesture.map(|g| g.2) {
                 handle_cursor(e)
+            } else if matches!(self.gesture, Some((_, _, Grab::Vertex(_)))) {
+                CursorIcon::Grabbing
+            } else if tool == Tool::Select
+                && !hand
+                && pointer_world
+                    .and_then(|wp| crate::annot::handle_at(doc, cx.view, wp, cam.zoom))
+                    .is_some()
+            {
+                CursorIcon::Grab
             } else if let Some(e) = handle {
                 handle_cursor(e)
             } else if matches!(
@@ -1051,6 +1061,25 @@ impl Viewport {
                 painter.rect_stroke(r, 0.0, Stroke::new(1.0, cx.accent), StrokeKind::Inside);
             }
             _ => {}
+        }
+        // Select: the geometry handles of the one selected annotation, and
+        // a handle drag where its release puts it.
+        if tool == Tool::Select && !hand {
+            let drag = match self.gesture {
+                Some((start, at, Grab::Vertex(h))) => Some((
+                    h,
+                    [
+                        at.world_px[0] - start.world_px[0],
+                        at.world_px[1] - start.world_px[1],
+                    ],
+                    crate::tools::pixel_mod(modifiers),
+                )),
+                _ => None,
+            };
+            let hover = pointer_world.filter(|_| resp.hovered() && self.gesture.is_none());
+            draw_note_handles(
+                &painter, doc, cx.view, drag, hover, cam.zoom, &to_screen, cx.accent,
+            );
         }
 
         // The other levels' names (with tiles drawn; the flat view centres
@@ -1545,6 +1574,7 @@ fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
                             NoteKind::Pin => "Pin",
                             NoteKind::Path => "Path",
                             NoteKind::Region => "Region",
+                            NoteKind::Connector => "Connector",
                         };
                         if ui
                             .add(egui::Button::selectable(view.note_tool.kind == k, label))
@@ -1589,6 +1619,12 @@ fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
                             "click points, Enter or double click finishes, Backspace drops one",
                         );
                     }
+                    if view.note_tool.kind == NoteKind::Connector {
+                        ui.weak(
+                            "click a room or entity, then another; clicks between (Shift: any) \
+                             add waypoints; Enter finishes",
+                        );
+                    }
                 });
             });
         });
@@ -1624,6 +1660,86 @@ fn draw_snaps(
     }
 }
 
+/// The handles of the one selected annotation ([`crate::annot::handles`]):
+/// a square per vertex, waypoint or rect handle, the highlighted one
+/// ([`ViewState::vertex`]) and the one under the pointer filled; gray
+/// when it is locked (they show, but don't edit). With `drag` (a handle,
+/// the drag in world px, Ctrl), the annotation where the release puts it
+/// and the guides it snapped to.
+#[allow(clippy::too_many_arguments)]
+fn draw_note_handles(
+    painter: &egui::Painter,
+    doc: &Document,
+    view: &ViewState,
+    drag: Option<(crate::annot::Handle, [f64; 2], bool)>,
+    hover: Option<[f64; 2]>,
+    zoom: f64,
+    to_screen: &dyn Fn([f64; 2]) -> Pos2,
+    accent: Color32,
+) {
+    let Some(r) = crate::annot::edited_note(doc, view) else {
+        return;
+    };
+    let mut note = r.note.clone();
+    let mut moved = false;
+    if let Some((h, d, pixel)) = drag.filter(|d| d.1 != [0.0, 0.0]) {
+        match crate::annot::plan_vertex_move(doc, view, h, d, pixel) {
+            Ok(p) => {
+                note = p.note;
+                moved = true;
+                let all = WRect::new(
+                    [f64::NEG_INFINITY, f64::NEG_INFINITY],
+                    [f64::INFINITY, f64::INFINITY],
+                );
+                draw_snaps(painter, &p.snaps, &all, to_screen);
+            }
+            Err(e) => {
+                if let Some(p) = painter.ctx().pointer_latest_pos() {
+                    painter.text(
+                        p + egui::vec2(14.0, 14.0),
+                        Align2::LEFT_TOP,
+                        e,
+                        FontId::proportional(12.0),
+                        Color32::from_rgb(230, 120, 120),
+                    );
+                }
+            }
+        }
+    }
+    let at = crate::annot::NoteRef {
+        at: r.at,
+        note: &note,
+    };
+    let mut mesh = egui::Mesh::default();
+    if moved {
+        for (a, b) in crate::annot::segments(doc, at) {
+            notes::seg_quad(&mut mesh, to_screen(a), to_screen(b), 2.0, accent);
+        }
+    }
+    let hot = view
+        .vertex
+        .as_ref()
+        .filter(|(id, _)| *id == note.id)
+        .map(|v| v.1);
+    let under = hover
+        .and_then(|wp| crate::annot::handle_at(doc, view, wp, zoom))
+        .map(|v| v.1);
+    let edge = if note.locked {
+        Color32::from_gray(150)
+    } else {
+        accent
+    };
+    for (h, p) in crate::annot::handles(doc, at) {
+        let c = to_screen(p);
+        let filled = Some(h) == hot || Some(h) == under;
+        let s = if filled { 9.0 } else { 7.0 };
+        let r = Rect::from_center_size(c, egui::vec2(s, s));
+        mesh.add_colored_rect(r, if filled { edge } else { Color32::from_gray(20) });
+        outline(&mut mesh, r, 1.0, edge);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// The Note tool's drawing in progress (a polyline to the pointer) or a
 /// measurement, with its readout by the pointer.
 fn draw_drawing(
@@ -1634,6 +1750,28 @@ fn draw_drawing(
     to_screen: &dyn Fn([f64; 2]) -> Pos2,
     accent: Color32,
 ) -> Option<String> {
+    if d.connector.is_some() {
+        // A connector: from its start through the waypoints to its end (or
+        // the pointer), a dot on each waypoint.
+        let sp: Vec<Pos2> = crate::annot::draft_line(doc, d, pointer)
+            .iter()
+            .map(|p| to_screen([p[0] as f64, p[1] as f64]))
+            .collect();
+        let mut mesh = egui::Mesh::default();
+        for k in 1..sp.len() {
+            notes::seg_quad(&mut mesh, sp[k - 1], sp[k], 2.0, accent);
+        }
+        for p in &d.points {
+            notes::disk(
+                &mut mesh,
+                to_screen([p[0] as f64, p[1] as f64]),
+                3.0,
+                accent,
+            );
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        return None;
+    }
     let mut pts: Vec<[i64; 2]> = d.points.clone();
     let live = if d.done { None } else { pointer };
     if let Some(p) = live {
@@ -1828,7 +1966,38 @@ pub fn select_press(
     view: &mut ViewState,
     p: SelectPress,
 ) -> Option<(LevelIx, Grab)> {
+    select_press_alt(doc, view, p, false)
+}
+
+/// [`select_press`] with Alt held: on a segment of the one selected
+/// annotation, it grabs [`Grab::InsertVertex`] (the release adds a point
+/// there). Without Alt, and first in any case, a geometry handle of the one
+/// selected annotation ([`crate::annot::handle_at`]) grabs
+/// [`Grab::Vertex`] and becomes the highlighted one ([`ViewState::vertex`]);
+/// a press anywhere else takes the highlight away.
+pub fn select_press_alt(
+    doc: &Document,
+    view: &mut ViewState,
+    p: SelectPress,
+    alt: bool,
+) -> Option<(LevelIx, Grab)> {
     use crate::view::SelItem;
+    let carrier = |view: &ViewState| {
+        crate::annot::edited_note(doc, view)
+            .and_then(|r| r.level())
+            .or(p.level_under)
+            .or(p.active.filter(|&a| a < doc.levels.len()))
+            .or((!doc.levels.is_empty()).then_some(0))
+            .unwrap_or(NO_LEVEL)
+    };
+    if let Some((id, h)) = crate::annot::handle_at(doc, view, p.wp, p.zoom) {
+        view.vertex = Some((id, h));
+        return Some((carrier(view), Grab::Vertex(h)));
+    }
+    view.vertex = None;
+    if alt && crate::annot::plan_vertex_insert(doc, view, p.wp, p.zoom, false).is_some() {
+        return Some((carrier(view), Grab::InsertVertex));
+    }
     if let (true, Some(ix)) = (p.on_tab, p.active) {
         let me = SelItem::Level(doc.ids[ix].clone());
         if view.selection.contains(&me) && view.selection.items.len() > 1 {

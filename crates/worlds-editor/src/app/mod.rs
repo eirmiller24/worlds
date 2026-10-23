@@ -698,6 +698,7 @@ impl EditorApp {
             ScriptStep::Ui(u) => return self.ui_step(&u),
             ScriptStep::NoteGesture(n) => return self.note_gesture(&n),
             ScriptStep::WorldSelect(w) => return self.world_select(&w),
+            ScriptStep::Vertex(v) => return self.vertex_gesture(&v),
             ScriptStep::History { redo, n } => {
                 for k in 0..n {
                     let can = if redo {
@@ -788,8 +789,9 @@ impl EditorApp {
         }));
         let kind = match g.kind.as_deref() {
             None => NoteKind::Note,
-            Some(k) => NoteKind::parse(k)
-                .ok_or_else(|| format!("kind {k:?}: expected note, pin, path or region"))?,
+            Some(k) => NoteKind::parse(k).ok_or_else(|| {
+                format!("kind {k:?}: expected note, pin, path, region or connector")
+            })?,
         };
         if measure && g.kind.is_some() {
             return Err("`kind` is for note gestures".into());
@@ -807,8 +809,9 @@ impl EditorApp {
             return Err("world_px: at least one point".into());
         }
         self.st.view.status = None;
-        let clicks =
-            measure || matches!(kind, NoteKind::Path) || (kind == NoteKind::Region && g.polygon);
+        let clicks = measure
+            || matches!(kind, NoteKind::Path | NoteKind::Connector)
+            || (kind == NoteKind::Region && g.polygon);
         let doc = self.st.doc.as_ref().ok_or("no project open")?;
         let under = |wp: [f64; 2]| crate::viewport::level_under(doc, wp);
         let mut cmds = Vec::new();
@@ -829,13 +832,14 @@ impl EditorApp {
             };
             cmds.extend(cmd);
         } else {
-            for &p in &g.world_px {
-                cmds.extend(crate::annot::tool_click(
+            for (i, &p) in g.world_px.iter().enumerate() {
+                cmds.extend(crate::annot::tool_click_shift(
                     doc,
                     &mut self.st.view,
                     p,
                     under(p),
                     g.ctrl,
+                    g.shift.contains(&i),
                 ));
             }
             for k in &g.keys {
@@ -875,10 +879,95 @@ impl EditorApp {
         Ok(())
     }
 
+    /// A script `vertex` gesture: the one annotation `note` selected, then
+    /// the Select tool on its geometry exactly as the mouse
+    /// ([`crate::viewport::select_press_alt`]): a press on handle `vertex`
+    /// (or a rect region's `handle`) dragged through `world_px`, or with
+    /// `delete` clicked (highlighted) and the Delete key pressed; or an
+    /// Alt+click at `insert`.
+    fn vertex_gesture(&mut self, g: &crate::script::VertexStep) -> Result<(), String> {
+        use crate::annot::Handle;
+        let doc = self.st.doc.as_ref().ok_or("no project open")?;
+        let id = worlds_core::Id::new(&g.note).map_err(|e| format!("note: {e}"))?;
+        let r = crate::annot::find_note(doc, &id).ok_or(format!("no annotation {id}"))?;
+        if let Some(ix) = r.level() {
+            self.st.view.active_level = Some(ix);
+        }
+        self.run(Action::SetTool(Tool::Select));
+        self.st
+            .view
+            .selection
+            .set([crate::view::SelItem::Note(id.clone())]);
+        let doc = self.st.doc.as_ref().ok_or("no project open")?;
+        let r = crate::annot::find_note(doc, &id).ok_or(format!("no annotation {id}"))?;
+        let handle = match (g.vertex, g.handle) {
+            (Some(i), None) => Some(Handle::Vertex(i)),
+            (None, Some(e)) => Some(Handle::Rect(e)),
+            (None, None) => None,
+            (Some(_), Some(_)) => return Err("give vertex or handle, not both".into()),
+        };
+        let path: Vec<[f64; 2]> = match (handle, g.insert) {
+            (Some(h), None) => {
+                let start = crate::annot::handles(doc, r)
+                    .into_iter()
+                    .find(|(x, _)| *x == h)
+                    .map(|(_, p)| p)
+                    .ok_or(format!("{id} has no handle {h:?}"))?;
+                if g.delete {
+                    if !g.world_px.is_empty() {
+                        return Err("delete takes no world_px".into());
+                    }
+                    vec![start]
+                } else {
+                    if g.world_px.is_empty() {
+                        return Err("world_px: where to drag the handle".into());
+                    }
+                    std::iter::once(start)
+                        .chain(g.world_px.iter().copied())
+                        .collect()
+                }
+            }
+            (None, Some(p)) => {
+                if g.delete || !g.world_px.is_empty() {
+                    return Err("insert is one Alt+click: no world_px or delete".into());
+                }
+                vec![p]
+            }
+            (None, None) => return Err("give vertex, handle or insert".into()),
+            (Some(_), Some(_)) => return Err("give vertex or handle, or insert, not both".into()),
+        };
+        self.world_select_alt(
+            &crate::script::WorldSelectStep {
+                gesture: "select".into(),
+                world_px: path,
+                press: true,
+                ctrl: g.ctrl,
+            },
+            g.insert.is_some(),
+        )?;
+        if g.delete {
+            self.st.view.status = None;
+            self.run(crate::app::actions::delete_action(&self.st.view));
+            if let Some(m) = self.st.view.status.as_ref().filter(|m| m.error) {
+                return Err(m.text.clone());
+            }
+        }
+        Ok(())
+    }
+
     /// A script select gesture in world px: the press as the mouse makes
     /// it ([`crate::viewport::select_press`]), then the drag and release
     /// through the command layer.
     fn world_select(&mut self, g: &crate::script::WorldSelectStep) -> Result<(), String> {
+        self.world_select_alt(g, false)
+    }
+
+    /// [`Self::world_select`] with Alt held at the press.
+    fn world_select_alt(
+        &mut self,
+        g: &crate::script::WorldSelectStep,
+        alt: bool,
+    ) -> Result<(), String> {
         let Some((&p0, rest)) = g.world_px.split_first() else {
             return Err("world_px: at least one point".into());
         };
@@ -893,7 +982,9 @@ impl EditorApp {
             add: g.ctrl,
             zoom: self.st.view.zoom,
         };
-        let Some((ix, grab)) = crate::viewport::select_press(doc, &mut self.st.view, press) else {
+        let Some((ix, grab)) =
+            crate::viewport::select_press_alt(doc, &mut self.st.view, press, alt)
+        else {
             return Ok(());
         };
         let layer = self
@@ -1105,8 +1196,12 @@ impl EditorApp {
         if let Some(k) = &n.kind {
             ns.kind = match k.as_str() {
                 "any" => None,
-                "note" | "pin" | "path" | "region" | "guide" => Some(k.clone()),
-                o => return Err(format!("kind {o:?}: note, pin, path, region, guide or any")),
+                "note" | "pin" | "path" | "region" | "guide" | "connector" => Some(k.clone()),
+                o => {
+                    return Err(format!(
+                        "kind {o:?}: note, pin, path, region, guide, connector or any"
+                    ));
+                }
             };
         }
         if let Some(sc) = &n.scope {
@@ -1143,7 +1238,7 @@ impl EditorApp {
         }
         if let Some(k) = &n.hidden_kinds {
             for x in k {
-                if !["note", "pin", "path", "region", "guide"].contains(&x.as_str()) {
+                if !["note", "pin", "path", "region", "guide", "connector"].contains(&x.as_str()) {
                     return Err(format!("hidden_kinds: no kind {x:?}"));
                 }
             }
@@ -2303,6 +2398,22 @@ impl EditorApp {
         let Some(doc) = &self.st.doc else {
             return;
         };
+        // A highlighted point of the one selected annotation goes alone.
+        if let Some(planned) = crate::annot::plan_vertex_delete(doc, &self.st.view) {
+            match planned {
+                Ok((cmd, label)) => {
+                    self.st.view.vertex = None;
+                    if let Err(e) = self.apply_command(Command::Batch {
+                        label,
+                        commands: vec![cmd],
+                    }) {
+                        self.st.view.set_status(e, true);
+                    }
+                }
+                Err(e) => self.st.view.set_status(e, true),
+            }
+            return;
+        }
         let plan = crate::annot::plan_delete(doc, &self.st.view);
         if let Some(why) = &plan.left_alone {
             self.st

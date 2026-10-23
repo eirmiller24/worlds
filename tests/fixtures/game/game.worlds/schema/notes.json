@@ -119,7 +119,7 @@
               "const": "pin"
             },
             "label": {
-              "description": "pin: short label drawn next to the icon.",
+              "description": "pin: short label drawn next to the icon. connector: text drawn\nalong the line (\"needs double jump\").",
               "type": [
                 "string",
                 "null"
@@ -433,6 +433,125 @@
           ],
           "title": "guide",
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Markdown.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "export": {
+              "description": "Included in `export/` for the game.",
+              "type": "boolean"
+            },
+            "from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Endpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "connector (required): where it starts, `{ \"level\": slug }` or\n`{ \"entity\": id }`."
+            },
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "connector"
+            },
+            "label": {
+              "description": "pin: short label drawn next to the icon. connector: text drawn\nalong the line (\"needs double jump\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "links": {
+              "description": "`level:<slug>`, `entity:<id>`, `note:<id>`, or a URL.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "locked": {
+              "description": "Not movable in the editor.",
+              "type": "boolean"
+            },
+            "status": {
+              "$ref": "#/$defs/NoteStatus"
+            },
+            "style": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConnectorStyle"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "connector: `arrow` (the default: an arrowhead at `to`), `line` or\n`double` (arrowheads at both ends)."
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Endpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "connector (required): where it ends, as `from`."
+            },
+            "waypoints": {
+              "description": "connector: points the line passes through between its ends,\n`[[x, y], ...]` in pixels.",
+              "items": {
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "from",
+            "to"
+          ],
+          "title": "connector",
+          "type": "object"
         }
       ]
     },
@@ -440,6 +559,46 @@
       "description": "Hex color, #rrggbb or #rrggbbaa.",
       "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
       "type": "string"
+    },
+    "ConnectorStyle": {
+      "description": "How a connector is drawn: an arrow at `to` (the default), a plain line,\nor arrows at both ends.",
+      "enum": [
+        "arrow",
+        "line",
+        "double"
+      ],
+      "type": "string"
+    },
+    "Endpoint": {
+      "description": "What a connector end is anchored to: `{ \"level\": slug }` or\n`{ \"entity\": id }`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A level (room): the end sits on its edge.",
+          "properties": {
+            "level": {
+              "$ref": "#/$defs/Slug"
+            }
+          },
+          "required": [
+            "level"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An entity instance: the end sits on its pivot.",
+          "properties": {
+            "entity": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "entity"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Id": {
       "description": "Instance id: 10 characters from a-z and 2-7.",
@@ -452,7 +611,8 @@
         "pin",
         "path",
         "region",
-        "guide"
+        "guide",
+        "connector"
       ],
       "type": "string"
     },

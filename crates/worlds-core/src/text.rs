@@ -140,6 +140,16 @@ fn render(
         let mut guides = 0;
         for n in w.notes.iter().filter(shown) {
             let mut points = n.shape.points();
+            if matches!(n.shape, Shape::Connector { .. }) {
+                // A connector's ends are where its rooms and entities are.
+                points = project
+                    .connector_points(crate::model::NoteAt {
+                        world: w,
+                        level: None,
+                        note: n,
+                    })
+                    .unwrap_or(points);
+            }
             if let Shape::Guide {
                 group: Some(gr), ..
             } = &n.shape
@@ -455,6 +465,25 @@ fn note_line(out: &mut String, n: &Annotation) {
             } else {
                 let p: Vec<String> = points.iter().map(|p| point(*p)).collect();
                 let _ = write!(out, " points [{}]", p.join(", "));
+            }
+        }
+        Shape::Connector {
+            from,
+            to,
+            waypoints,
+            label,
+            style,
+        } => {
+            let _ = write!(out, " from {} to {}", from.link(), to.link());
+            if !waypoints.is_empty() {
+                let p: Vec<String> = waypoints.iter().map(|p| point(*p)).collect();
+                let _ = write!(out, " waypoints [{}]", p.join(", "));
+            }
+            if let Some(l) = label {
+                let _ = write!(out, " label {}", json(l));
+            }
+            if *style != crate::model::ConnectorStyle::Arrow {
+                let _ = write!(out, " style {}", style.name());
             }
         }
     }

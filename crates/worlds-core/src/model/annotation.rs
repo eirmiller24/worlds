@@ -123,6 +123,66 @@ pub enum Shape {
         closed: bool,
         group: Option<Slug>,
     },
+    /// A line joining two rooms or entities, through `waypoints`. The end
+    /// points are computed from what `from` and `to` name (see
+    /// [`crate::model::connector_polyline`]), never stored, so the line
+    /// follows a moved room or entity.
+    Connector {
+        from: Endpoint,
+        to: Endpoint,
+        waypoints: Vec<[i64; 2]>,
+        label: Option<String>,
+        style: ConnectorStyle,
+    },
+}
+
+/// What a connector end is anchored to: `{ "level": slug }` or
+/// `{ "entity": id }`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Endpoint {
+    /// A level (room): the end sits on its edge.
+    Level(Slug),
+    /// An entity instance: the end sits on its pivot.
+    Entity(Id),
+}
+
+impl Endpoint {
+    /// `level:<slug>` or `entity:<id>`, the link form.
+    pub fn link(&self) -> String {
+        match self {
+            Endpoint::Level(s) => format!("level:{s}"),
+            Endpoint::Entity(id) => format!("entity:{id}"),
+        }
+    }
+}
+
+/// How a connector is drawn: an arrow at `to` (the default), a plain line,
+/// or arrows at both ends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorStyle {
+    #[default]
+    Arrow,
+    Line,
+    Double,
+}
+
+impl ConnectorStyle {
+    pub const ALL: [ConnectorStyle; 3] = [
+        ConnectorStyle::Arrow,
+        ConnectorStyle::Line,
+        ConnectorStyle::Double,
+    ];
+
+    /// The `style` string.
+    pub fn name(self) -> &'static str {
+        match self {
+            ConnectorStyle::Arrow => "arrow",
+            ConnectorStyle::Line => "line",
+            ConnectorStyle::Double => "double",
+        }
+    }
 }
 
 impl Shape {
@@ -134,6 +194,7 @@ impl Shape {
             Shape::Path { .. } => "path",
             Shape::Region { .. } => "region",
             Shape::Guide { .. } => "guide",
+            Shape::Connector { .. } => "connector",
         }
     }
 
@@ -155,16 +216,20 @@ impl Shape {
                     r[1] += d[1];
                 }
             }
+            Shape::Connector { waypoints, .. } => waypoints.iter_mut().for_each(shift),
         }
     }
 
     /// Every point of the geometry: the point of a note or pin, the points
     /// of a path, guide or polygon region, the 4 corners of a rect region
-    /// (clockwise from the top-left; the far corners are `x + w`, `y + h`).
+    /// (clockwise from the top-left; the far corners are `x + w`, `y + h`),
+    /// a connector's waypoints (its ends are computed, not stored:
+    /// [`crate::model::connector_polyline`]).
     pub fn points(&self) -> Vec<[i64; 2]> {
         match self {
             Shape::Note { px } | Shape::Pin { px, .. } => vec![*px],
             Shape::Path { points } | Shape::Guide { points, .. } => points.clone(),
+            Shape::Connector { waypoints, .. } => waypoints.clone(),
             Shape::Region { points, rect } => match rect {
                 Some([x, y, w, h]) => vec![[*x, *y], [x + w, *y], [x + w, y + h], [*x, y + h]],
                 None => points.clone(),
@@ -221,13 +286,14 @@ enum KindTag {
     Path,
     Region,
     Guide,
+    Connector,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct AnnotationRepr {
     id: Id,
-    /// `note`, `pin`, `path`, `region` or `guide`.
+    /// `note`, `pin`, `path`, `region`, `guide` or `connector`.
     kind: KindTag,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
@@ -264,12 +330,28 @@ struct AnnotationRepr {
     /// pin: icon name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     icon: Option<String>,
-    /// pin: short label drawn next to the icon.
+    /// pin: short label drawn next to the icon. connector: text drawn
+    /// along the line ("needs double jump").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     /// guide: the `world.json` guide group it belongs to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     group: Option<Slug>,
+    /// connector (required): where it starts, `{ "level": slug }` or
+    /// `{ "entity": id }`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from: Option<Endpoint>,
+    /// connector (required): where it ends, as `from`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to: Option<Endpoint>,
+    /// connector: points the line passes through between its ends,
+    /// `[[x, y], ...]` in pixels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    waypoints: Vec<[i64; 2]>,
+    /// connector: `arrow` (the default: an arrowhead at `to`), `line` or
+    /// `double` (arrowheads at both ends).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    style: Option<ConnectorStyle>,
 }
 
 const ANNOTATION_VARIANTS: &[VariantKeys] = &[
@@ -298,6 +380,11 @@ const ANNOTATION_VARIANTS: &[VariantKeys] = &[
         keys: &["points", "closed", "group"],
         required: &["points"],
     },
+    VariantKeys {
+        name: "connector",
+        keys: &["label", "from", "to", "waypoints", "style"],
+        required: &["from", "to"],
+    },
 ];
 
 impl TryFrom<AnnotationRepr> for Annotation {
@@ -310,9 +397,16 @@ impl TryFrom<AnnotationRepr> for Annotation {
         let icon = ("icon", r.icon.is_some());
         let label = ("label", r.label.is_some());
         let group = ("group", r.group.is_some());
+        let from = ("from", r.from.is_some());
+        let to = ("to", r.to.is_some());
+        let waypoints = ("waypoints", !r.waypoints.is_empty());
+        let style = ("style", r.style.is_some());
+        let conn = [from, to, waypoints, style];
+        let not_conn = |k: &str| misplaced(k, "annotation", &conn);
         let need_px = |kind: &str| r.px.ok_or(format!("a {kind} needs \"px\""));
         let shape = match r.kind {
             KindTag::Note => {
+                not_conn("note")?;
                 misplaced(
                     "note",
                     "annotation",
@@ -323,6 +417,7 @@ impl TryFrom<AnnotationRepr> for Annotation {
                 }
             }
             KindTag::Pin => {
+                not_conn("pin")?;
                 misplaced("pin", "annotation", &[points, rect, closed, group])?;
                 Shape::Pin {
                     px: need_px("pin")?,
@@ -331,6 +426,7 @@ impl TryFrom<AnnotationRepr> for Annotation {
                 }
             }
             KindTag::Path => {
+                not_conn("path")?;
                 misplaced(
                     "path",
                     "annotation",
@@ -339,6 +435,7 @@ impl TryFrom<AnnotationRepr> for Annotation {
                 Shape::Path { points: r.points }
             }
             KindTag::Region => {
+                not_conn("region")?;
                 misplaced("region", "annotation", &[px, closed, icon, label, group])?;
                 Shape::Region {
                     points: r.points,
@@ -346,11 +443,26 @@ impl TryFrom<AnnotationRepr> for Annotation {
                 }
             }
             KindTag::Guide => {
+                not_conn("guide")?;
                 misplaced("guide", "annotation", &[px, rect, icon, label])?;
                 Shape::Guide {
                     points: r.points,
                     closed: r.closed,
                     group: r.group,
+                }
+            }
+            KindTag::Connector => {
+                misplaced(
+                    "connector",
+                    "annotation",
+                    &[px, points, rect, closed, icon, group],
+                )?;
+                Shape::Connector {
+                    from: r.from.ok_or("a connector needs \"from\"")?,
+                    to: r.to.ok_or("a connector needs \"to\"")?,
+                    waypoints: r.waypoints,
+                    label: r.label,
+                    style: r.style.unwrap_or_default(),
                 }
             }
         };
@@ -389,6 +501,10 @@ impl From<Annotation> for AnnotationRepr {
             icon: None,
             label: None,
             group: None,
+            from: None,
+            to: None,
+            waypoints: Vec::new(),
+            style: None,
         };
         match a.shape {
             Shape::Note { px } => r.px = Some(px),
@@ -416,6 +532,20 @@ impl From<Annotation> for AnnotationRepr {
                 r.points = points;
                 r.closed = closed;
                 r.group = group;
+            }
+            Shape::Connector {
+                from,
+                to,
+                waypoints,
+                label,
+                style,
+            } => {
+                r.kind = KindTag::Connector;
+                r.from = Some(from);
+                r.to = Some(to);
+                r.waypoints = waypoints;
+                r.label = label;
+                r.style = (style != ConnectorStyle::Arrow).then_some(style);
             }
         }
         r

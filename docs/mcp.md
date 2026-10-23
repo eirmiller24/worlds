@@ -42,7 +42,7 @@ Worlds is a 2D tile level editor. A project is a set of levels (rooms) laid out 
 - auto layers: tiles generated from an int_grid layer by rules. Never painted directly: change the source grid, or the rules with `edit_rules`.
 - tiles layers: hand-placed decoration tiles taken from a tileset image by atlas column and row (`place_tiles`).
 - entities layers: objects such as doors and buttons, each at a cell with typed fields (`place_entity`). Entity types, their fields and enums are edited with `edit_definitions`.
-Notes (todo notes, pins, paths, regions) annotate a level or the whole world; guides are locked reference lines that levels are built along and snap to. Levels and annotations carry tags (e.g. north, east, south, west for the world's regions); list_notes and read_level show them.
+Notes (todo notes, pins, paths, regions, connectors joining rooms) annotate a level or the whole world; guides are locked reference lines that levels are built along and snap to. Levels and annotations carry tags (e.g. north, east, south, west for the world's regions); list_notes and read_level show them.
 
 Coordinates: a cell is [x, y], counted from 0 at the level's top-left corner, x to the right, y down. Each layer has its own cell size (grid_size, in pixels): a level 20 cells wide on a 16 px layer is 40 cells wide on an 8 px layer. Rects are [x, y, width, height] in the layer's cells. Note geometry is in pixels.
 
@@ -66,10 +66,10 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `remove_entity` | `entity.remove` |
 | `find_entities` | `entity.find` |
 | `edit_definitions` | `defs.rename`, `defs.set`, `defs.remove` of kinds `layer`, `entity`, `enum`, `enum_value`, `entity_field`, `level_field`, and `project.update`, all in one `history.begin_batch`/`end_batch` |
-| `add_note` | `notes.add` (`pin_label` is the note's `label`) |
-| `list_notes` | `notes.list` (with `kinds: ["note", "pin", "path", "region"]` unless `kind` or `group` is given) |
+| `add_note` | `notes.add` (`pin_label` and `connector_label` are the note's `label`) |
+| `list_notes` | `notes.list` (with `kinds: ["note", "pin", "path", "region", "connector"]` unless `kind` or `group` is given) |
 | `resolve_note` | `notes.resolve` |
-| `update_note` | `notes.update` with a `patch` (`text` split into `title` and `body`, `pin_label` as `label`, `geometry` as its key, clearing the other of `rect`/`points`), `notes.move` for `move` (both, update first, in one batch); `confirm: true` is sent only when the call has it |
+| `update_note` | `notes.update` with a `patch` (`text` split into `title` and `body`, `pin_label` and `connector_label` as `label`, `geometry` as its keys, clearing the other of `rect`/`points`), `notes.move` for `move` (both, update first, in one batch); `confirm: true` is sent only when the call has it |
 | `remove_note` | `notes.remove` (`confirm` passed through) |
 | `set_guide_group` | `project.describe` (the group as it is, to keep what isn't given), then `notes.set_guide_group`; with `remove`, `notes.remove_guide_group` |
 | `tag_levels` | `level.update { level, tags }` per level, in slug order (several in one batch) |
@@ -340,7 +340,7 @@ Each patch entry is one API write: `defs.rename`, `defs.set` or `defs.remove` wi
 ### add_note
 
 ```text
-Leave an annotation for the user: a todo or remark, a pin marking a place, a path, or a region. scope is { "level": "<slug>" } (geometry in pixels from the level's top-left corner) or { "world": "<slug>" } (world pixels). kind and geometry: note and pin take { "px": [x, y] }; path takes { "points": [[x, y], ...] } with 2 or more points; region takes { "rect": [x, y, width, height] } or 3 or more points; guide (world scope only) takes 2 or more points. A cell [x, y] of a 16 px layer starts at pixel [16x, 16y]. The first line of text is the note's title; any further lines are its body (Markdown). Optional: tags (e.g. ["todo"], or ["landmark", "east"] for a pin the game should know), color "#rrggbb", links ("level:<slug>", "entity:<id>", "note:<id>" or a URL), export true to put it in the game's export (notes, pins, paths and regions; guides never export), status "done"; for a pin, icon (pin, statue, pool, door, star, chest, skull, eye, flag or key) and pin_label (a short label drawn beside it); for a guide, closed (joins its last point to the first) and group (a guide group's slug, see set_guide_group). Returns the note's id.
+Leave an annotation for the user: a todo or remark, a pin marking a place, a path, a region, or a connector joining two rooms. scope is { "level": "<slug>" } (geometry in pixels from the level's top-left corner) or { "world": "<slug>" } (world pixels). kind and geometry: note and pin take { "px": [x, y] }; path takes { "points": [[x, y], ...] } with 2 or more points; region takes { "rect": [x, y, width, height] } or 3 or more points; guide (world scope only) takes 2 or more points; connector takes { "from": end, "to": end, "waypoints"?: [[x, y], ...] }, each end { "level": "<slug>" } (the line meets the room's edge) or { "entity": "<id>" } (its pivot), and follows them when they move. A cell [x, y] of a 16 px layer starts at pixel [16x, 16y]. The first line of text is the note's title; any further lines are its body (Markdown). Optional: tags (e.g. ["todo"], or ["landmark", "east"] for a pin the game should know), color "#rrggbb", links ("level:<slug>", "entity:<id>", "note:<id>" or a URL), export true to put it in the game's export (notes, pins, paths and regions; guides never export), status "done"; for a pin, icon (pin, statue, pool, door, star, chest, skull, eye, flag or key) and pin_label (a short label drawn beside it); for a guide, closed (joins its last point to the first) and group (a guide group's slug, see set_guide_group); for a connector, connector_label (text along the line, e.g. "needs double jump") and style (arrow, the default, line or double). Returns the note's id.
 ```
 
 ```json
@@ -349,12 +349,17 @@ Leave an annotation for the user: a todo or remark, a pin marking a place, a pat
     "scope": { "type": "object",
       "properties": { "level": { "type": "string" }, "world": { "type": "string" } },
       "minProperties": 1, "maxProperties": 1, "additionalProperties": false },
-    "kind": { "type": "string", "enum": ["note", "pin", "path", "region", "guide"] },
+    "kind": { "type": "string", "enum": ["note", "pin", "path", "region", "guide", "connector"] },
     "geometry": { "type": "object",
       "properties": {
         "px": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
         "points": { "type": "array", "items": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 } },
-        "rect": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 } },
+        "rect": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 },
+        "from": { "type": "object", "properties": { "level": { "type": "string" }, "entity": { "type": "string" } },
+          "minProperties": 1, "maxProperties": 1, "additionalProperties": false },
+        "to": { "type": "object", "properties": { "level": { "type": "string" }, "entity": { "type": "string" } },
+          "minProperties": 1, "maxProperties": 1, "additionalProperties": false },
+        "waypoints": { "type": "array", "items": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 } } },
       "additionalProperties": false },
     "text": { "type": "string", "description": "Title on the first line, optional Markdown body after." },
     "tags": { "type": "array", "items": { "type": "string" }, "description": "e.g. [\"todo\"]." },
@@ -366,6 +371,8 @@ Leave an annotation for the user: a todo or remark, a pin marking a place, a pat
     "pin_label": { "type": "string", "description": "Pin only: a short label drawn beside it." },
     "closed": { "type": "boolean", "default": false, "description": "Guide only: join the last point to the first." },
     "group": { "type": "string", "description": "Guide only: a guide group slug." },
+    "connector_label": { "type": "string", "description": "Connector only: text drawn along the line." },
+    "style": { "type": "string", "enum": ["arrow", "line", "double"], "default": "arrow", "description": "Connector only: an arrowhead at to, none, or both ends." },
     "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
   "required": ["scope", "kind", "geometry", "text"], "additionalProperties": false }
 ```
@@ -373,7 +380,7 @@ Leave an annotation for the user: a todo or remark, a pin marking a place, a pat
 ### list_notes
 
 ```text
-List annotations (notes, pins, paths, regions) with their id, scope, kind, geometry (pixels), title, body, tags and status. Guides (locked reference lines) are left out unless kind is "guide" or group is given. Filters: scope ({ "level": slug } or { "world": slug }), tag, kind, status ("open" by default, "done", or "all"), group (the guides of that guide group), export (true: only what goes into the game's export; false: only what doesn't). Notes the user left often say what they want changed.
+List annotations (notes, pins, paths, regions, connectors) with their id, scope, kind, geometry (pixels), title, body, tags and status. Guides (locked reference lines) are left out unless kind is "guide" or group is given. Filters: scope ({ "level": slug } or { "world": slug }), tag, kind, status ("open" by default, "done", or "all"), group (the guides of that guide group), export (true: only what goes into the game's export; false: only what doesn't). Notes the user left often say what they want changed.
 ```
 
 ```json
@@ -383,7 +390,7 @@ List annotations (notes, pins, paths, regions) with their id, scope, kind, geome
       "properties": { "level": { "type": "string" }, "world": { "type": "string" } },
       "minProperties": 1, "maxProperties": 1, "additionalProperties": false },
     "tag": { "type": "string" },
-    "kind": { "type": "string", "enum": ["note", "pin", "path", "region", "guide"] },
+    "kind": { "type": "string", "enum": ["note", "pin", "path", "region", "guide", "connector"] },
     "status": { "type": "string", "enum": ["open", "done", "all"], "default": "open" },
     "group": { "type": "string", "description": "Guide group slug." },
     "export": { "type": "boolean" } },
@@ -408,7 +415,7 @@ Mark a note done (for example after doing what it asked). It stays in the projec
 ### update_note
 
 ```text
-Change an annotation (note, pin, path, region or guide), found by id, in one undo entry. patch holds what changes; the rest stays as it is: text (title on the first line, Markdown body after, as for add_note; or title and body on their own, null removing one), tags, color, links (each list given replaces the old one whole), status ("open" or "done"), export, locked, a pin's icon and pin_label, a guide's closed and group (null takes it out of its group), and either geometry, the new shape ({ "px": [x, y] }, { "points": [[x, y], ...] } or { "rect": [x, y, width, height] }, in the annotation's own pixels: level pixels at level scope, world pixels at world scope) or move, [dx, dy] pixels added to every point. Kind and scope can't change: remove it and add a new one. A locked annotation (every guide is) can be retitled, retagged, resolved and unlocked freely, but moving it (geometry, move or group) needs "confirm": true; without it nothing changes and the error says so.
+Change an annotation (note, pin, path, region, guide or connector), found by id, in one undo entry. patch holds what changes; the rest stays as it is: text (title on the first line, Markdown body after, as for add_note; or title and body on their own, null removing one), tags, color, links (each list given replaces the old one whole), status ("open" or "done"), export, locked, a pin's icon and pin_label, a guide's closed and group (null takes it out of its group), a connector's connector_label and style, and either geometry, the new shape ({ "px": [x, y] }, { "points": [[x, y], ...] } or { "rect": [x, y, width, height] }; for a connector any of from, to and waypoints, as for add_note), in the annotation's own pixels: level pixels at level scope, world pixels at world scope) or move, [dx, dy] pixels added to every point. Kind and scope can't change: remove it and add a new one. A locked annotation (every guide is) can be retitled, retagged, resolved and unlocked freely, but moving it (geometry, move or group) needs "confirm": true; without it nothing changes and the error says so.
 ```
 
 ```json
@@ -430,11 +437,18 @@ Change an annotation (note, pin, path, region or guide), found by id, in one und
         "pin_label": { "type": ["string", "null"] },
         "closed": { "type": "boolean" },
         "group": { "type": ["string", "null"], "description": "Guide group slug; null takes the guide out of its group." },
+        "connector_label": { "type": ["string", "null"] },
+        "style": { "type": ["string", "null"], "enum": ["arrow", "line", "double", null] },
         "geometry": { "type": "object",
           "properties": {
             "px": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
             "points": { "type": "array", "items": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 } },
-            "rect": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 } },
+            "rect": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 },
+            "from": { "type": "object", "properties": { "level": { "type": "string" }, "entity": { "type": "string" } },
+              "minProperties": 1, "maxProperties": 1, "additionalProperties": false },
+            "to": { "type": "object", "properties": { "level": { "type": "string" }, "entity": { "type": "string" } },
+              "minProperties": 1, "maxProperties": 1, "additionalProperties": false },
+            "waypoints": { "type": "array", "items": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 } } },
           "additionalProperties": false },
         "move": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "[dx, dy] in pixels." } },
       "additionalProperties": false },

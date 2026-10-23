@@ -80,6 +80,9 @@ pub struct ViewState {
     pub zoom: f64,
     /// A newly added note whose title the Inspector should focus.
     pub focus_title: Option<Id>,
+    /// The highlighted geometry handle of the one selected annotation (the
+    /// last one pressed with Select): Delete removes that vertex.
+    pub vertex: Option<(Id, crate::annot::Handle)>,
 }
 
 impl Default for ViewState {
@@ -103,6 +106,7 @@ impl Default for ViewState {
             drawing: None,
             zoom: 1.0,
             focus_title: None,
+            vertex: None,
         }
     }
 }
@@ -117,7 +121,7 @@ pub struct AnnotationsView {
     pub hidden_tags: std::collections::BTreeSet<String>,
     /// Hide annotations whose status is done.
     pub hide_done: bool,
-    /// Hidden kinds (`note`, `pin`, `path`, `region`, `guide`).
+    /// Hidden kinds (`note`, `pin`, `path`, `region`, `guide`, `connector`).
     pub hidden_kinds: std::collections::BTreeSet<String>,
     /// Also draw grouped guides where they were designed (dashed).
     pub show_designed: bool,
@@ -169,14 +173,17 @@ pub enum NoteKind {
     Pin,
     Path,
     Region,
+    /// A line from a room or entity to another.
+    Connector,
 }
 
 impl NoteKind {
-    pub const ALL: [NoteKind; 4] = [
+    pub const ALL: [NoteKind; 5] = [
         NoteKind::Note,
         NoteKind::Pin,
         NoteKind::Path,
         NoteKind::Region,
+        NoteKind::Connector,
     ];
 
     pub fn name(self) -> &'static str {
@@ -185,6 +192,7 @@ impl NoteKind {
             NoteKind::Pin => "pin",
             NoteKind::Path => "path",
             NoteKind::Region => "region",
+            NoteKind::Connector => "connector",
         }
     }
 
@@ -617,6 +625,7 @@ mod tests {
             level: None,
             points: vec![[0, 0]],
             done: true,
+            connector: None,
         });
         v.set_tool(Tool::Fill);
         assert!(v.drawing.is_some());
