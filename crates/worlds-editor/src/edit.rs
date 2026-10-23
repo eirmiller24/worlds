@@ -724,7 +724,12 @@ impl Editing {
                         })
                         .map(|set| set.layer.clone()),
                 ),
-                Change::Def { .. } | Change::DefRenamed { .. } => all = true,
+                // The project grid: every layer's cells (only with no levels).
+                Change::Def { .. }
+                | Change::DefRenamed { .. }
+                | Change::Project {
+                    key: ProjectKey::GridSize,
+                } => all = true,
                 _ => {}
             }
         }
@@ -832,7 +837,10 @@ impl Editing {
         // world px count): they work in a project with none.
         let worldly =
             tool == Tool::Select && matches!(grab, Grab::WorldMarquee | Grab::Selection { .. });
-        if at.layer >= doc.project.layers.len() {
+        // Without a layer ([`crate::tools::NO_LAYER`]: a project with none)
+        // only the Select tool works, in cells of the project grid.
+        let no_layer = at.layer >= doc.project.layers.len();
+        if no_layer && tool != Tool::Select {
             return;
         }
         if at.level >= doc.levels.len() {
@@ -863,13 +871,16 @@ impl Editing {
         }
         let level = doc.level(at.level);
         let world = doc.project.worlds[doc.levels[at.level].world].slug.clone();
-        let def = &doc.project.layers[at.layer];
+        let (layer, size) = match doc.project.layers.get(at.layer) {
+            Some(def) => (def.slug.clone(), doc.project.layer_cells(def, level)),
+            None => (Slug::new("none").expect("a valid slug"), level.size),
+        };
         let mut g = Gesture {
             tool,
             world,
             level: level.slug.clone(),
-            layer: def.slug.clone(),
-            size: doc.project.layer_cells(def, level),
+            layer,
+            size,
             origin: at.cell,
             last: at.cell,
             kind: Kind::Paint(Paint::Value(GridValue::Clear)),
@@ -963,7 +974,7 @@ impl Editing {
                         return;
                     }
                 };
-                let label = gesture_label(tool, &def.slug);
+                let label = gesture_label(tool, &g.layer);
                 g.kind = Kind::Paint(paint);
                 self.history.begin_gesture(label, Origin::User);
                 match tool {

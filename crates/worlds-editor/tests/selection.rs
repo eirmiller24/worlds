@@ -991,3 +991,116 @@ fn problem_targets() {
     );
     assert_eq!(problem_target(&p("layers.json", "layers[0]")), None);
 }
+
+/// A fresh project (`worlds-cli new`) has no layer: the Select tool still
+/// selects, moves and resizes its levels, in cells of the project grid,
+/// and a world marquee picks them. Painting tools still refuse.
+#[test]
+fn select_moves_and_resizes_levels_with_no_layers() {
+    use worlds_editor::script::world_hit;
+    use worlds_editor::tools::{CellHit, NO_LAYER};
+    use worlds_editor::viewport::level_under;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("fresh.worlds");
+    let mut p = worlds_core::Project::new("fresh");
+    p.grid_size = 32;
+    worlds_core::save(&mut p, &dir).unwrap();
+    let mut doc = Document::open(&dir).unwrap();
+    let mut view = ViewState::new();
+    view.sync_layers(&doc, None);
+    let mut inv = Vec::new();
+    let mut ed = Editing::new();
+    let mut gesture = |doc: &mut Document,
+                       view: &mut ViewState,
+                       tool: Tool,
+                       grab: Grab,
+                       start: CellHit,
+                       at: CellHit| {
+        let mut cx = CommandContext {
+            doc,
+            view,
+            invalidate: &mut inv,
+        };
+        let m = egui::Modifiers::NONE;
+        ed.tool_events(
+            &mut cx,
+            &[
+                ToolEvent::Begin {
+                    tool,
+                    at: start,
+                    modifiers: m,
+                    grab,
+                },
+                ToolEvent::End {
+                    tool,
+                    start,
+                    at,
+                    modifiers: m,
+                },
+            ],
+        );
+        (ed.undo_label(), ed.history().undo_entries().len())
+    };
+    for (s, i, at) in [("a", "aaaaaaaaaa", [0, 0]), ("b", "bbbbbbbbbb", [640, 0])] {
+        let cmd: Command = serde_json::from_value(json!({
+            "op": "create_level", "world": "main",
+            "level": { "id": i, "slug": s, "name": s, "world_px": at, "size": [10, 6], "depth": 0 }
+        }))
+        .unwrap();
+        doc.project.apply(cmd).unwrap();
+    }
+    doc.reindex();
+    assert!(doc.project.layers.is_empty());
+    let a = doc.level_ix("a").unwrap();
+    let b = doc.level_ix("b").unwrap();
+    view.active_level = Some(a);
+    // A press on b's body makes it active and grabs it.
+    let press = |doc: &Document, view: &mut ViewState, active, wp: [f64; 2]| {
+        select_press(
+            doc,
+            view,
+            SelectPress {
+                active,
+                on_tab: false,
+                handle: None,
+                level_under: level_under(doc, wp),
+                wp,
+                add: false,
+                zoom: 1.0,
+            },
+        )
+    };
+    let wp = [700.0, 50.0];
+    assert_eq!(press(&doc, &mut view, Some(a), wp), Some((b, Grab::Level)));
+    assert_eq!(view.active_level, Some(b));
+    let start = world_hit(&doc, b, NO_LAYER, wp);
+    assert_eq!(start.cell, [1, 1], "cells of the 32 px project grid");
+    let to = world_hit(&doc, b, NO_LAYER, [wp[0] + 64.0, wp[1] + 32.0]);
+    let (label, _) = gesture(&mut doc, &mut view, Tool::Select, Grab::Level, start, to);
+    assert_eq!(doc.level(b).world_px, [704, 32]);
+    assert_eq!(label.as_deref(), Some("Move level b"));
+    // Its bottom-right handle resizes it by whole project cells.
+    let corner = [704.0 + 320.0 - 4.0, 32.0 + 192.0 - 4.0];
+    let start = world_hit(&doc, b, NO_LAYER, corner);
+    let to = world_hit(&doc, b, NO_LAYER, [corner[0] + 64.0, corner[1] + 32.0]);
+    gesture(
+        &mut doc,
+        &mut view,
+        Tool::Select,
+        Grab::Handle([1, 1]),
+        start,
+        to,
+    );
+    assert_eq!(doc.level(b).size, [12, 7]);
+    // A world marquee around a picks it.
+    let wp = [-50.0, -50.0];
+    let (ix, grab) = press(&doc, &mut view, Some(b), wp).expect("a world marquee");
+    assert_eq!(grab, Grab::WorldMarquee);
+    let start = world_hit(&doc, ix, NO_LAYER, wp);
+    let to = world_hit(&doc, ix, NO_LAYER, [100.0, 100.0]);
+    let (_, entries) = gesture(&mut doc, &mut view, Tool::Select, grab, start, to);
+    assert_eq!(view.selection.items, [SelItem::Level(doc.ids[a].clone())]);
+    // Painting tools still refuse: there is no layer to paint on.
+    let (_, after) = gesture(&mut doc, &mut view, Tool::Brush, Grab::None, start, to);
+    assert_eq!(after, entries);
+}

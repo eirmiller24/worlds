@@ -1653,6 +1653,20 @@ impl Project {
 
     fn set_setting(&mut self, setting: ProjectSetting) -> Result<Applied> {
         let key = setting.key();
+        if let ProjectSetting::GridSize(g) = &setting
+            && *g != self.grid_size
+        {
+            if *g == 0 {
+                return Err(CommandError::Invalid("grid_size must be at least 1".into()));
+            }
+            let n = self.levels().count();
+            if n > 0 {
+                return Err(CommandError::Invalid(format!(
+                    "grid_size can only change while the project has no levels (it has {n}): \
+                     their sizes and positions are in cells of it"
+                )));
+            }
+        }
         let old = match setting {
             ProjectSetting::Name(v) => ProjectSetting::Name(std::mem::replace(&mut self.name, v)),
             ProjectSetting::BgColor(v) => {
@@ -1665,12 +1679,20 @@ impl Project {
                 ProjectSetting::CollisionLayer(std::mem::replace(&mut self.collision_layer, v))
             }
             ProjectSetting::Seed(v) => ProjectSetting::Seed(std::mem::replace(&mut self.seed, v)),
+            ProjectSetting::GridSize(v) => {
+                ProjectSetting::GridSize(std::mem::replace(&mut self.grid_size, v))
+            }
+            ProjectSetting::BlockingValues(v) => {
+                ProjectSetting::BlockingValues(std::mem::replace(&mut self.blocking_values, v))
+            }
         };
         let unchanged = match &old {
             ProjectSetting::Name(v) => *v == self.name,
             ProjectSetting::BgColor(v) => *v == self.bg_color,
             ProjectSetting::CollisionLayer(v) => *v == self.collision_layer,
             ProjectSetting::Seed(v) => *v == self.seed,
+            ProjectSetting::GridSize(v) => *v == self.grid_size,
+            ProjectSetting::BlockingValues(v) => *v == self.blocking_values,
         };
         if unchanged {
             return Ok(noop());

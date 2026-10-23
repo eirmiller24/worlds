@@ -57,8 +57,8 @@ Binaries in `target/release/`:
 ## Quick start
 
 ```sh
-worlds-cli new mygame.worlds                  # an empty project
-worlds mygame.worlds                          # open it; paint, place, Ctrl+S saves
+worlds-cli new --grid 32 mygame.worlds        # an empty project with 32 px cells
+worlds mygame.worlds                          # open it; Project tab: layers, tilesets; paint, place, Ctrl+S saves
 worlds-cli validate mygame.worlds             # every problem, with file and JSON path
 worlds-cli bake mygame.worlds                 # writes mygame.worlds/export/ for the game
 worlds-cli check-export mygame.worlds/export --project mygame.worlds --fresh

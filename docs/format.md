@@ -4,7 +4,7 @@ This is the reference for editing a Worlds project by hand. It's written for an 
 
 ## The short version
 
-- A project is a directory, usually named `<name>.worlds/`. Each file holds one concern and is small enough to read whole. `worlds-cli new <dir> [--name <name>]` creates an empty one (one empty world `main`, plus `schema/`); `worlds-cli schema <dir>` rewrites the schemas.
+- A project is a directory, usually named `<name>.worlds/`. Each file holds one concern and is small enough to read whole. `worlds-cli new <dir> [--name <name>] [--grid <px>]` creates an empty one (one empty world `main`, plus `schema/`; `--grid` sets `grid_size`, default 16); `worlds-cli schema <dir>` rewrites the schemas.
 - Every file is a JSON object that starts with `"$schema"` (the relative path to its schema) and `"format": 1`.
 - **Unknown keys are errors.** A typo like `"glpyh"` fails to load with the file name and JSON path (`layers.json: at layers[0].values[2].glpyh: unknown field ...`). Don't add keys that aren't documented here. So is a key that belongs to another kind of the same thing, like `values` on a `tiles` layer or `min` on a `bool` field.
 - Definitions are named by **slugs**: `^[a-z][a-z0-9_]*$`, for example `floor_button` or `castle_main`. A slug is also the file or directory name where there is one, and it must match.

@@ -16,6 +16,7 @@ pub mod note_inspector;
 pub mod notes;
 pub mod panels;
 pub mod problems;
+pub mod project_pane;
 pub mod recovery;
 pub mod rules;
 #[cfg(test)]
@@ -62,17 +63,24 @@ pub enum Pane {
     EntityDefs,
     /// Annotations ([`notes`]): list, filters, tags, guide groups.
     Notes,
+    /// Layers, tilesets and project settings ([`project_pane`]), tab
+    /// "Project".
+    Project,
 }
 
 /// Default layout. Split fractions are the share of the first (left or
 /// top) child. The bottom node holds the Log and the Rules pane as tabs;
-/// the Types pane is a tab next to the Inspector.
+/// the Types and Project panes are tabs next to the Inspector.
 pub fn default_dock() -> DockState<Pane> {
     let mut dock = DockState::new(vec![Pane::Viewport]);
     let s = dock.main_surface_mut();
     let [center, _left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
     let [_layers, _palette] = s.split_below(_left, 0.45, vec![Pane::Palette]);
-    let [center, right] = s.split_right(center, 0.72, vec![Pane::Inspector, Pane::EntityDefs]);
+    let [center, right] = s.split_right(
+        center,
+        0.72,
+        vec![Pane::Inspector, Pane::EntityDefs, Pane::Project],
+    );
     let [_inspector, _problems] = s.split_below(right, 0.7, vec![Pane::Problems, Pane::Notes]);
     let [_center, _log] = s.split_below(center, 0.62, vec![Pane::Log, Pane::Rules]);
     dock
@@ -133,6 +141,26 @@ pub fn add_notes_pane(dock: &mut DockState<Pane>) {
     if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
         dock.main_surface_mut()
             .split_right(node, 0.75, vec![Pane::Notes]);
+    }
+}
+
+/// Give a layout saved before the Project pane existed one: a tab next to
+/// the Types pane, else the Inspector, else a split right of the map.
+pub fn add_project_pane(dock: &mut DockState<Pane>) {
+    if dock.find_tab(&Pane::Project).is_some() {
+        return;
+    }
+    for next_to in [Pane::EntityDefs, Pane::Inspector] {
+        if let Some(p) = dock.find_tab(&next_to)
+            && let Ok(leaf) = dock.leaf_mut(p.node_path())
+        {
+            leaf.append_tab(Pane::Project);
+            return;
+        }
+    }
+    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+        dock.main_surface_mut()
+            .split_right(node, 0.75, vec![Pane::Project]);
     }
 }
 
@@ -275,6 +303,8 @@ pub struct EditorState {
     pub types: defs::TypesState,
     /// The Notes pane.
     pub notes: notes::NotesState,
+    /// The Project pane.
+    pub project: project_pane::ProjectState,
     /// Where each pane drew last frame (screen points; tests).
     pub pane_rects: HashMap<Pane, egui::Rect>,
 }
@@ -303,6 +333,7 @@ impl Default for EditorState {
             entities: entities::PaletteState::default(),
             types: defs::TypesState::default(),
             notes: notes::NotesState::default(),
+            project: project_pane::ProjectState::default(),
             pane_rects: HashMap::new(),
         }
     }
@@ -694,11 +725,21 @@ impl EditorApp {
         )
         .map_err(|e| format!("{e:#}"))?;
         let (mut events, level, layer) = (plan.events, plan.level, plan.layer);
-        let slug = doc.project.layers[layer].slug.to_string();
+        // A select gesture in a project with no layer has none
+        // ([`crate::tools::NO_LAYER`]).
+        let slug = doc
+            .project
+            .layers
+            .get(layer)
+            .map(|l| l.slug.to_string())
+            .unwrap_or_default();
+        let has_layer = layer < doc.project.layers.len();
         let tool = crate::script::parse_tool(&g.gesture).unwrap_or_default();
         self.run(Action::SetTool(tool));
         self.st.view.active_level = Some(level);
-        self.st.view.active_layer = Some(layer);
+        if has_layer {
+            self.st.view.active_layer = Some(layer);
+        }
         if g.press
             && let Some(doc) = &self.st.doc
             && let Some(ToolEvent::Begin { at, grab, .. }) = events.first_mut()
@@ -860,10 +901,8 @@ impl EditorApp {
             .view
             .active_layer
             .filter(|&l| l < doc.project.layers.len())
-            .unwrap_or(0);
-        if doc.project.layers.is_empty() {
-            return Err("the project has no layers".into());
-        }
+            .or_else(|| (!doc.project.layers.is_empty()).then_some(0))
+            .unwrap_or(crate::tools::NO_LAYER);
         let m = egui::Modifiers {
             ctrl: g.ctrl,
             command: g.ctrl,
@@ -916,7 +955,70 @@ impl EditorApp {
             UiStep::Duplicate(_) => self.duplicate_step(),
             UiStep::Delete(d) => self.delete_step(d.confirm),
             UiStep::Layers(l) => self.layers_step(l),
+            UiStep::Project(p) => self.project_step(p),
         }
+    }
+
+    /// `"ui": "project"`: the Project pane, through the functions its
+    /// + Layer and + Tileset buttons use ([`project_pane`]).
+    fn project_step(&mut self, p: &crate::script::ProjectStep) -> Result<(), String> {
+        use project_pane::{Follow, Section};
+        let section = p
+            .section
+            .as_deref()
+            .map(|s| {
+                Section::parse(s)
+                    .ok_or_else(|| format!("section {s:?}: expected layers, tilesets or settings"))
+            })
+            .transpose()?;
+        if let Some(kind) = &p.add_layer {
+            let doc = self.st.doc.as_ref().ok_or("no project open")?;
+            let (cmd, slug) = project_pane::new_layer(doc, kind)?;
+            self.st.project.pending.push(cmd);
+            self.st.project.follow = Some(Follow::Layer {
+                slug,
+                activate: true,
+            });
+            self.st.project.section = Section::Layers;
+            self.project_pane_commands();
+            if let Some(e) = self.st.project.error.take() {
+                return Err(e);
+            }
+        }
+        if let Some(path) = &p.add_tileset {
+            let doc = self.st.doc.as_ref().ok_or("no project open")?;
+            let (cmd, slug, copied) = project_pane::tileset_from_file(doc, path)?;
+            self.st.project.pending.push(cmd);
+            self.st.project.follow = Some(Follow::Tileset(slug));
+            self.st.project.notice = copied;
+            self.st.project.section = Section::Tilesets;
+            self.project_pane_commands();
+            if let Some(e) = self.st.project.error.take() {
+                return Err(e);
+            }
+        }
+        let doc = self.st.doc.as_ref().ok_or("no project open")?;
+        if let Some(l) = &p.layer {
+            let def = doc
+                .project
+                .layer(l)
+                .ok_or_else(|| format!("no layer {l:?}"))?;
+            self.st.project.layer = Some(def.slug.clone());
+            self.st.project.section = Section::Layers;
+        }
+        if let Some(t) = &p.tileset {
+            let def = doc
+                .project
+                .tileset(t)
+                .ok_or_else(|| format!("no tileset {t:?}"))?;
+            self.st.project.tileset = Some(def.slug.clone());
+            self.st.project.section = Section::Tilesets;
+        }
+        if let Some(s) = section {
+            self.st.project.section = s;
+        }
+        show_pane(&mut self.dock, Pane::Project);
+        Ok(())
     }
 
     /// `"ui": "layers"`: the Layers pane's active layer, visibility and
@@ -1689,6 +1791,7 @@ impl EditorApp {
         add_rules_pane(&mut self.dock);
         add_types_pane(&mut self.dock);
         add_notes_pane(&mut self.dock);
+        add_project_pane(&mut self.dock);
         self.st.viewport.camera = f.camera;
         self.st.view.active_level = f.active_level.and_then(|s| doc.level_ix(&s));
         if let Some(i) = f
@@ -1862,6 +1965,7 @@ impl EditorApp {
         if std::mem::take(&mut self.st.types.focus) {
             show_pane(&mut self.dock, Pane::EntityDefs);
         }
+        self.project_pane_commands();
         self.apply_invalidations();
         self.report_user_edits();
         // The drain point: agent requests, unless a gesture is in progress.
@@ -1890,6 +1994,30 @@ impl EditorApp {
         } else {
             self.frame_ms * 0.9 + ms * 0.1
         };
+    }
+
+    /// The Project pane's commands, each its own undo entry: a refusal is
+    /// shown in the pane; a layer the pane added becomes the active layer.
+    fn project_pane_commands(&mut self) {
+        let pending = std::mem::take(&mut self.st.project.pending);
+        let mut ok = true;
+        for cmd in pending {
+            match self.apply_command(cmd) {
+                Ok(()) => self.st.project.error = None,
+                Err(e) => {
+                    ok = false;
+                    self.st.project.error = Some(e);
+                }
+            }
+        }
+        if let Some(slug) = self.st.project.applied(ok)
+            && let Some(doc) = &self.st.doc
+        {
+            self.st.view.active_layer = doc.project.layers.iter().position(|l| l.slug == slug);
+        }
+        if std::mem::take(&mut self.st.project.focus) {
+            show_pane(&mut self.dock, Pane::Project);
+        }
     }
 
     /// Fresh live validation for a (re)opened document (after the command
@@ -2597,6 +2725,10 @@ impl EditorApp {
                 crate::annot::drawing_backspace(&mut self.st.view);
             }
             Action::ShowNotes => show_pane(&mut self.dock, Pane::Notes),
+            Action::OpenProject(s) => {
+                self.st.project.section = s;
+                show_pane(&mut self.dock, Pane::Project);
+            }
             Action::DeleteSelection => self.delete_selection(),
             Action::DuplicateSelection => self.duplicate_selection(),
             Action::Nudge { d, pixel } => self.nudge_selection(d, pixel),
@@ -3478,6 +3610,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Rules => "Rules".into(),
             Pane::EntityDefs => "Types".into(),
             Pane::Notes => "Notes".into(),
+            Pane::Project => "Project".into(),
         }
     }
 
@@ -3508,6 +3641,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Rules => rules::pane(ui, self.st),
             Pane::EntityDefs => defs::pane(ui, self.st),
             Pane::Notes => notes::pane(ui, self.st),
+            Pane::Project => project_pane::pane(ui, self.st),
         }
     }
 

@@ -559,6 +559,25 @@ pub fn clip_rect(r: [i32; 4], size: [u32; 2]) -> [i32; 4] {
     ]
 }
 
+/// A [`CellHit`] layer index for a gesture made where the project has no
+/// layer at all: the Select tool still clicks, moves and resizes levels
+/// there, in cells of the project grid ([`hit_grid`]).
+pub const NO_LAYER: usize = usize::MAX;
+
+/// The cell size in pixels and the size in cells of project layer `layer`
+/// in level `ix`; for [`NO_LAYER`] (or any index past the last layer) the
+/// project grid and the level's own size.
+pub fn hit_grid(doc: &Document, layer: usize, ix: LevelIx) -> (u32, [u32; 2]) {
+    let level = doc.level(ix);
+    match doc.project.layers.get(layer) {
+        Some(def) => (
+            doc.project.layer_grid(def).max(1),
+            doc.project.layer_cells(def, level),
+        ),
+        None => (doc.project.grid_size.max(1), level.size),
+    }
+}
+
 /// Whether a cell is inside a layer of `size` cells.
 pub fn in_layer(c: [i32; 2], size: [u32; 2]) -> bool {
     c[0] >= 0 && c[1] >= 0 && (c[0] as u32) < size[0] && (c[1] as u32) < size[1]

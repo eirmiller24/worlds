@@ -589,6 +589,9 @@ impl Viewport {
         for g in cx.ghosts {
             g.draw(&painter, &to_screen, cx.accent);
         }
+        if doc.levels.is_empty() && cx.view.drawing.is_none() {
+            empty_map_hint(&painter, rect, doc.project.layers.is_empty(), cx.accent);
+        }
         self.readout = None;
         if let Some(d) = &cx.view.drawing {
             let ctrl = crate::tools::pixel_mod(ui.input(|i| i.modifiers));
@@ -618,14 +621,13 @@ impl Viewport {
                     world_px: wp,
                 };
             }
-            let def = &doc.project.layers[layer];
-            let g = doc.project.layer_grid(def) as f64;
+            let (g, cells) = crate::tools::hit_grid(doc, layer, ix);
+            let g = g as f64;
             let lr = level_wrect(doc, ix);
             let cell = [
                 ((wp[0] - lr.min[0]) / g).floor() as i32,
                 ((wp[1] - lr.min[1]) / g).floor() as i32,
             ];
-            let cells = doc.project.layer_cells(def, doc.level(ix));
             CellHit {
                 level: ix,
                 layer,
@@ -653,7 +655,12 @@ impl Viewport {
         } else {
             active_layer
         };
-        let hit_layer = active_layer.or_else(|| (!doc.project.layers.is_empty()).then_some(0));
+        // The Select tool's cells: the active layer's, else the first
+        // layer's; with no layer at all the project grid's, so levels are
+        // still clicked, moved and resized ([`crate::tools::NO_LAYER`]).
+        let hit_layer = active_layer
+            .or_else(|| (!doc.project.layers.is_empty()).then_some(0))
+            .unwrap_or(crate::tools::NO_LAYER);
         // Why the active tool can't paint on the active layer, if it can't.
         let refusal = if tool.paints() {
             active_layer.and_then(|l| {
@@ -771,7 +778,8 @@ impl Viewport {
             };
             let add = crate::tools::pixel_mod(modifiers);
             if tool == Tool::Select {
-                if let (Some(layer), Some(wp)) = (hit_layer, pointer_world) {
+                if let Some(wp) = pointer_world {
+                    let layer = hit_layer;
                     self.gesture = select_press(
                         doc,
                         cx.view,
@@ -1677,6 +1685,58 @@ pub fn select_item_at(
         }
     }
     crate::annot::line_note_at(doc, view, wp, zoom).map(SelItem::Note)
+}
+
+/// A map with no level says how to make one (and, with no layer either,
+/// where layers come from): a quiet card in the middle of the map.
+fn empty_map_hint(painter: &egui::Painter, rect: Rect, no_layers: bool, accent: Color32) {
+    let wrap = (rect.width() - 48.0).clamp(120.0, 460.0);
+    let title = painter.layout(
+        "No levels yet".into(),
+        FontId::proportional(18.0),
+        Color32::from_gray(225),
+        wrap,
+    );
+    let mut body = String::from(
+        "Right-click the map and pick New level here…\nor press Ctrl+P and run New level…",
+    );
+    if no_layers {
+        body.push_str(
+            "\n\nLayers (what you paint on) and tilesets (your art)\nare set up in the Project tab.",
+        );
+    }
+    let body = painter.layout(
+        body,
+        FontId::proportional(14.0),
+        Color32::from_gray(165),
+        wrap,
+    );
+    let gap = 8.0;
+    let w = title.size().x.max(body.size().x);
+    let h = title.size().y + gap + body.size().y;
+    let card =
+        Rect::from_center_size(rect.center(), egui::vec2(w, h)).expand2(egui::vec2(20.0, 16.0));
+    painter.rect_filled(card, 6.0, Color32::from_black_alpha(140));
+    painter.rect_stroke(
+        card,
+        6.0,
+        Stroke::new(1.0, accent.gamma_multiply(0.5)),
+        StrokeKind::Inside,
+    );
+    let top = card.min.y + 16.0;
+    painter.galley(
+        egui::pos2(rect.center().x - title.size().x / 2.0, top),
+        title.clone(),
+        Color32::from_gray(225),
+    );
+    painter.galley(
+        egui::pos2(
+            rect.center().x - body.size().x / 2.0,
+            top + title.size().y + gap,
+        ),
+        body,
+        Color32::from_gray(165),
+    );
 }
 
 /// The level of a gesture made where the project has no level: only its

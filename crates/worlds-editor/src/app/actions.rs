@@ -58,6 +58,8 @@ pub enum Action {
     DrawingBackspace,
     /// Bring the Notes pane to the front.
     ShowNotes,
+    /// The Project pane on a section (layers, tilesets, settings).
+    OpenProject(super::project_pane::Section),
 }
 
 impl Action {
@@ -96,6 +98,14 @@ impl Action {
             ("Edit level fields".into(), "", Action::OpenTypes(None)),
             ("Notes: show the Notes pane".into(), "", Action::ShowNotes),
         ];
+        use super::project_pane::Section;
+        for (name, s) in [
+            ("Project: layers (add, edit, reorder)", Section::Layers),
+            ("Project: tilesets (add an image)", Section::Tilesets),
+            ("Project: settings (grid, collision)", Section::Settings),
+        ] {
+            v.push((name.into(), "", Action::OpenProject(s)));
+        }
         v.push(("Tool: Paint (last mode)".into(), "P", Action::PaintTool));
         for t in Tool::ALL {
             let name = if t.is_paint_mode() {
