@@ -233,7 +233,8 @@ locked anchor; with `out`, the alternative is picked with `ALT + 0`,
 opaque-tile lock apply; with `write`, it writes; `break` locks the anchor.
 Everything is keyed by cells, never by region ids or hash-map order, so the
 same grid gives the same candidates. `format.md` has the worked examples;
-`tests/m6.rs` runs every one of them through the engine.
+the derived-grid and region-rule tests run every one of them through the
+engine.
 
 ## Derived grids
 

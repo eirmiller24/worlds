@@ -1,8 +1,8 @@
 # Worlds commands
 
-Every edit to a Worlds project, from the editor, the JSON-RPC server or an MCP agent, is a **command**: one JSON object tagged by `op`. This page is the reference for all of them: what each does, its JSON shape, its inverse, and the changes it reports. The JSON-RPC server takes these objects as they are.
+Every edit to a Worlds project, from the editor, the JSON-RPC server or an MCP agent, is a **command**: one JSON object tagged by `op`. This page is the reference for all of them: what each does, its JSON shape, its inverse, and the changes it reports. The [live API](api.md) wraps them in methods whose params are a command's fields without `op` (`grid.fill_rect` is `fill_rect`); `set_project_setting`, `set_layer_state` and `replace_level` have no method there.
 
-In Rust they are `worlds_core::command::Command`, applied with `Project::apply(cmd) -> Result<Applied, CommandError>`. `Applied` holds the `inverse` (a command) and the `changes` (a list). A JSON Schema comes from `schemars::schema_for!(Command)`.
+In Rust they are `worlds_core::command::Command`, applied with `Project::apply(cmd) -> Result<Applied, CommandError>`. `Applied` holds the `inverse` (a command) and the `changes` (a list). A JSON Schema comes from `schemars::schema_for!(Command)` (MCP resource `worlds://schema/command.json`). Commands deserialize from these JSON objects with serde, so a Rust program can apply the examples below as they are ([crates/worlds-core/README.md](../crates/worlds-core/README.md)).
 
 The examples below are a script: run in order against `crates/worlds-core/tests/fixtures/mini.worlds`, each one applies, and `tests/docs.rs` checks that they do.
 
@@ -196,7 +196,7 @@ The content keeps its place in the world: when the left edge moves, `world_px` c
 
 ### rename_level
 
-Change the slug (the directory and the Godot room name) and the display name. Every note link `level:<old slug>` becomes `level:<new slug>`. Refused if the new slug is taken, or if a note already links to `level:<new slug>` (undo couldn't tell it from a rewritten link).
+Change the slug (the level's directory, and its name in the export) and the display name. Every note link `level:<old slug>` becomes `level:<new slug>`. Refused if the new slug is taken, or if a note already links to `level:<new slug>` (undo couldn't tell it from a rewritten link).
 
 ```json
 { "op": "rename_level", "world": "main", "level": "annex", "slug": "wing", "name": "West wing" }
