@@ -161,17 +161,13 @@ fn open_edges_skip_only_blocking_values() {
     assert_eq!(edges["left"], json!([[2, 4]]));
     assert_eq!(edges["top"], json!([]));
 
-    // Absent: the default kinds the layer has (solid, fortified, ramp_l).
+    // Absent: the default, `solid` alone, so ramp_l no longer blocks.
     p.blocking_values = None;
     let world: Value = serde_json::from_str(&export::world_json(&p)).unwrap();
-    assert_eq!(
-        world["blocking_values"],
-        json!(p.default_blocking_values().unwrap())
-    );
-    assert!(world["blocking_values"].as_array().unwrap().len() >= 2);
+    assert_eq!(world["blocking_values"], json!(["solid"]));
     assert_eq!(
         world["worlds"][0]["levels"][0]["open_edges"]["left"],
-        json!([[2, 3]])
+        json!([[2, 4]])
     );
 
     // Explicitly nothing blocking: every border cell is open.
