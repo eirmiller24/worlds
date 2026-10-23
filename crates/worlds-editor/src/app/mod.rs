@@ -3009,7 +3009,7 @@ impl EditorApp {
                     "{:.1} ms · {} chunks · {} draws · {} tiles",
                     self.frame_ms, s.chunks, s.draws, s.instances
                 ));
-                ui.label(format!("{:.0}%", vp.camera.zoom * 100.0));
+                ui.label(crate::viewport::camera::zoom_label(vp.camera.zoom));
                 if let Some(doc) = &self.st.doc
                     && doc.bakes_pending > 0
                 {
