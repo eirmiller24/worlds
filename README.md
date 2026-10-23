@@ -102,6 +102,7 @@ per tool call, optionally waiting for your approval); with it closed,
 | --- | --- |
 | [docs/tutorial.md](docs/tutorial.md) | start here: a small world from scratch, painted, autotiled, baked |
 | [docs/DESIGN.md](docs/DESIGN.md) | goals, architecture, decisions |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | what is still to build, with a specification per feature |
 | [docs/format.md](docs/format.md) | the project files and the export, for hand (or agent) editing |
 | [docs/commands.md](docs/commands.md) | the edit commands (the undo unit) |
 | [docs/api.md](docs/api.md) | the live JSON-RPC API |
