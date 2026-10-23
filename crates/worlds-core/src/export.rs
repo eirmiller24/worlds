@@ -887,8 +887,11 @@ fn relative_dir(from: &Path, to: &Path) -> String {
 /// `p` made absolute, with symlinks resolved as far as it exists: the
 /// deepest existing ancestor is canonicalized and the rest appended. So a
 /// directory not created yet still compares equal to its existing parents
-/// when they sit behind a symlink (macOS's `/var` is `/private/var`).
-pub(crate) fn resolve(p: &Path) -> std::path::PathBuf {
+/// when they sit behind a symlink (macOS's `/var` is `/private/var`), and
+/// a deleted file still compares equal to the path it had. On Windows the
+/// result carries the `\\?\` prefix `canonicalize` gives, whether or not
+/// `p` exists, so compare only paths that both went through here.
+pub fn resolve(p: &Path) -> std::path::PathBuf {
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     let mut rest = Vec::new();
     let mut cur = abs.as_path();
