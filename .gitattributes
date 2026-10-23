@@ -1,0 +1,5 @@
+# LF everywhere: the doc tests, snapshots and fixtures compare text byte for
+# byte, and Windows checkouts would otherwise get CRLF.
+* text=auto eol=lf
+*.png binary
+*.ldtk text eol=lf
