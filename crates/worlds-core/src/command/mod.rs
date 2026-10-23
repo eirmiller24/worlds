@@ -567,6 +567,26 @@ pub enum Command {
         label: String,
         commands: Vec<Command>,
     },
+
+    // ---- levels (continued) ----
+    /// Copy a level under a new slug: `level.json` (fields, tags, rule state
+    /// and tileset substitutions, depth, background), every layer's content,
+    /// entities and notes. Entities and notes get new ids and the copy's
+    /// references between them (`entity_ref` fields, level fields, note
+    /// links) follow; references to anything outside the level are kept.
+    /// `world` defaults to the level's; `world_px` to just right of the
+    /// original (the first spot there no other level of that world covers);
+    /// `name` to the original's with " copy".
+    DuplicateLevel {
+        level: Slug,
+        slug: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world: Option<Slug>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world_px: Option<[i64; 2]>,
+    },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -687,6 +707,7 @@ impl Command {
                 format!("{} edits", commands.len())
             }
             Batch { label, .. } => label.clone(),
+            DuplicateLevel { level, slug, .. } => format!("Duplicate level {level} as {slug}"),
         }
     }
 }
