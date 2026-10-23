@@ -955,6 +955,13 @@ pub enum ProjectSetting {
     /// Must name an `int_grid` layer.
     CollisionLayer(Option<Slug>),
     Seed(i64),
+    /// The project grid in pixels (at least 1). Only while the project has
+    /// no levels: their sizes and positions are in cells of it.
+    GridSize(u32),
+    /// Values of the collision layer that block movement (`None`: left out,
+    /// see the migration rule in docs/format.md). Values that aren't the
+    /// collision layer's are left to validation.
+    BlockingValues(Option<Vec<Slug>>),
 }
 
 impl ProjectSetting {
@@ -964,6 +971,8 @@ impl ProjectSetting {
             ProjectSetting::BgColor(_) => ProjectKey::BgColor,
             ProjectSetting::CollisionLayer(_) => ProjectKey::CollisionLayer,
             ProjectSetting::Seed(_) => ProjectKey::Seed,
+            ProjectSetting::GridSize(_) => ProjectKey::GridSize,
+            ProjectSetting::BlockingValues(_) => ProjectKey::BlockingValues,
         }
     }
 }
@@ -980,6 +989,11 @@ pub enum ProjectKey {
     /// `level_fields` (only definition commands touch it: the level field
     /// commands, and renames that rewrite a field's type or default).
     LevelFields,
+    /// The project grid (changes every layer's cells; only allowed with no
+    /// levels).
+    GridSize,
+    /// Matters only to the export.
+    BlockingValues,
 }
 
 impl ProjectKey {
@@ -990,6 +1004,8 @@ impl ProjectKey {
             ProjectKey::CollisionLayer => "collision_layer",
             ProjectKey::Seed => "seed",
             ProjectKey::LevelFields => "level_fields",
+            ProjectKey::GridSize => "grid_size",
+            ProjectKey::BlockingValues => "blocking_values",
         }
     }
 }

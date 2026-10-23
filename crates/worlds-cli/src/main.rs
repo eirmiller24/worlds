@@ -70,6 +70,9 @@ enum Command {
         /// Project name. Defaults to the directory name without `.worlds`.
         #[arg(long)]
         name: Option<String>,
+        /// Cell size in pixels (`grid_size`), e.g. 32 for 32 x 32 px art.
+        #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=1024))]
+        grid: u32,
     },
     /// Convert an LDtk project (.ldtk) into a Worlds project directory.
     /// Prints every warning and renamed identifier.
@@ -128,7 +131,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             println!("wrote {}", dir.join("schema").display());
             Ok(ExitCode::SUCCESS)
         }
-        Command::New { dir, name } => new(&dir, name),
+        Command::New { dir, name, grid } => new(&dir, name, grid),
         Command::ImportLdtk { input, out } => import_ldtk(&input, &out),
         Command::Bake { dir, level, out } => bake(&dir, level.as_deref(), out.as_deref()),
     }
@@ -275,7 +278,7 @@ fn bake(dir: &Path, only: Option<&str>, out: Option<&Path>) -> Result<ExitCode> 
     Ok(ExitCode::SUCCESS)
 }
 
-fn new(dir: &Path, name: Option<String>) -> Result<ExitCode> {
+fn new(dir: &Path, name: Option<String>, grid: u32) -> Result<ExitCode> {
     if dir.exists()
         && dir
             .read_dir()
@@ -293,6 +296,7 @@ fn new(dir: &Path, name: Option<String>) -> Result<ExitCode> {
         stem.strip_suffix(".worlds").unwrap_or(&stem).to_string()
     });
     let mut project = worlds_core::Project::new(name);
+    project.grid_size = grid;
     worlds_core::save(&mut project, dir)?;
     worlds_core::schema::write_all(dir)?;
     println!("created {}", dir.display());

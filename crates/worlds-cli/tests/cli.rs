@@ -19,6 +19,29 @@ fn new_schema_validate() {
     assert!(dir.join("schema/level.json").exists());
     let project = std::fs::read_to_string(dir.join("project.json")).unwrap();
     assert!(project.contains("\"name\": \"mygame\""), "{project}");
+    assert!(project.contains("\"grid_size\": 16"), "{project}");
+
+    // `--grid` sets the cell size; 0 is refused.
+    let big = tmp.path().join("big.worlds");
+    assert!(
+        cli()
+            .args(["new", "--grid", "32"])
+            .arg(&big)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let p = std::fs::read_to_string(big.join("project.json")).unwrap();
+    assert!(p.contains("\"grid_size\": 32"), "{p}");
+    let zero = tmp.path().join("zero.worlds");
+    assert!(
+        !cli()
+            .args(["new", "--grid", "0"])
+            .arg(&zero)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     // `new` refuses a non-empty directory.
     assert!(!cli().arg("new").arg(&dir).status().unwrap().success());

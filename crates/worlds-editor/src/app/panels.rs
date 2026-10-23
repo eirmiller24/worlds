@@ -67,6 +67,19 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
         ui.weak("No project");
         return;
     };
+    // Adding and editing layers is the Project pane's (`project_pane`).
+    let mut edit: Option<Option<worlds_core::Slug>> = None;
+    if doc.project.layers.is_empty() {
+        ui.label("No layers yet.");
+        ui.weak("A layer is what you paint on: start with an int_grid layer for collision.");
+        if ui
+            .button("+ Add a layer…")
+            .on_hover_text("The Project tab's Layers")
+            .clicked()
+        {
+            edit = Some(None);
+        }
+    }
     egui::ScrollArea::vertical()
         .auto_shrink([false, true])
         .show(ui, |ui| {
@@ -100,13 +113,22 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
                             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                             let name = RichText::new(&def.name);
                             let r = ui.selectable_label(active, name).on_hover_text(format!(
-                                "{} ({})",
+                                "{} ({}). Double click or right click to edit it",
                                 def.slug.as_str(),
                                 def.kind.name()
                             ));
                             if r.clicked() {
                                 st.view.active_layer = Some(i);
                             }
+                            if r.double_clicked() {
+                                edit = Some(Some(def.slug.clone()));
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Edit layer…").clicked() {
+                                    edit = Some(Some(def.slug.clone()));
+                                    ui.close();
+                                }
+                            });
                             // A derived layer says so where the kind goes.
                             if def.is_derived() {
                                 derived_badge(ui, doc, def, st.accent);
@@ -117,7 +139,26 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
                     });
                 });
             }
+            if !doc.project.layers.is_empty() {
+                ui.add_space(4.0);
+                if ui
+                    .small_button("Edit layers…")
+                    .on_hover_text("Add, remove, reorder and edit layers: the Project tab")
+                    .clicked()
+                {
+                    edit = Some(
+                        st.view
+                            .active_layer
+                            .and_then(|i| doc.project.layers.get(i).map(|l| l.slug.clone())),
+                    );
+                }
+            }
         });
+    match edit {
+        Some(Some(slug)) => st.project.show_layer(slug),
+        Some(None) => st.project.show(super::project_pane::Section::Layers),
+        None => {}
+    }
 }
 
 /// The `derived` badge of a derived int_grid layer, with its writer.
@@ -149,11 +190,24 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
         return;
     };
     let Some(li) = st.view.active_layer else {
-        ui.weak("No active layer");
+        if doc.project.layers.is_empty() {
+            ui.weak("No layers yet: the palette shows what the active layer can hold.");
+            if ui.button("+ Add a layer…").clicked() {
+                st.project.show(super::project_pane::Section::Layers);
+            }
+        } else {
+            ui.weak("No active layer: click one in Layers.");
+        }
         return;
     };
     let def = &doc.project.layers[li];
     match &def.kind {
+        LayerKind::IntGrid(g) if g.values.is_empty() => {
+            ui.weak(format!("{} has no values yet.", def.name));
+            if ui.button("Add values…").clicked() {
+                st.project.show_layer(def.slug.clone());
+            }
+        }
         LayerKind::IntGrid(_) => {
             let slug = def.slug.to_string();
             if !st.view.palette.brushes.contains_key(&slug) && !def.values().is_empty() {
@@ -226,6 +280,13 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
             let tilesets = &doc.project.tilesets;
             if tilesets.is_empty() {
                 ui.weak("The project has no tilesets.");
+                if ui
+                    .button("+ Add a tileset…")
+                    .on_hover_text("The Project tab's Tilesets: pick a PNG")
+                    .clicked()
+                {
+                    st.project.show(super::project_pane::Section::Tilesets);
+                }
                 return;
             }
             let default = td

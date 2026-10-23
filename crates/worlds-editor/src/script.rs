@@ -172,6 +172,34 @@ pub enum UiStep {
     /// `"ui": "layers"`: the Layers pane's state (active layer, visibility,
     /// opacity).
     Layers(LayersStep),
+    /// `"ui": "project"`: the Project pane (layers, tilesets, settings),
+    /// and its + Layer and + Tileset buttons.
+    Project(ProjectStep),
+}
+
+/// `{ "ui": "project", "add_layer"?: kind, "add_tileset"?: path,
+/// "section"?: "layers" | "tilesets" | "settings", "layer"?: slug,
+/// "tileset"?: slug }`: the Project pane in front. `add_layer` does what
+/// its + Layer menu does for that kind (`int_grid`, `tiles`, `auto`,
+/// `entities`: one entry, the new layer active and its form open);
+/// `add_tileset` what + Tileset… does with that PNG (relative to the
+/// current directory; an image outside the project is copied into `art/`;
+/// one entry, its form open). Then `section` shows that part, `layer` /
+/// `tileset` open that form (and its section). An unknown kind, section,
+/// layer or tileset, or a refused add, is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectStep {
+    #[serde(default)]
+    pub add_layer: Option<String>,
+    #[serde(default)]
+    pub add_tileset: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub section: Option<String>,
+    #[serde(default)]
+    pub layer: Option<String>,
+    #[serde(default)]
+    pub tileset: Option<String>,
 }
 
 /// `{ "ui": "layers", "active"?: slug, "visible"?: { slug: bool },
@@ -629,10 +657,9 @@ pub fn parse_tool(s: &str) -> Option<Tool> {
 
 /// The pointer over cell `cell` of project layer `layer` in level `ix`.
 pub fn cell_hit(doc: &Document, ix: LevelIx, layer: usize, cell: [i32; 2]) -> CellHit {
-    let def = &doc.project.layers[layer];
     let level = doc.level(ix);
-    let g = doc.project.layer_grid(def) as f64;
-    let size = doc.project.layer_cells(def, level);
+    let (g, size) = crate::tools::hit_grid(doc, layer, ix);
+    let g = g as f64;
     CellHit {
         level: ix,
         layer,
@@ -658,9 +685,9 @@ pub fn world_hit(doc: &Document, ix: LevelIx, layer: usize, wp: [f64; 2]) -> Cel
             world_px: wp,
         };
     }
-    let def = &doc.project.layers[layer];
     let level = doc.level(ix);
-    let g = doc.project.layer_grid(def).max(1) as f64;
+    let (g, size) = crate::tools::hit_grid(doc, layer, ix);
+    let g = g as f64;
     let cell = [
         ((wp[0] - level.world_px[0] as f64) / g).floor() as i32,
         ((wp[1] - level.world_px[1] as f64) / g).floor() as i32,
@@ -669,7 +696,7 @@ pub fn world_hit(doc: &Document, ix: LevelIx, layer: usize, wp: [f64; 2]) -> Cel
         level: ix,
         layer,
         cell,
-        inside: crate::tools::in_layer(cell, doc.project.layer_cells(def, level)),
+        inside: crate::tools::in_layer(cell, size),
         world_px: wp,
     }
 }
@@ -700,10 +727,15 @@ pub fn gesture_events(
             .filter(|&l| doc.project.layers.get(l).is_some_and(|d| d.is_entities()))
             .or_else(|| crate::view::first_entities_layer(doc))
             .context("the project has no entities layer")?,
+        // Select works with no layer at all, in project cells.
+        None if tool == Tool::Select && doc.project.layers.is_empty() => crate::tools::NO_LAYER,
         None => active_layer.unwrap_or(0),
     };
-    if layer >= doc.project.layers.len() {
+    if layer >= doc.project.layers.len() && layer != crate::tools::NO_LAYER {
         bail!("the project has no layers");
+    }
+    if layer == crate::tools::NO_LAYER && step.brush.is_some() {
+        bail!("`brush` needs a layer");
     }
     if tool != Tool::Entity && (step.ty.is_some() || step.fields.is_some()) {
         bail!("`type` and `fields` are for entity gestures");

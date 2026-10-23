@@ -43,7 +43,7 @@ print(call("grid.fill_rect", level="crevasse", layer="collision",
 
 From there: [`project.describe`](#project) is the map (layers, values, entity types, levels), `level.get` with `format: "text"` shows a level, and every write is one undo entry. A script that makes several writes should wrap them in [`history.begin_batch`/`end_batch`](#history) so the user can undo them in one step.
 
-The project settings that have a [command](commands.md#set_project_setting) (`name`, `bg_color`, `collision_layer`, `seed`) are written with [`project.update`](#project); the rest of `project.json` (`grid_size`, `blocking_values`, `default_level_size`, `export_on_save`) has no command yet, so only the editor's files can change it ([format.md](format.md)).
+The project settings that [`project.update`](#project) writes (`name`, `bg_color`, `collision_layer`, `seed`) are [`set_project_setting`](commands.md#set_project_setting) commands. That command also sets `grid_size` and `blocking_values` (the editor's Project tab uses it), which `project.update` doesn't take yet; `default_level_size` and `export_on_save` have no command, so only the files can change them ([format.md](format.md)).
 
 ## Discovery: `.worlds/server.json`
 

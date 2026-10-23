@@ -22,12 +22,16 @@ cargo build --release
 export PATH="$PWD/target/release:$PATH"    # worlds and worlds-cli
 ```
 
-Make the project somewhere outside the repo, say `~/games`:
+Make the project somewhere outside the repo, say `~/games`. The art we'll
+use later is 32 x 32 px, so make the grid (the size of one cell) match:
 
 ```sh
 cd ~/games
-worlds-cli new dungeon.worlds
+worlds-cli new --grid 32 dungeon.worlds
 ```
+
+(Forgot `--grid`? The editor's **Project** tab, **Settings**, **Grid**
+changes it, as long as the project has no levels yet.)
 
 That writes a nearly empty folder:
 
@@ -56,13 +60,15 @@ A quick tour:
   Hand (H). Then Undo, Redo, Save, and Commands (Ctrl+P), a searchable list
   of everything the editor can do.
 - **Layers** (top left): the layers, top of the list drawn on top. Click one
-  to make it the one you paint on.
+  to make it the one you paint on. There are none yet.
 - **Palette** (below Layers): what you paint with. It changes with the active
   layer: values, tiles, or entity types.
-- **Map** (middle): every level of the world, laid out where it sits.
+- **Map** (middle): every level of the world, laid out where it sits. Empty
+  for now, and it says how to make the first level.
 - **Log / Rules** (under the map): messages, and the autotile rule editor.
-- **Inspector / Types** (right): whatever is selected (or the project
-  summary, as here), and the entity type editor.
+- **Inspector / Types / Project** (right): whatever is selected (or the
+  project summary, as here), the entity type editor, and the project's
+  layers, tilesets and settings.
 - **Problems / Notes** (bottom right): live validation. It updates as you
   edit, so you rarely need to go looking for mistakes.
 
@@ -77,53 +83,34 @@ layer is an **int_grid**: a grid where each cell holds one named value or
 nothing. We'll have two values, `solid` and `oneway` (a platform you can
 jump up through).
 
-There's no layer editor in the UI yet, so this part is a small JSON edit.
-That's also the quickest way to see that nothing is hidden.
+Layers live in the **Project** tab (right, next to Types), or click
+**+ Add a layer…** in the empty Layers pane, which takes you there.
 
-First, the art we'll use later is 32 x 32 px, so make the grid match. In
-`project.json`, change `grid_size` to `32` and name the collision layer (the
-export uses it to tell the game which cells block):
+1. Click **+ Layer** and pick **Int grid**. You get a layer called
+   `collision`, already active, with one value, `solid`, and its form opens
+   below the list.
+2. Under **Values**, click **+ Value**. A second value appears with a free
+   glyph (`-`) and a sandy yellow. Change its slug to `oneway` and its name
+   to `One-way` (each box commits when you press Enter or click elsewhere).
+   The swatch on the left picks another color if you like.
+3. Open **Settings** (top of the Project tab) and set **Collision layer** to
+   `collision`. The export uses it to tell the game which cells block;
+   **Blocking values** gets `Solid` ticked for you. One-way platforms don't
+   block, so leave that one off.
 
-```json
-{
-  "$schema": "schema/project.json",
-  "format": 1,
-  "name": "dungeon",
-  "grid_size": 32,
-  "seed": -4887205897904812902,
-  "collision_layer": "collision"
-}
-```
+![The Project tab: the collision layer and its two values](../screenshots/tutorial/01a-collision-layer.png)
 
-(Keep whatever `seed` you got; it seeds the random tile choices later.)
+(The layer goes into `layers.json`, the collision setting into
+`project.json`.)
 
-Then `layers.json`:
-
-```json
-{
-  "$schema": "schema/layers.json",
-  "format": 1,
-  "layers": [
-    {
-      "slug": "collision",
-      "name": "Collision",
-      "kind": "int_grid",
-      "values": [
-        { "slug": "solid", "name": "Solid", "color": "#8C93A8", "glyph": "#" },
-        { "slug": "oneway", "name": "One-way", "color": "#D8B45C", "glyph": "-" }
-      ]
-    }
-  ]
-}
-```
-
-Each value gets a **slug** (its name everywhere else), a **color** for the
+Each value has a **slug** (its name everywhere else), a **color** for the
 editor, and a one-character **glyph**. The glyph is how the value is written
 in level files and in rule patterns, so pick ones that look like the thing:
 `#` for solid, `-` for a thin platform. Pick colors that stand out against
 the dark level background; you'll be staring at them.
 
-Save the files. If the editor is open it notices and reloads. Now check:
+Every change there is one undo step (Ctrl+Z), like any other edit. Press
+**Ctrl+S** to save, then check from a terminal:
 
 ```sh
 worlds-cli validate dungeon.worlds
@@ -173,9 +160,6 @@ is and how big:
 
 The `id` is random and permanent; your game can rely on it even if you
 rename the level.
-
-> If you skipped step 2: the Select tool can't grab levels in a project with
-> no layers at all, so add the collision layer first.
 
 ## 4. Painting collision
 
@@ -238,12 +222,7 @@ the tiles follow.
 
 ### The tileset
 
-Copy the repo's sample art into the project:
-
-```sh
-mkdir dungeon.worlds/art
-cp <repo>/tests/fixtures/game/assets/tiles.png dungeon.worlds/art/
-```
+The sample art is in the repo: `tests/fixtures/game/assets/tiles.png`.
 
 It's drawn by a script in the repo (`tests/fixtures/game/make.py`), so it's
 free to use. The part we need is the top-left corner, 8 columns of shade
@@ -259,29 +238,27 @@ variants per row:
 | 5 | one-way planks |
 | 6 | hazards and odds and ends |
 
-Register it in `tilesets.json` (the image path is relative to the project):
+In the **Project** tab, open **Tilesets** and click **+ Tileset…**, then
+pick that `tiles.png` in the file dialog. It's outside the project, so the
+editor copies it into `dungeon.worlds/art/` first (a project keeps its
+images in its own folder) and says so. The new tileset is called `tiles`,
+and its tile size starts at the project grid, 32 x 32, which is right. If
+your own art had gaps between tiles or a border, **Spacing** and
+**Padding** are there too; the preview outlines every tile the way the
+editor cuts them, so you see at once whether the numbers fit.
 
-```json
-{
-  "$schema": "schema/tilesets.json",
-  "format": 1,
-  "tilesets": [
-    { "slug": "tiles", "image": "art/tiles.png", "tile_size": [32, 32] }
-  ]
-}
-```
+![The tiles tileset: image, tile size and the atlas cut into 32 px tiles](../screenshots/tutorial/04a-tileset.png)
+
+(This writes `tilesets.json`, with the image path relative to the
+project.)
 
 ### The auto layer
 
 Tiles from rules go on an **auto** layer. It stores nothing per level; it
-just names the grid its rules read. Add it to `layers.json` after the
-collision layer (later layers draw on top, so the tiles cover the grey):
-
-```json
-    { "slug": "walls", "name": "Walls", "kind": "auto", "source": "collision" }
-```
-
-Its rules will live in `rules/walls.json`.
+just names the grid its rules read. Back in **Layers**, click **+ Layer**
+and pick **Auto**. You get `walls`, reading `collision` (the int_grid layer
+it found), added on top, so its tiles cover the grey. (Another line in
+`layers.json`; its rules will live in `rules/walls.json`.)
 
 ### How a rule thinks
 
@@ -383,12 +360,9 @@ Entities are the things in a level that aren't terrain: doors, pickups,
 enemies, spawn points. Each has a **type** (with typed **fields**) and
 instances placed in levels.
 
-First an entities layer, at the end of `layers.json` so entities draw on
-top:
-
-```json
-    { "slug": "objects", "name": "Objects", "kind": "entities" }
-```
+First an entities layer: in the **Project** tab, **+ Layer**, **Entities**.
+It's called `objects` and lands on top, so entities draw over the tiles.
+(One more line in `layers.json`.)
 
 ### Define the types
 

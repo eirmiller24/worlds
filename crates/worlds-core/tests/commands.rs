@@ -1435,9 +1435,39 @@ fn layer_state_and_project_settings() {
         ProjectSetting::BgColor(Some(Color::new("#ffffff").unwrap())),
         ProjectSetting::CollisionLayer(None),
         ProjectSetting::Seed(7),
+        ProjectSetting::BlockingValues(Some(vec![s("solid")])),
+        ProjectSetting::BlockingValues(Some(vec![])),
+        ProjectSetting::BlockingValues(None),
     ] {
         check(&mut p, Command::SetProjectSetting { setting });
     }
+    // The grid can't change under levels; the same value is a no-op.
+    let e = p
+        .apply(Command::SetProjectSetting {
+            setting: ProjectSetting::GridSize(32),
+        })
+        .unwrap_err();
+    assert!(e.to_string().contains("no levels"), "{e}");
+    let same = p
+        .apply(Command::SetProjectSetting {
+            setting: ProjectSetting::GridSize(p.grid_size),
+        })
+        .unwrap();
+    assert!(same.changes.is_empty());
+    let mut empty = Project::new("empty");
+    check(
+        &mut empty,
+        Command::SetProjectSetting {
+            setting: ProjectSetting::GridSize(32),
+        },
+    );
+    assert!(
+        empty
+            .apply(Command::SetProjectSetting {
+                setting: ProjectSetting::GridSize(0),
+            })
+            .is_err()
+    );
     assert!(
         p.apply(Command::SetProjectSetting {
             setting: ProjectSetting::CollisionLayer(Some(s("decor_back")))
