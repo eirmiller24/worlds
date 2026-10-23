@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use worlds_core::{Command, Slug};
+use worlds_core::{Command, Slug, TileAlt};
 
 use crate::doc::{Document, LevelIx};
 use crate::view::ViewState;
@@ -256,6 +256,89 @@ pub enum Brush {
     /// Derived layers only: override cells to empty (`"!"`, suppress what
     /// the rules would put there).
     Suppress,
+    /// Tiles layers: a random brush. Each painted cell (each cell of the
+    /// tiles' lattice when tiles are bigger than cells) picks one of
+    /// `alternatives` by weight, in the forms of a rule's `out.tiles`
+    /// ([`TileAlt`]): tiles that form a rectangle listed row by row
+    /// (`[c, r]`, `[c, r, w, h]`, `{ rect }`, or a `stack` that happens to
+    /// be one) keep their atlas layout with the top-left tile on the cell,
+    /// any other `stack` is drawn on the cell in list order. Painting
+    /// skips a pick whose tiles would land on cells this stroke already
+    /// filled.
+    Random {
+        tileset: Slug,
+        alternatives: Vec<TileAlt>,
+    },
+}
+
+impl Brush {
+    /// The random brush of every tile of an atlas rect, one alternative
+    /// each, weight 1 (the Paint strip's Random toggle on a stamp).
+    pub fn random_of_rect(tileset: Slug, rect: [u32; 4]) -> Brush {
+        let alternatives = (rect[1]..rect[1] + rect[3].max(1))
+            .flat_map(|r| (rect[0]..rect[0] + rect[2].max(1)).map(move |c| TileAlt::single(c, r)))
+            .collect();
+        Brush::Random {
+            tileset,
+            alternatives,
+        }
+    }
+}
+
+/// A named random brush the palette lists (`ui.json` `palette.presets`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrushPreset {
+    pub name: String,
+    pub tileset: Slug,
+    pub alternatives: Vec<TileAlt>,
+}
+
+/// A fresh random seed for a stroke: the random brush and the density
+/// need no determinism (what lands is what is saved).
+pub fn fresh_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    h.finish()
+}
+
+/// A well-mixed 64-bit hash of a stroke's seed, a cell and a salt
+/// (splitmix64): the same cell of the same stroke always rolls the same.
+pub fn cell_roll(seed: u64, cell: [i32; 2], salt: u64) -> u64 {
+    let mut z = seed
+        ^ (cell[0] as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (cell[1] as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ salt.wrapping_mul(0x1656_67B1_9E37_79F9);
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Whether `cell` is painted at `density` percent (100: always).
+pub fn density_keeps(seed: u64, cell: [i32; 2], density: u8) -> bool {
+    density >= 100 || cell_roll(seed, cell, 1) % 100 < density as u64
+}
+
+/// The index of the alternative `cell` picks, by weight (`None` when every
+/// weight is 0).
+pub fn pick_weighted(weights: &[u32], seed: u64, cell: [i32; 2]) -> Option<usize> {
+    let total: u64 = weights.iter().map(|&w| w as u64).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut r = cell_roll(seed, cell, 2) % total;
+    for (i, &w) in weights.iter().enumerate() {
+        if r < w as u64 {
+            return Some(i);
+        }
+        r -= w as u64;
+    }
+    None
 }
 
 /// What the entity tool places: a type and the field values every new
@@ -407,10 +490,37 @@ impl EntityPalette {
     }
 }
 
-/// The current brush of each layer, by layer slug.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The current brush of each layer, by layer slug, and the tiles
+/// brushes' density and saved random brushes (`ui.json` `palette`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaletteSelection {
     pub brushes: HashMap<String, Brush>,
+    /// The Paint strip's density on tiles layers, 1 to 100 %: a stroke
+    /// (and a rectangle or fill) paints each cell with this chance.
+    #[serde(default = "full_density")]
+    pub density: u8,
+    /// Named random brushes, listed in the palette.
+    #[serde(default)]
+    pub presets: Vec<BrushPreset>,
+    /// A fixed seed for the strokes' randomness (`--script` brushes with
+    /// `seed`); `None`: a fresh one per stroke. Not saved.
+    #[serde(skip)]
+    pub seed: Option<u64>,
+}
+
+fn full_density() -> u8 {
+    100
+}
+
+impl Default for PaletteSelection {
+    fn default() -> Self {
+        PaletteSelection {
+            brushes: HashMap::new(),
+            density: 100,
+            presets: Vec::new(),
+            seed: None,
+        }
+    }
 }
 
 impl PaletteSelection {

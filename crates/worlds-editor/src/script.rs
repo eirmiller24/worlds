@@ -461,16 +461,45 @@ pub struct GestureStep {
 ///   remove overrides);
 /// - `"suppress"`: on a derived layer, override to empty (`"!"`);
 /// - `{ "tileset": "castle_main", "tile": [col, row] }`: one atlas tile;
-/// - `{ "tileset": "castle_main", "rect": [col, row, w, h] }`: a stamp.
+/// - `{ "tileset": "castle_main", "rect": [col, row, w, h] }`: a stamp;
+/// - `{ "tileset": "castle_main", "tiles": [alternatives] }`: a random
+///   brush, the alternatives in the forms of a rule's `out.tiles`.
+///
+/// A tile form may add `"density": 1..100` (the Paint strip's density)
+/// and `"seed": n` (a fixed seed for the stroke's randomness, so a test
+/// gets the same picks every run): a [`ScriptBrush::Scatter`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptBrush {
     Value(String),
     Erase,
     Suppress,
-    Tiles { tileset: String, rect: [u32; 4] },
+    Tiles {
+        tileset: String,
+        rect: [u32; 4],
+    },
+    Random {
+        tileset: String,
+        alternatives: Vec<worlds_core::TileAlt>,
+    },
+    /// A tile form with `density` and/or `seed`.
+    Scatter {
+        brush: Box<ScriptBrush>,
+        density: Option<u8>,
+        seed: Option<u64>,
+    },
 }
 
-const BRUSH_FORMS: &str = r#"a value slug, "erase", "suppress", {"tileset", "tile": [c, r]} or {"tileset", "rect": [c, r, w, h]}"#;
+impl ScriptBrush {
+    /// The `density` and `seed` a tile form gave.
+    pub fn scatter(&self) -> (Option<u8>, Option<u64>) {
+        match self {
+            ScriptBrush::Scatter { density, seed, .. } => (*density, *seed),
+            _ => (None, None),
+        }
+    }
+}
+
+const BRUSH_FORMS: &str = r#"a value slug, "erase", "suppress", {"tileset", "tile": [c, r]}, {"tileset", "rect": [c, r, w, h]} or {"tileset", "tiles": [alternatives]}, the last three with "density"? and "seed"?"#;
 
 impl<'de> Deserialize<'de> for ScriptBrush {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -483,6 +512,12 @@ impl<'de> Deserialize<'de> for ScriptBrush {
             tile: Option<[u32; 2]>,
             #[serde(default)]
             rect: Option<[u32; 4]>,
+            #[serde(default)]
+            tiles: Option<Vec<serde_json::Value>>,
+            #[serde(default)]
+            density: Option<u8>,
+            #[serde(default)]
+            seed: Option<u64>,
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -497,23 +532,62 @@ impl<'de> Deserialize<'de> for ScriptBrush {
             Wire::Name(s) if s == "suppress" => Ok(ScriptBrush::Suppress),
             Wire::Name(s) => Ok(ScriptBrush::Value(s)),
             Wire::Tiles(t) => {
-                let rect = match (t.tile, t.rect) {
-                    (Some([c, r]), None) => [c, r, 1, 1],
-                    (None, Some(r)) if r[2] > 0 && r[3] > 0 => r,
-                    (None, Some(_)) => {
+                let rect = match (t.tile, t.rect, &t.tiles) {
+                    (Some([c, r]), None, None) => [c, r, 1, 1],
+                    (None, Some(r), None) if r[2] > 0 && r[3] > 0 => r,
+                    (None, Some(_), None) => {
                         return Err(D::Error::custom(
                             "brush: rect width and height must be at least 1",
                         ));
                     }
+                    (None, None, Some(_)) => [0, 0, 0, 0],
                     _ => {
                         return Err(D::Error::custom(
-                            "brush: give exactly one of `tile` and `rect`",
+                            "brush: give exactly one of `tile`, `rect` and `tiles`",
                         ));
                     }
                 };
-                Ok(ScriptBrush::Tiles {
-                    tileset: t.tileset,
-                    rect,
+                let brush = match t.tiles {
+                    Some(alts) => {
+                        if alts.is_empty() {
+                            return Err(D::Error::custom(
+                                "brush: `tiles` needs at least one alternative",
+                            ));
+                        }
+                        let alternatives = alts
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                serde_json::from_value::<worlds_core::TileAlt>(v).map_err(|e| {
+                                    D::Error::custom(format!("brush: tiles[{i}]: {e}"))
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        ScriptBrush::Random {
+                            tileset: t.tileset,
+                            alternatives,
+                        }
+                    }
+                    None => ScriptBrush::Tiles {
+                        tileset: t.tileset,
+                        rect,
+                    },
+                };
+                if let Some(d) = t.density
+                    && !(1..=100).contains(&d)
+                {
+                    return Err(D::Error::custom(format!(
+                        "brush: density {d} must be 1 to 100"
+                    )));
+                }
+                Ok(if t.density.is_some() || t.seed.is_some() {
+                    ScriptBrush::Scatter {
+                        brush: Box::new(brush),
+                        density: t.density,
+                        seed: t.seed,
+                    }
+                } else {
+                    brush
                 })
             }
         }
@@ -564,12 +638,29 @@ pub fn resolve_brush(doc: &Document, layer: usize, b: &ScriptBrush) -> anyhow::R
                 rect: *rect,
             })
         }
+        (
+            ScriptBrush::Random {
+                tileset,
+                alternatives,
+            },
+            LayerKind::Tiles(_),
+        ) => {
+            let ts = doc
+                .project
+                .tileset(tileset)
+                .with_context(|| format!("no tileset {tileset:?}"))?;
+            Ok(Brush::Random {
+                tileset: ts.slug.clone(),
+                alternatives: alternatives.clone(),
+            })
+        }
+        (ScriptBrush::Scatter { brush, .. }, _) => resolve_brush(doc, layer, brush),
         (ScriptBrush::Value(_), _) => bail!(
             "layer {} is a {} layer: a value brush needs an int_grid layer",
             def.slug,
             def.kind.name()
         ),
-        (ScriptBrush::Tiles { .. }, _) => bail!(
+        (ScriptBrush::Tiles { .. } | ScriptBrush::Random { .. }, _) => bail!(
             "layer {} is a {} layer: a tile brush needs a tiles layer",
             def.slug,
             def.kind.name()
@@ -592,6 +683,9 @@ pub struct GesturePlan {
     /// Entity gestures: the entity brush to set first, if the step gave a
     /// type or fields.
     pub entity_brush: Option<crate::tools::EntityBrush>,
+    /// The brush's `density` and `seed`, to set first if given.
+    pub density: Option<u8>,
+    pub seed: Option<u64>,
 }
 
 /// Parse a script: an item with a `gesture` key is a gesture, anything
@@ -798,12 +892,18 @@ pub fn gesture_events(
             modifiers,
         }
     });
+    let (density, seed) = step
+        .brush
+        .as_ref()
+        .map_or((None, None), ScriptBrush::scatter);
     Ok(GesturePlan {
         events,
         level: ix,
         layer,
         brush,
         entity_brush,
+        density,
+        seed,
     })
 }
 
@@ -963,6 +1063,67 @@ mod tests {
         assert!(UiStep::rule("main_tiling", None).is_err());
         let e = parse(r#"[{ "op": "paint_cels" }]"#).unwrap_err();
         assert!(format!("{e:#}").contains("item 0"), "{e:#}");
+    }
+
+    #[test]
+    fn random_and_scatter_brush_forms() {
+        let brush = |b: &str| -> anyhow::Result<Option<ScriptBrush>> {
+            let s = parse(&format!(
+                r#"[{{ "gesture": "brush", "level": "a", "path": [[0, 0]], "brush": {b} }}]"#
+            ))?;
+            match s.into_iter().next() {
+                Some(ScriptStep::Gesture(g)) => Ok(g.brush),
+                _ => panic!(),
+            }
+        };
+        let alts = |v: &str| -> Vec<worlds_core::TileAlt> { serde_json::from_str(v).unwrap() };
+        let random = brush(
+            r#"{ "tileset": "t", "tiles": [[1, 2], [0, 0, 2, 2], { "rect": [3, 3, 1, 1], "weight": 4 }, { "stack": [[5, 5], [4, 4]] }] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            random,
+            Some(ScriptBrush::Random {
+                tileset: "t".into(),
+                alternatives: alts(
+                    r#"[[1, 2], [0, 0, 2, 2], { "rect": [3, 3, 1, 1], "weight": 4 }, { "stack": [[5, 5], [4, 4]] }]"#
+                ),
+            })
+        );
+        assert_eq!(random.unwrap().scatter(), (None, None));
+        let s = brush(r#"{ "tileset": "t", "tile": [1, 1], "density": 25, "seed": 9 }"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.scatter(), (Some(25), Some(9)));
+        assert!(matches!(&s, ScriptBrush::Scatter { brush, .. }
+            if **brush == ScriptBrush::Tiles { tileset: "t".into(), rect: [1, 1, 1, 1] }));
+        // Existing forms are unchanged.
+        assert_eq!(
+            brush(r#"{ "tileset": "t", "rect": [0, 0, 2, 1] }"#).unwrap(),
+            Some(ScriptBrush::Tiles {
+                tileset: "t".into(),
+                rect: [0, 0, 2, 1]
+            })
+        );
+        for (bad, says) in [
+            (r#"{ "tileset": "t", "tiles": [] }"#, "at least one"),
+            (r#"{ "tileset": "t", "tiles": [[1]] }"#, "tiles[0]"),
+            (
+                r#"{ "tileset": "t", "tiles": [[1, 1]], "tile": [0, 0] }"#,
+                "exactly one",
+            ),
+            (
+                r#"{ "tileset": "t", "tile": [0, 0], "density": 0 }"#,
+                "density",
+            ),
+            (
+                r#"{ "tileset": "t", "tile": [0, 0], "density": 101 }"#,
+                "density",
+            ),
+        ] {
+            let e = brush(bad).unwrap_err();
+            assert!(format!("{e:#}").contains(says), "{bad}: {e:#}");
+        }
     }
 
     #[test]

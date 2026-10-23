@@ -71,7 +71,8 @@ use worlds_server::ChangeKind;
 use crate::doc::{Document, LevelBakes, LevelIx};
 use crate::tools::{
     Brush, CellHit, CommandContext, EditorCommands, Grab, Invalidation, Stamp, Tool, ToolEvent,
-    cell_rect, clip_rect, in_layer, line_cells, rect_cells, resize_level, snap_move,
+    cell_rect, clip_rect, density_keeps, in_layer, line_cells, pick_weighted, rect_cells,
+    resize_level, snap_move,
 };
 use crate::view::ViewState;
 
@@ -85,6 +86,30 @@ pub enum Paint {
     Tiles { tileset: Slug, stamp: Stamp },
     /// Empty the cells of a tiles layer (the eraser).
     ClearTiles,
+    /// A random brush: each cell of the `stride` lattice picks one of
+    /// `alternatives` by weight ([`Brush::Random`]).
+    Random {
+        tileset: Slug,
+        alternatives: Vec<RandomAlt>,
+        /// Cells one tile covers per axis (tiles bigger than cells).
+        stride: [u32; 2],
+    },
+}
+
+/// One alternative of a [`Paint::Random`], laid out on the layer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RandomAlt {
+    pub shape: AltShape,
+    pub weight: u32,
+}
+
+/// How a random alternative's tiles go down.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AltShape {
+    /// A rectangle of the atlas in its layout, top-left on the cell.
+    Stamp(Stamp),
+    /// Tiles stacked on the cell, first at the bottom.
+    Stack(Vec<[u32; 2]>),
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +155,10 @@ struct Gesture {
     /// Last cell a brush stroke reached.
     last: [i32; 2],
     kind: Kind,
+    /// The stroke's random seed (the random brush's picks, the density).
+    seed: u64,
+    /// Tiles layers: the chance in percent that a cell is painted.
+    density: u8,
 }
 
 /// One entry the user recorded, or one undo or redo step: what the live
@@ -175,6 +204,9 @@ pub struct Editing {
     gesture: Option<Gesture>,
     unsaved: bool,
     cells: Vec<[i32; 2]>,
+    /// Cells the random brush filled during the current gesture: later
+    /// picks that would cover them are skipped.
+    taken: HashSet<[i32; 2]>,
 }
 
 impl Editing {
@@ -856,6 +888,8 @@ impl Editing {
                 size: [0, 0],
                 origin: at.cell,
                 last: at.cell,
+                seed: 0,
+                density: 100,
                 kind: match grab {
                     Grab::Selection { was_selected } => Kind::MoveSelection {
                         start: at,
@@ -884,7 +918,14 @@ impl Editing {
             origin: at.cell,
             last: at.cell,
             kind: Kind::Paint(Paint::Value(GridValue::Clear)),
+            seed: cx
+                .view
+                .palette
+                .seed
+                .unwrap_or_else(crate::tools::fresh_seed),
+            density: cx.view.palette.density.clamp(1, 100),
         };
+        self.taken.clear();
         match tool {
             Tool::Hand => {}
             Tool::Select if matches!(grab, Grab::Marquee | Grab::WorldMarquee) => {
@@ -979,14 +1020,16 @@ impl Editing {
                 self.history.begin_gesture(label, Origin::User);
                 match tool {
                     Tool::Brush | Tool::Eraser => {
-                        let cmd = paint_command(&g, &[at.cell], false);
+                        let cmd = paint_command(&g, &[at.cell], false, &mut self.taken);
                         self.gesture = Some(g);
                         if let Some(cmd) = cmd {
                             self.push_or_status(cx, cmd);
                         }
                     }
                     Tool::Fill => {
-                        if let Some(cmd) = fill_command(cx.doc, &g, at.level, at.cell) {
+                        if let Some(cmd) =
+                            fill_command(cx.doc, &g, at.level, at.cell, &mut self.taken)
+                        {
                             self.push_or_status(cx, cmd);
                         }
                         self.close();
@@ -1005,7 +1048,7 @@ impl Editing {
             Kind::Paint(_) if matches!(g.tool, Tool::Brush | Tool::Eraser) => {
                 line_cells(g.last, at.cell, &mut self.cells);
                 g.last = at.cell;
-                let cmd = paint_command(g, &self.cells, false);
+                let cmd = paint_command(g, &self.cells, false, &mut self.taken);
                 if let Some(cmd) = cmd {
                     self.push_or_status(cx, cmd);
                 }
@@ -1024,12 +1067,17 @@ impl Editing {
             Kind::Paint(_) => match g.tool {
                 Tool::Brush | Tool::Eraser if at.cell != g.last => {
                     line_cells(g.last, at.cell, &mut self.cells);
-                    paint_command(&g, &self.cells, false)
+                    paint_command(&g, &self.cells, false, &mut self.taken)
                 }
-                Tool::Rect => rect_command(&g, cell_rect(g.origin, at.cell), modifiers.shift),
+                Tool::Rect => rect_command(
+                    &g,
+                    cell_rect(g.origin, at.cell),
+                    modifiers.shift,
+                    &mut self.taken,
+                ),
                 Tool::Line => {
                     line_cells(g.origin, at.cell, &mut self.cells);
-                    paint_command(&g, &self.cells, false)
+                    paint_command(&g, &self.cells, false, &mut self.taken)
                 }
                 _ => None,
             },
@@ -1516,6 +1564,39 @@ pub fn resolve_paint(
                     stamp: Stamp::new(*rect, ts.tile_size, doc.project.layer_grid(def)),
                 })
             }
+            Some(Brush::Random {
+                tileset,
+                alternatives,
+            }) => {
+                let ts = doc
+                    .project
+                    .tileset(tileset.as_str())
+                    .ok_or_else(|| format!("No tileset {tileset}"))?;
+                if alternatives
+                    .iter()
+                    .all(|a| a.weight == 0 || a.tiles.is_empty())
+                {
+                    return Err(
+                        "The random brush has no tiles to pick: select tiles in the palette".into(),
+                    );
+                }
+                let grid = doc.project.layer_grid(def);
+                let alternatives = alternatives
+                    .iter()
+                    .map(|a| RandomAlt {
+                        shape: match a.as_rect() {
+                            Some(r) => AltShape::Stamp(Stamp::new(r, ts.tile_size, grid)),
+                            None => AltShape::Stack(a.tiles.clone()),
+                        },
+                        weight: if a.tiles.is_empty() { 0 } else { a.weight },
+                    })
+                    .collect();
+                Ok(Paint::Random {
+                    tileset: tileset.clone(),
+                    alternatives,
+                    stride: Stamp::new([0, 0, 1, 1], ts.tile_size, grid).stride,
+                })
+            }
             _ => Err("Pick a tile in the palette first".into()),
         },
         LayerKind::Auto(a) => Err(format!(
@@ -1531,8 +1612,17 @@ pub fn resolve_paint(
 
 /// The command painting `cells` (layer cells, may be outside: clipped).
 /// Tiles go down as stamps on the stroke's lattice, or with `pattern` as
-/// the stamp tiled over exactly those cells (rect fill, flood fill).
-fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Command> {
+/// the stamp tiled over exactly those cells (rect fill, flood fill); the
+/// gesture's density skips stamps (cells with `pattern`). A random brush
+/// picks an alternative per lattice cell, skipping picks that would
+/// cover a cell in `taken` (filled earlier in the gesture), and with
+/// `pattern` keeps only the tiles on `cells`.
+fn paint_command(
+    g: &Gesture,
+    cells: &[[i32; 2]],
+    pattern: bool,
+    taken: &mut HashSet<[i32; 2]>,
+) -> Option<Command> {
     let Kind::Paint(paint) = &g.kind else {
         return None;
     };
@@ -1566,7 +1656,9 @@ fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Comma
             let mut out: BTreeMap<[u32; 2], [u32; 2]> = BTreeMap::new();
             if pattern {
                 for c in cells.iter().filter(inside) {
-                    if let Some(t) = stamp.tile_at(g.origin, *c) {
+                    if let Some(t) = stamp.tile_at(g.origin, *c)
+                        && density_keeps(g.seed, *c, g.density)
+                    {
                         out.insert(u(*c), t);
                     }
                 }
@@ -1575,7 +1667,7 @@ fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Comma
                 let mut tiles = Vec::new();
                 for c in cells {
                     let a = stamp.anchor(g.origin, *c);
-                    if seen.insert(a) {
+                    if seen.insert(a) && density_keeps(g.seed, a, g.density) {
                         stamp.tiles(a, &mut tiles);
                     }
                 }
@@ -1602,11 +1694,80 @@ fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Comma
                 keep_empty: false,
             })
         }
+        Paint::Random {
+            tileset,
+            alternatives,
+            stride,
+        } => {
+            let weights: Vec<u32> = alternatives.iter().map(|a| a.weight).collect();
+            let region: Option<HashSet<[i32; 2]>> =
+                pattern.then(|| cells.iter().copied().collect());
+            let s = [stride[0] as i32, stride[1] as i32];
+            let mut seen = HashSet::new();
+            let mut tiles = Vec::new();
+            let mut out: Vec<([u32; 2], [u32; 2])> = Vec::new();
+            for c in cells {
+                let a = [
+                    g.origin[0] + (c[0] - g.origin[0]).div_euclid(s[0]) * s[0],
+                    g.origin[1] + (c[1] - g.origin[1]).div_euclid(s[1]) * s[1],
+                ];
+                if !seen.insert(a) || taken.contains(&a) || !density_keeps(g.seed, a, g.density) {
+                    continue;
+                }
+                let Some(i) = pick_weighted(&weights, g.seed, a) else {
+                    continue;
+                };
+                tiles.clear();
+                let foot = match &alternatives[i].shape {
+                    AltShape::Stamp(st) => {
+                        st.tiles(a, &mut tiles);
+                        st.footprint()
+                    }
+                    AltShape::Stack(ts) => {
+                        tiles.extend(ts.iter().map(|t| (a, *t)));
+                        s
+                    }
+                };
+                let covered: Vec<[i32; 2]> = (0..foot[1])
+                    .flat_map(|y| (0..foot[0]).map(move |x| [a[0] + x, a[1] + y]))
+                    .collect();
+                if covered.iter().any(|c| taken.contains(c)) {
+                    continue;
+                }
+                for (cell, t) in &tiles {
+                    if in_layer(*cell, g.size) && region.as_ref().is_none_or(|r| r.contains(cell)) {
+                        out.push((u(*cell), *t));
+                    }
+                }
+                taken.extend(covered);
+            }
+            (!out.is_empty()).then(|| Command::SetTiles {
+                level: g.level.clone(),
+                layer: g.layer.clone(),
+                tiles: out
+                    .into_iter()
+                    .map(|(cell, tile)| TilePlacement {
+                        cell,
+                        tileset: tileset.clone(),
+                        tile,
+                        flip: None,
+                        alpha: 1.0,
+                    })
+                    .collect(),
+                clear: Vec::new(),
+                keep_empty: false,
+            })
+        }
     }
 }
 
 /// Fill (or outline) the cell rect `[x0, y0, x1, y1)`, clipped to the layer.
-fn rect_command(g: &Gesture, r: [i32; 4], outline: bool) -> Option<Command> {
+fn rect_command(
+    g: &Gesture,
+    r: [i32; 4],
+    outline: bool,
+    taken: &mut HashSet<[i32; 2]>,
+) -> Option<Command> {
     let r = clip_rect(r, g.size);
     if r[0] >= r[2] || r[1] >= r[3] {
         return None;
@@ -1631,13 +1792,19 @@ fn rect_command(g: &Gesture, r: [i32; 4], outline: bool) -> Option<Command> {
         origin: [r[0], r[1]],
         ..g.clone()
     };
-    paint_command(&g, &cells, true)
+    paint_command(&g, &cells, true, taken)
 }
 
 /// Flood fill at `cell`: `flood_fill` for int_grid layers; for tiles
 /// layers, the 4-connected region of cells holding the same stack as
 /// `cell` gets the stamp as a pattern.
-fn fill_command(doc: &Document, g: &Gesture, ix: LevelIx, cell: [i32; 2]) -> Option<Command> {
+fn fill_command(
+    doc: &Document,
+    g: &Gesture,
+    ix: LevelIx,
+    cell: [i32; 2],
+    taken: &mut HashSet<[i32; 2]>,
+) -> Option<Command> {
     if !in_layer(cell, g.size) {
         return None;
     }
@@ -1655,7 +1822,7 @@ fn fill_command(doc: &Document, g: &Gesture, ix: LevelIx, cell: [i32; 2]) -> Opt
     {
         let grid = doc.derived_effective(ix, def);
         let region = value_region(&grid, g.size, cell);
-        return paint_command(g, &region, true);
+        return paint_command(g, &region, true, taken);
     }
     if let Paint::Value(v) = paint {
         return Some(Command::FloodFill {
@@ -1666,7 +1833,7 @@ fn fill_command(doc: &Document, g: &Gesture, ix: LevelIx, cell: [i32; 2]) -> Opt
         });
     }
     let region = tile_region(doc, ix, &g.layer, g.size, cell);
-    paint_command(g, &region, true)
+    paint_command(g, &region, true, taken)
 }
 
 /// The 4-connected cells around `start` holding the same value as it in

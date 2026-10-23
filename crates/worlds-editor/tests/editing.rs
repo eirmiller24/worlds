@@ -116,6 +116,12 @@ impl Rig {
             let l = self.doc.project.layers[plan.layer].slug.to_string();
             self.view.palette.brushes.insert(l, b);
         }
+        if let Some(d) = plan.density {
+            self.view.palette.density = d;
+        }
+        if let Some(s) = plan.seed {
+            self.view.palette.seed = Some(s);
+        }
         if let Some(b) = plan.entity_brush {
             self.view.entities.brush = Some(b);
         }
@@ -433,6 +439,124 @@ fn select_moves_and_resizes_levels() {
     r.undo();
     let l = r.doc.level(ix);
     assert_eq!((l.world_px, l.size), ([320, 80], [6, 8]));
+}
+
+/// `(cell, tile)` of every placement on decor_back in crevasse, in row `y`.
+fn decor_row(r: &Rig, y: u32) -> Vec<([u32; 2], [u32; 2])> {
+    let ix = r.doc.level_ix("crevasse").unwrap();
+    r.doc
+        .level(ix)
+        .tiles_layer("decor_back")
+        .map_or(vec![], |l| {
+            l.tiles
+                .iter()
+                .filter(|t| t.cell[1] == y)
+                .map(|t| (t.cell, t.tile))
+                .collect()
+        })
+}
+
+#[test]
+fn a_random_brush_picks_an_alternative_per_cell() {
+    let mut r = Rig::new();
+    // castle_main's 16 px tiles on the 8 px decor_back: one pick every
+    // second cell. Alternatives in every rule form; [2, 0] weighs 3.
+    let stroke = r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back",
+        "path": [[0, 8], [38, 8]],
+        "brush": { "tileset": "castle_main", "seed": 7,
+                   "tiles": [[0, 0], [1, 0, 1, 1], { "rect": [2, 0, 1, 1], "weight": 3 },
+                             { "stack": [[4, 0], [3, 0]] }] } }"#;
+    r.gesture(stroke);
+    assert_eq!(r.ed.history().undo_entries().len(), 1);
+    assert_eq!(r.ed.undo_label().as_deref(), Some("Paint decor_back"));
+    let row = decor_row(&r, 8);
+    let xs: BTreeMap<u32, Vec<[u32; 2]>> = row.iter().fold(BTreeMap::new(), |mut m, (c, t)| {
+        m.entry(c[0]).or_insert_with(Vec::new).push(*t);
+        m
+    });
+    assert_eq!(
+        xs.keys().copied().collect::<Vec<_>>(),
+        (0..20).map(|i| i * 2).collect::<Vec<_>>()
+    );
+    for (x, tiles) in &xs {
+        assert!(
+            [
+                vec![[0, 0]],
+                vec![[1, 0]],
+                vec![[2, 0]],
+                vec![[4, 0], [3, 0]]
+            ]
+            .contains(tiles),
+            "{x}: {tiles:?}"
+        );
+    }
+    let heavy = xs.values().filter(|t| **t == [[2, 0]]).count();
+    assert!(heavy > 5, "weight 3 of 6: {heavy} of 20");
+    assert!(xs.values().any(|t| t.len() == 2), "a stack");
+    // The same seed paints the same again.
+    r.undo();
+    assert!(decor_row(&r, 8).is_empty());
+    r.gesture(stroke);
+    assert_eq!(decor_row(&r, 8), row);
+}
+
+#[test]
+fn density_scatters_and_stamps_never_overlap() {
+    let mut r = Rig::new();
+    r.gesture(
+        r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back",
+            "path": [[0, 6], [39, 6]],
+            "brush": { "tileset": "castle_main", "tile": [5, 1], "density": 50, "seed": 3 } }"#,
+    );
+    let got: Vec<u32> = decor_row(&r, 6).iter().map(|(c, _)| c[0]).collect();
+    let want: Vec<u32> = (0..20)
+        .map(|i| i * 2)
+        .filter(|&x| worlds_editor::tools::density_keeps(3, [x as i32, 6], 50))
+        .collect();
+    assert_eq!(got, want);
+    assert!(!got.is_empty() && got.len() < 20, "{got:?}");
+    assert_eq!(r.view.palette.density, 50);
+    // A 2x1 stamp alternative (4 cells wide here) at full density: stamps
+    // edge to edge, none cut by the next.
+    r.gesture(
+        r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back",
+            "path": [[0, 4], [1, 4], [2, 4], [3, 4], [4, 4], [9, 4], [12, 4]],
+            "brush": { "tileset": "castle_main", "tiles": [[0, 0, 2, 1]], "density": 100 } }"#,
+    );
+    let row = decor_row(&r, 4);
+    let want: Vec<([u32; 2], [u32; 2])> = (0..8).map(|i| ([i * 2, 4], [i % 2, 0])).collect();
+    assert_eq!(row, want);
+    // A rectangle fills its lattice cells with picks; nothing outside it.
+    r.gesture(
+        r#"{ "gesture": "rect", "level": "crevasse", "layer": "decor_back",
+            "path": [[30, 0], [35, 3]],
+            "brush": { "tileset": "castle_main", "tiles": [[6, 0], [7, 0]] } }"#,
+    );
+    let ix = r.doc.level_ix("crevasse").unwrap();
+    let placed: Vec<_> = r
+        .doc
+        .level(ix)
+        .tiles_layer("decor_back")
+        .unwrap()
+        .tiles
+        .iter()
+        .filter(|t| t.cell[0] >= 30 && t.cell[1] <= 3)
+        .map(|t| (t.cell, t.tile))
+        .collect();
+    assert_eq!(placed.len(), 6, "{placed:?}");
+    for (c, t) in placed {
+        assert!(c[0] <= 34 && c[0] % 2 == 0 && c[1] % 2 == 0, "{c:?}");
+        assert!(t == [6, 0] || t == [7, 0]);
+    }
+    // Nothing to pick: refused.
+    let before = r.doc.project.clone();
+    r.gesture(
+        r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back", "path": [[0, 0]],
+            "brush": { "tileset": "castle_main", "tiles": [{ "rect": [0, 0, 1, 1], "weight": 0 }] } }"#,
+    );
+    let status = r.view.status.as_ref().unwrap().text.clone();
+    assert!(status.contains("no tiles to pick"), "{status}");
+    assert_eq!(r.doc.project, before);
 }
 
 #[test]

@@ -762,6 +762,12 @@ impl EditorApp {
         if let Some(b) = plan.brush {
             self.st.view.palette.brushes.insert(slug, b);
         }
+        if let Some(d) = plan.density {
+            self.st.view.palette.density = d;
+        }
+        if let Some(s) = plan.seed {
+            self.st.view.palette.seed = Some(s);
+        }
         if let Some(b) = plan.entity_brush {
             self.st.view.entities.brush = Some(b);
         }
