@@ -122,7 +122,7 @@ Cell [x, y] is the character in column x of row y: here [1, 3] is L (ramp_l) and
 ### create_level
 
 ```text
-Create a new, empty level (a room) in the world, as one undo entry. slug names it: lowercase snake_case, unused by any other level (it is also the room's name in the game); name is its display name. size is [width, height] in cells of the project grid, at least [1, 1] (describe_project gives the grid size in pixels and every level's size and world position). world_px is the level's top-left corner in world pixels: a level at [x, y] covers x to x + width * grid_size and y to y + height * grid_size, so to put it beside an existing level, start where that one ends; levels should not overlap. depth orders levels that do overlap (higher is in front, default 0). fields sets level field values by field slug (the project's level_fields in describe_project; encoded as for place_entity); fields left out take their default. tags are words saying what the level is part of, as for tag_levels. world is needed only when the project has more than one world. Afterwards paint, place_tiles and place_entity fill it like any level. Returns the new level's id.
+Create a new, empty level (a room) in the world, as one undo entry. slug names it: lowercase snake_case, unused by any other level (it is also the level's name in the export); name is its display name. size is [width, height] in cells of the project grid, at least [1, 1] (describe_project gives the grid size in pixels and every level's size and world position). world_px is the level's top-left corner in world pixels: a level at [x, y] covers x to x + width * grid_size and y to y + height * grid_size, so to put it beside an existing level, start where that one ends; levels should not overlap. depth orders levels that do overlap (higher is in front, default 0). fields sets level field values by field slug (the project's level_fields in describe_project; encoded as for place_entity); fields left out take their default. tags are words saying what the level is part of, as for tag_levels. world is needed only when the project has more than one world. Afterwards paint, place_tiles and place_entity fill it like any level. Returns the new level's id.
 ```
 
 ```json
@@ -640,7 +640,7 @@ Read-only, `application/json`. Project files: in editor mode the content is the 
 
 ## Using it from your game's repo
 
-Build with `cargo build --release -p worlds-mcp`, then add to `.mcp.json` at the root of your game's repo:
+Build with `cargo build --release -p worlds-mcp -p worlds-editor` (`screenshot` without an open editor runs the `worlds` binary next to `worlds-mcp`), then add to `.mcp.json` at the root of your game's repo:
 
 ```json
 { "mcpServers": { "worlds": {

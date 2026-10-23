@@ -4,7 +4,7 @@ This is the reference for editing a Worlds project by hand. It's written for an 
 
 ## The short version
 
-- A project is a directory, usually named `<name>.worlds/`. Each file holds one concern and is small enough to read whole.
+- A project is a directory, usually named `<name>.worlds/`. Each file holds one concern and is small enough to read whole. `worlds-cli new <dir> [--name <name>]` creates an empty one (one empty world `main`, plus `schema/`); `worlds-cli schema <dir>` rewrites the schemas.
 - Every file is a JSON object that starts with `"$schema"` (the relative path to its schema) and `"format": 1`.
 - **Unknown keys are errors.** A typo like `"glpyh"` fails to load with the file name and JSON path (`layers.json: at layers[0].values[2].glpyh: unknown field ...`). Don't add keys that aren't documented here. So is a key that belongs to another kind of the same thing, like `values` on a `tiles` layer or `min` on a `bool` field.
 - Definitions are named by **slugs**: `^[a-z][a-z0-9_]*$`, for example `floor_button` or `castle_main`. A slug is also the file or directory name where there is one, and it must match.
@@ -870,7 +870,7 @@ Levels are the subdirectories of `levels/`. Level placement lives in each `level
 | Key | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `id` | id | yes | Random, stable for life. Feeds the rule randomness |
-| `slug` | slug | yes | Must match the directory name. Unique across all worlds. Also the Godot room name |
+| `slug` | slug | yes | Must match the directory name. Unique across all worlds. Also the level's name in the export |
 | `name` | string | yes | Display name |
 | `world_px` | `[x, y]` | yes | Top-left corner in world pixels |
 | `size` | `[w, h]` | yes | In cells of the project grid. Every grid file in the level must cover the same pixels (see [Coordinates](#common-value-types)) |
@@ -1098,7 +1098,7 @@ The export has its own `format` (`1`), separate from the project's. Readers must
 | `worlds[]` | `{ "slug", "name"?, "notes", "levels" }`; `notes` are the world notes with `export: true` (never guides) |
 | `levels[]` | `{ "slug", "id", "name", "file", "rect", "depth", "tags"?, "touching", "open_edges"? }`. `file` is relative to the export directory; `rect` is `[x, y, w, h]` in world pixels; `tags` as in the level file, left out when empty |
 | `touching[]` | Levels of the same world sharing part of an edge: `{ "level", "edge": "left"/"right"/"top"/"bottom" (this level's), "span": [start, end) }` in world pixels. Corner contact doesn't count |
-| `open_edges` | Per edge (`left`, `right`, `top`, `bottom`), runs of open border cells as `[first, end)` cell indices along the edge (top to bottom, left to right), in cells of the collision layer's grid. A cell is open when its collision value isn't in `blocking_values`: empty cells, and also kinds like `oneway` or `water` unless listed. Left out when there's no `collision_layer` (no layer is guessed). `null` when the level's collision grid is absent or all empty: the export doesn't describe that level's seams (the Godot importer keeps its scene-based seam inference for it) |
+| `open_edges` | Per edge (`left`, `right`, `top`, `bottom`), runs of open border cells as `[first, end)` cell indices along the edge (top to bottom, left to right), in cells of the collision layer's grid. A cell is open when its collision value isn't in `blocking_values`: empty cells, and also kinds like `oneway` or `water` unless listed. Left out when there's no `collision_layer` (no layer is guessed). `null` when the level's collision grid is absent or all empty: the export doesn't describe that level's seams (an importer falls back on its own) |
 
 `export/enums.json`: `{ "format": 1, "enums": [...] }`, every project enum in `enums.json` order as `{ "slug", "name", "values": [{ "slug", "name" }] }`, values in definition order. `name` is the display name, or the slug when none is set. Inline `values` of a field definition aren't project enums and aren't listed.
 
@@ -1113,7 +1113,7 @@ The export has its own `format` (`1`), separate from the project's. Readers must
 - **annotation** warnings, never problems: a `note:`, `level:` or `entity:` link that names nothing exported.
 - **importer** warnings (`godot-rooms`): the layer order (a pair of layers the export stacks one way and the importer, by z, the other: `Worlds draws main_tiling above decor_front, but the importer draws DecorFront (z 2) above Skin (z -1); ...`, once per pair across levels), and `blocking_values` that aren't the importer's walls (`solid`, `fortified`, `breakable`, `ramp_r`, `ramp_l`; the importer then infers seams from the scenes).
 
-With `--profile godot-rooms`, the output is one line per problem, `file: json.path: message` as for `validate` (file relative to the export directory), then `warning: ...` lines, then `ok: N levels, no problems` or `N problem(s)` (each with `, W warning(s)` when there are some). `--json` prints instead (here for the `skin_offgrid` fixture below):
+The output is one line per problem, `file: json.path: message` as for `validate` (file relative to the export directory), then `warning: ...` lines, then `ok: N levels, no problems` or `N problem(s)` (each with `, W warning(s)` when there are some). `--json` prints instead (here for the `skin_offgrid` fixture below, with `--profile godot-rooms`):
 
 ```json
 { "levels": 1, "ok": false,
@@ -1128,7 +1128,7 @@ Fixtures: `crates/worlds-cli/tests/fixtures/importer_contract/<case>/` are small
 
 ### The godot-rooms profile
 
-`check-export --profile godot-rooms` checks the contract of a Godot importer that turns each level into a room scene with a 32 px grid. These rules are that importer's conventions, not Worlds': the profile checks the refusals (`crates/worlds-cli/src/importer_contract.rs`), and an importer following it refuses the same exports, the whole import at once. Use it as is if your importer follows these conventions, or as a starting point for your own; the default, `--profile none`, checks only the format.
+`check-export --profile godot-rooms` checks the contract of a Godot importer that turns each level into a room scene with a 32 px grid. These rules are that importer's conventions, not Worlds' (and not the [Godot addon](../godot/addons/worlds/README.md)'s, which reads any export the format check accepts): the profile checks the refusals (`crates/worlds-cli/src/importer_contract.rs`), and an importer following it refuses the same exports, the whole import at once. Use it as is if your importer follows these conventions, or as a starting point for your own; the default, `--profile none`, checks only the format.
 
 | Export | In the room scene |
 | --- | --- |

@@ -78,14 +78,40 @@ crevasse (Node2D at the level's top-left, in world pixels)
 to load levels from an export shipped with the game:
 
 ```gdscript
-var b := WorldsBuilder.open("res://game.worlds/export")
+var b := WorldsBuilder.open("res://game.worlds/export")  # null if world.json can't be read
 b.entity_scene_dir = "res://entities"
 add_child(b.build_level("crevasse"))
 for problem in b.errors:
     push_warning(problem)
 ```
 
-`build_world()` builds every level of a world under one node.
+| Member | |
+| --- | --- |
+| `WorldsBuilder.open(dir)` | Reads `world.json` and `enums.json` from the export directory. `null` (after `push_error`) when `world.json` can't be read or isn't format 1 |
+| `entity_scene_dir`, `build_collision` | As the import settings above (default `""` and `true`) |
+| `build_level(slug)` | One level's `Node2D`, or `null` for an unknown level or unreadable level file |
+| `build_world(world_slug = "")` | Every level of a world (the first one by default) under one `Node2D`, world notes in its `worlds_notes` meta |
+| `level_slugs()`, `world_level_slugs(world)` | Level slugs, in `world.json` order |
+| `world`, `enums` | The parsed `world.json` and `enums.json` |
+| `errors` | Problems met while building (a missing image, an atlas tile outside its image, a bad flip, an entity scene whose root isn't a `Node2D`); building carries on past them |
+| `tilesets()` | The `TileSet`s built so far, by slug, shared by every level that uses them |
+
+## Scripted import
+
+`WorldsImport.run(world_json, out_dir, entity_scene_dir := "", build_collision := true)` is what the menu item runs: it writes the scenes and returns the problems (empty when everything imported). From a build script or CI, after `worlds-cli bake`:
+
+```gdscript
+# import_worlds.gd: godot --headless --path . -s import_worlds.gd
+extends SceneTree
+
+func _init() -> void:
+    var problems := WorldsImport.run("res://game.worlds/export/world.json", "res://worlds")
+    for p in problems:
+        printerr(p)
+    quit(1 if problems.size() > 0 else 0)
+```
+
+Run `godot --headless --path . --import` once first on a fresh checkout, so Godot knows the addon's `class_name`s.
 
 ## Checking an export
 

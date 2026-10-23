@@ -4,6 +4,47 @@ The editor hosts a JSON-RPC 2.0 server so agents and tools can read and edit the
 
 The same handler also runs **headless**, over a `Project` loaded from disk without the editor. `worlds-mcp` uses that when no editor is open, and the tests use it. Differences are called out where they exist; the short list is in [Headless mode](#headless-mode).
 
+## Getting started
+
+Three ways in, all running the same handler:
+
+| You have | Run | Then |
+| --- | --- | --- |
+| The editor open on the project (`worlds <dir>`) | nothing | connect to the editor's socket; edits show live and land in its undo history |
+| No editor | `worlds-server <dir> [--save-on-write]` | connect to its socket; it prints `{"port", "pid", "project"}` once listening and serves until SIGINT or SIGTERM. Without `--save-on-write`, nothing reaches disk until you call `project.save` |
+| Rust code | `worlds_server::headless::Session` | call methods in-process, no socket (see [Headless mode](#headless-mode)) |
+
+Over the socket: read `<project>/.worlds/server.json` for `port` and `token` ([below](#discovery-worldsserverjson)), open `ws://127.0.0.1:<port>/` **without an `Origin` header**, send [`session.hello`](#sessionhello) first, then one request per text frame. A minimal Python client (`pip install websocket-client`, whose `Origin` header has to be turned off with `suppress_origin`; Node's built-in `WebSocket` sends none):
+
+```python
+import json, sys
+from websocket import create_connection
+
+info = json.load(open(sys.argv[1] + "/.worlds/server.json"))
+ws = create_connection(f"ws://127.0.0.1:{info['port']}/", suppress_origin=True)
+next_id = 0
+
+def call(method, **params):
+    global next_id
+    next_id += 1
+    ws.send(json.dumps({"jsonrpc": "2.0", "id": next_id, "method": method, "params": params}))
+    while True:
+        msg = json.loads(ws.recv())
+        if msg.get("id") == next_id:          # skip notifications
+            if "error" in msg:
+                raise RuntimeError(msg["error"]["message"])
+            return msg["result"]
+
+call("session.hello", token=info["token"], client={"name": "my-script", "version": "1"})
+rev = call("project.describe")["rev"]
+print(call("grid.fill_rect", level="crevasse", layer="collision",
+           rect=[2, 2, 3, 1], value="water", expect_rev=rev))
+```
+
+From there: [`project.describe`](#project) is the map (layers, values, entity types, levels), `level.get` with `format: "text"` shows a level, and every write is one undo entry. A script that makes several writes should wrap them in [`history.begin_batch`/`end_batch`](#history) so the user can undo them in one step.
+
+Not reachable over the API: the project settings (`set_project_setting`: name, background, collision layer, seed), an existing level's rule state (`set_layer_state`: seed, optional groups, tileset substitutions; `level.create` takes them for a new level in `level.layers`) and `replace_level`. Use the editor, edit the files ([format.md](format.md)), or apply those [commands](commands.md) from Rust.
+
 ## Discovery: `.worlds/server.json`
 
 When the editor opens a project it binds `127.0.0.1` on a free port and writes `<project>/.worlds/server.json` (created with file mode `0600` as a temp file in `.worlds/`, then renamed over the old one, so a reader never sees a half-written file or a moment where the token is world-readable):
@@ -44,7 +85,7 @@ Result: the protocol version (`1`), the server, the project, the current `rev`, 
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "result": { "protocol": 1, "server": { "name": "worlds", "version": "0.2.0" },
+{ "jsonrpc": "2.0", "id": 1, "result": { "protocol": 1, "server": { "name": "worlds", "version": "0.1.0" },
   "project": { "dir": "/tmp/mini.worlds", "name": "Mini" }, "rev": 0, "headless": true, "approval": false, "session": "k3v9q2xa" } }
 ```
 
@@ -144,6 +185,7 @@ The JSON-RPC `message` is always a sentence meant for an agent to read. For `com
 | `duplicate_field` | `owner`, `field`: renaming a field to a slug its owner already has |
 | `unknown_entity` | `id` |
 | `unknown_note` | `id` |
+| `unknown_guide_group` | `world`, `group` |
 | `duplicate_id` | `id` |
 | `duplicate_level` | `level` |
 | `unknown_enum` | `enum` |
@@ -347,7 +389,7 @@ Reads of derived layers take their effective grids from the host's bake cache (t
   "rows": ["#.......oooo", "#L..~~~....."] } }
 ```
 
-**`grid.set_cells`** → `paint_cells`. Either `{ level, layer, cells }` with `[x, y, value]` triples, or `{ level, layer, text, origin, legend? }`, a block of glyph rows:
+**`grid.set_cells`** → `paint_cells`. Either `{ level, layer, cells }` with `[x, y, value]` triples, or `{ level, layer, text, origin, legend? }`, a block of glyph rows; both take `keep_empty?` (as `paint_cells`):
 
 - `text`: rows separated by `\n` (a trailing newline adds no row). The first character of the first row is cell `origin`; each character is the next cell to the right, each row the next one down.
 - Glyphs are the layer's value glyphs and `.` for empty (on a derived layer: no override). `!` suppresses a derived layer's cell (refused on other layers, as above). A space or `*` leaves its cell untouched, and a short row leaves the rest of its line untouched, so a block can paint an irregular shape.
@@ -724,7 +766,7 @@ It is locked: a new title is fine, new points need `confirm`:
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 93, "method": "notes.update", "params": { "id": "guidestem2", "patch": { "title": "Second glyph, first stem" } } }
+{ "jsonrpc": "2.0", "id": 93, "method": "notes.update", "params": { "id": "guidestem2", "patch": { "title": "West wall line" } } }
 ```
 
 ```json
@@ -751,7 +793,7 @@ It is locked: a new title is fine, new points need `confirm`:
     { "change": "note", "world": "main", "level": null, "id": "regioneast" } ] } }
 ```
 
-A guide group, then a three-glyph chain imported with an inline script (four glyphs: the required `null` and `_`, `R` and `S`), its first glyph in the group:
+A guide group, then a guide in it, and the guides that name the group:
 
 ```json
 { "jsonrpc": "2.0", "id": 96, "method": "notes.set_guide_group", "params": { "group": { "slug": "shifted", "name": "Shifted", "offset": [0, 25] } } }
