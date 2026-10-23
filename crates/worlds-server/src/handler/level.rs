@@ -242,6 +242,32 @@ pub(crate) fn resize(project: &Project, method: &str, p: Value) -> Result<Write,
     )?))
 }
 
+/// `level.crop { level, world? }` → the `batch` of `resize_level`s that
+/// shrinks the level to the bounding box of its content
+/// (`Project::crop_level`); nothing when it already fits.
+pub(crate) fn crop(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        level: Slug,
+        world: Option<Slug>,
+    }
+    let p: P = params::parse(method, p)?;
+    let (world, _) = find_level(project, p.level.as_str())?;
+    if let Some(w) = p.world
+        && w != world.slug
+    {
+        return Err(RpcError::command(&CommandError::LevelNotInWorld {
+            world: w,
+            level: p.level,
+        }));
+    }
+    let cmd = project
+        .crop_level(&world.slug, &p.level)
+        .map_err(|e| RpcError::command(&e))?;
+    Ok(Write::one(cmd.unwrap_or_else(Command::noop)))
+}
+
 /// `level.update { level, slug?, name?, depth?, bg_color?, tags? }`.
 pub(crate) fn update(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
     #[derive(Deserialize)]

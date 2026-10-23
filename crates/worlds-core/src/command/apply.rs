@@ -5,6 +5,7 @@
 
 mod defs;
 mod fields;
+mod resize;
 mod rules;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1236,14 +1237,7 @@ impl Project {
             return Ok(noop());
         }
         // Cells (of the project grid) the content moves right and down.
-        let shift: [i64; 2] = std::array::from_fn(|a| {
-            let diff = size[a] as i64 - old.size[a] as i64;
-            match anchor[a] {
-                -1 => 0,
-                0 => diff.div_euclid(2),
-                _ => diff,
-            }
-        });
+        let shift = resize::resize_shift(old.size, size, anchor);
         let g = self.grid_size as i64;
         let shift_px = [shift[0] * g, shift[1] * g];
         let mut new = old.clone();

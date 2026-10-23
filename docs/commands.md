@@ -194,6 +194,10 @@ The content keeps its place in the world: when the left edge moves, `world_px` c
 - **Inverse:** `replace_level` with the level as it was, `restore: true` (a resize can crop, so the inverse carries the old content).
 - **Changes:** `level_meta` part `size`, `level_meta` part `position` when the content shifted, a `grid` or `tiles` per layer with content (whole layer), an `entity` and `note` per item that moved, and `entity_outside` for each entity now outside the level.
 
+The editor's tools (dragging an edge, the Inspector's Size, Crop to content) refuse a resize that would leave an entity outside the level, as they refuse moving one out; `Project::resize_leaves_outside` says which. The command itself keeps them, so agents and inverses are never refused.
+
+**Crop to content** is not a command of its own: `Project::crop_level` builds a `batch` labelled `Crop level <slug>` of one or two `resize_level`s that shrink the level to the bounding box of its content: non-empty int_grid cells, derived overrides, tile stacks and entities (each one's cell and box, as far as they lie inside the level); notes don't count. The first trims the left and top edges (anchoring the far ones), the second the right and bottom (`anchor: [-1, -1]`). The left and top are rounded out to where every layer of the level moves by whole cells of its own grid. A level with no content is refused (`invalid`); one that already fits its content gives nothing to apply. Over the API it is `level.crop`, over MCP `crop_level`.
+
 ### rename_level
 
 Change the slug (the level's directory, and its name in the export) and the display name. Every note link `level:<old slug>` becomes `level:<new slug>`. Refused if the new slug is taken, or if a note already links to `level:<new slug>` (undo couldn't tell it from a rewritten link).

@@ -877,3 +877,39 @@ fn cancel_batch_reverts_and_records_nothing() {
         code::BATCH_STATE
     );
 }
+
+/// `level.crop` shrinks a level to its content in one undo entry; a level
+/// that already fits changes nothing, and `level.resize` takes `anchor`.
+#[test]
+fn level_crop_and_anchored_resize() {
+    let (_t, mut s) = session();
+    // shaft (6x8 at [320, 80]) holds only a 1x3 door standing on [2, 7].
+    let r = s.call("level.crop", json!({ "level": "shaft" })).unwrap();
+    assert_eq!(r["status"], "applied", "{r}");
+    let l = s.project().level("shaft").unwrap().clone();
+    assert_eq!((l.size, l.world_px), ([1, 3], [352, 160]));
+    assert_eq!(l.all_entities().next().unwrap().cell, [0, 2]);
+    assert_eq!(s.history().undo_entries().len(), 1);
+    let again = s.call("level.crop", json!({ "level": "shaft" })).unwrap();
+    assert_eq!(again["rev"], r["rev"], "already cropped: nothing applied");
+    s.call("history.undo", json!({})).unwrap();
+    let l = s.project().level("shaft").unwrap().clone();
+    assert_eq!((l.size, l.world_px), ([6, 8], [320, 80]));
+    // Grow from the bottom-right corner: the top-left moves out.
+    s.call(
+        "level.resize",
+        json!({ "level": "shaft", "size": [8, 9], "anchor": [1, 1] }),
+    )
+    .unwrap();
+    let l = s.project().level("shaft").unwrap().clone();
+    assert_eq!((l.size, l.world_px), ([8, 9], [288, 64]));
+    assert_eq!(l.all_entities().next().unwrap().cell, [4, 8]);
+    let e = s
+        .call("level.crop", json!({ "level": "nope" }))
+        .unwrap_err();
+    assert_eq!(e.data.unwrap()["kind"], "unknown_level");
+    assert_eq!(
+        err_code(s.call("level.crop", json!({ "level": "shaft", "size": [1, 1] }))),
+        code::INVALID_PARAMS
+    );
+}

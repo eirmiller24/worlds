@@ -166,6 +166,7 @@ pub fn is_write(method: &str) -> bool {
             | "level.delete"
             | "level.move"
             | "level.resize"
+            | "level.crop"
             | "level.update"
             | "level.set_fields"
             | "level.set_layer_state"
@@ -408,6 +409,7 @@ fn write_builder(method: &str) -> Option<Builder> {
         "level.delete" => level::delete,
         "level.move" => level::move_level,
         "level.resize" => level::resize,
+        "level.crop" => level::crop,
         "level.update" => level::update,
         "level.set_fields" => level::set_fields,
         "level.set_layer_state" => level::set_layer_state,
