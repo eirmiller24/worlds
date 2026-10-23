@@ -43,7 +43,7 @@ Display names keep the LDtk spelling: layer and entity `name` is the LDtk identi
 | field def | type, `isArray`, `canBeNull`, `defaultOverride`, min/max, regex (without `/.../flags`; the `i` flag becomes a leading `(?i)`, and the pattern is otherwise kept as is: Worlds requires a whole-value match where LDtk accepts a match anywhere, so anchor or widen it yourself if a substring match was meant), `acceptFileTypes` -> `extensions`, tileset, doc, display |
 | `allowedRefs` | `OnlySame` -> `allowed_types` = own type; `OnlySpecificEntity` -> that type; `OnlyTags` -> `allowed_tags`; `allowOutOfLevelRef` -> `cross_level` |
 | `editorDisplayMode` / `editorShowInWorld` | `display.canvas` unless `Hidden`; `display.arrow` for refs and points shown as links/paths; `display.world` |
-| world (`MultiWorlds`) or the implicit one | `worlds/<slug>/`; a single-world file becomes world `main` |
+| world (`MultiWorlds`) or the implicit one | `worlds/<slug>/` with the LDtk identifier as `name`, one Worlds world per LDtk world, listed in LDtk's order in `project.json` `worlds`; a single-world file becomes world `main` |
 | level | slug, name, `world_px` (`worldX/Y`; Linear layouts are laid out left to right / top to bottom), `size` in cells, `depth` = `worldDepth`, `bg_color` (null = project default), fields |
 | layer instance `seed`, `optionalRules`, `overrideTilesetUid` | `level.json` `layers.<auto layer>`: `seed` (kept for continuity; Worlds doesn't need one), `optional_groups` (group slugs), `tilesets`: each tileset the layer's rules draw from mapped to the override (left out when they're the same) |
 | `intGridCsv` | `<layer>.json` rows of glyphs in the layer's own cells, `0` -> `.`; an all-empty grid writes no file |
