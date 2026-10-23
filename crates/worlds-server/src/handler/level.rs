@@ -541,3 +541,26 @@ fn dropped(level: &Level, content: &LevelContent) -> Option<String> {
         }
     }
 }
+
+/// `level.duplicate { level, slug, name?, world?, world_px? }` →
+/// `duplicate_level`; the result adds the copy's `id` and `world_px`.
+pub(crate) fn duplicate(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    let cmd = params::command(method, "duplicate_level", p)?;
+    let Command::DuplicateLevel { slug, .. } = &cmd else {
+        return Err(RpcError::internal("level.duplicate built another command"));
+    };
+    // The copy's id and position, worked out on a scratch copy (the ids
+    // are derived, so applying it for real makes the same ones).
+    let mut scratch = project.clone();
+    scratch
+        .apply(cmd.clone())
+        .map_err(|e| RpcError::command(&e))?;
+    let made = scratch
+        .level(slug.as_str())
+        .map(|l| json!({ "id": l.id, "world_px": l.world_px }));
+    Ok(Write::Commands {
+        cmds: vec![cmd],
+        id: made,
+        confirm: None,
+    })
+}

@@ -10,26 +10,9 @@ use std::collections::{BTreeMap, HashSet};
 
 use super::Result;
 use crate::command::{Applied, CommandError};
-use crate::fragment::{Outside, remap_fields, remap_links};
+use crate::fragment::{Outside, derived_free, remap_fields, remap_links};
 use crate::id::{Id, Slug};
 use crate::model::Project;
-
-/// A derived id not in `taken` (which then holds it): `seed`, then
-/// `seed#1`, `seed#2`, ... until one is free.
-fn derived_free(seed: &str, taken: &mut HashSet<Id>) -> Id {
-    let mut n = 0u32;
-    loop {
-        let id = if n == 0 {
-            Id::derived(seed)
-        } else {
-            Id::derived(&format!("{seed}#{n}"))
-        };
-        if taken.insert(id.clone()) {
-            return id;
-        }
-        n += 1;
-    }
-}
 
 impl Project {
     pub(super) fn duplicate_level(

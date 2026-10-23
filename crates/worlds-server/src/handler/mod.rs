@@ -13,6 +13,7 @@
 
 mod baked;
 mod defs;
+mod edit;
 mod entity;
 pub(crate) mod events;
 mod grid;
@@ -202,6 +203,8 @@ pub fn is_write(method: &str) -> bool {
             | "history.undo"
             | "history.redo"
             | "history.begin_batch"
+            | "edit.paste"
+            | "level.duplicate"
     )
 }
 
@@ -366,6 +369,7 @@ impl Handler {
             "events.subscribe" | "events.unsubscribe" => {
                 events::subscribe(self, client, method, params)
             }
+            "edit.copy" => read(host, edit::copy),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -444,6 +448,8 @@ fn write_builder(method: &str) -> Option<Builder> {
         "history.undo" => history::undo_builder,
         "history.redo" => history::redo_builder,
         "history.begin_batch" => history::begin_builder,
+        "edit.paste" => edit::paste,
+        "level.duplicate" => level::duplicate,
         _ => return None,
     })
 }

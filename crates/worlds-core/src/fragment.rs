@@ -589,13 +589,22 @@ pub fn copy(project: &Project, sel: &CopySelection) -> Result<Fragment, CommandE
     Ok(frag)
 }
 
-/// Fresh ids: none of `taken`, none handed out before.
-fn fresh(taken: &mut HashSet<Id>) -> Id {
+/// A derived id ([`Id::derived`]) not in `taken` (which then holds it):
+/// from `seed`, then `seed#1`, `seed#2`, ... until one is free. New ids of
+/// pastes and duplicates come from here, so the same edit of the same
+/// project makes the same ids.
+pub(crate) fn derived_free(seed: &str, taken: &mut HashSet<Id>) -> Id {
+    let mut n = 0u32;
     loop {
-        let id = Id::generate();
+        let id = if n == 0 {
+            Id::derived(seed)
+        } else {
+            Id::derived(&format!("{seed}#{n}"))
+        };
         if taken.insert(id.clone()) {
             return id;
         }
+        n += 1;
     }
 }
 
@@ -978,14 +987,23 @@ pub fn paste(
         }
         placed.push((e, layer, [cell[0] as i32, cell[1] as i32], o));
     }
+    // New ids derived from where the paste goes and the fragment's ids: the
+    // same paste of the same project gives the same ids (pasting twice
+    // moves on to the next free one).
+    let seed = |old: &Id| {
+        format!(
+            "paste:{}:{},{}:{old}",
+            level.id, opts.origin[0], opts.origin[1]
+        )
+    };
     let mut ids = BTreeMap::new();
     for (e, ..) in &placed {
-        ids.insert(e.id.clone(), fresh(&mut taken));
+        ids.insert(e.id.clone(), derived_free(&seed(&e.id), &mut taken));
     }
     let mut note_taken: HashSet<Id> = project.notes().map(|n| n.note.id.clone()).collect();
     let mut note_ids = BTreeMap::new();
     for n in &frag.notes {
-        note_ids.insert(n.id.clone(), fresh(&mut note_taken));
+        note_ids.insert(n.id.clone(), derived_free(&seed(&n.id), &mut note_taken));
     }
     let outside = Outside::Resolve { project, level };
     let mut entities = Vec::new();
