@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::json;
 use worlds_core::command::{
     CellValue, Change, Command, CommandError, GridValue, History, LevelContent, LevelPart,
-    MacroKind, NoteScope, Origin, ProjectSetting, Rect,
+    MacroKind, NoteScope, Origin, ProjectKey, ProjectSetting, Rect,
 };
 use worlds_core::format::IntGridFile;
 use worlds_core::*;
@@ -1438,8 +1438,49 @@ fn layer_state_and_project_settings() {
         ProjectSetting::BlockingValues(Some(vec![s("solid")])),
         ProjectSetting::BlockingValues(Some(vec![])),
         ProjectSetting::BlockingValues(None),
+        ProjectSetting::DefaultLevelSize(Some([40, 22])),
+        ProjectSetting::DefaultLevelSize(None),
+        ProjectSetting::ExportOnSave(true),
+        ProjectSetting::ExportOnSave(false),
     ] {
         check(&mut p, Command::SetProjectSetting { setting });
+    }
+    // Each reports its own key, and the inverse puts the old value back.
+    let a = p
+        .apply(Command::SetProjectSetting {
+            setting: ProjectSetting::DefaultLevelSize(Some([12, 8])),
+        })
+        .unwrap();
+    assert_eq!(
+        a.changes,
+        vec![Change::Project {
+            key: ProjectKey::DefaultLevelSize
+        }]
+    );
+    assert_eq!(p.default_level_size, Some([12, 8]));
+    p.apply(a.inverse).unwrap();
+    assert_eq!(p.default_level_size, None);
+    let a = p
+        .apply(Command::SetProjectSetting {
+            setting: ProjectSetting::ExportOnSave(true),
+        })
+        .unwrap();
+    assert_eq!(
+        a.changes,
+        vec![Change::Project {
+            key: ProjectKey::ExportOnSave
+        }]
+    );
+    p.apply(a.inverse).unwrap();
+    assert!(!p.export_on_save);
+    // A zero-sized default level is refused.
+    for bad in [[0, 10], [10, 0]] {
+        let e = p
+            .apply(Command::SetProjectSetting {
+                setting: ProjectSetting::DefaultLevelSize(Some(bad)),
+            })
+            .unwrap_err();
+        assert!(e.to_string().contains("at least 1x1"), "{e}");
     }
     // The grid can't change under levels; the same value is a no-op.
     let e = p

@@ -33,7 +33,16 @@ fn level(s: &Session, slug: &str) -> Level {
 }
 
 fn settings(p: &Project) -> Value {
-    json!([p.name, p.bg_color, p.collision_layer, p.seed])
+    json!([
+        p.name,
+        p.bg_color,
+        p.collision_layer,
+        p.seed,
+        p.grid_size,
+        p.blocking_values,
+        p.default_level_size,
+        p.export_on_save
+    ])
 }
 
 #[test]
@@ -97,6 +106,68 @@ fn project_update_of_one_key_is_one_command_and_a_noop_changes_nothing() {
 }
 
 #[test]
+fn project_update_sets_the_other_settings_and_undoes_them() {
+    let (_t, mut s) = session();
+    let before = settings(s.project());
+    let r = s
+        .call(
+            "project.update",
+            json!({ "blocking_values": ["solid"], "default_level_size": [24, 12],
+                "export_on_save": true }),
+        )
+        .unwrap();
+    assert_eq!(r["label"], "claude-code: Set project blocking_values");
+    assert_eq!(
+        r["changes"],
+        json!([
+            { "change": "project", "key": "blocking_values" },
+            { "change": "project", "key": "default_level_size" },
+            { "change": "project", "key": "export_on_save" }
+        ])
+    );
+    let p = s.project();
+    assert_eq!(json!(p.blocking_values), json!(["solid"]));
+    assert_eq!(p.default_level_size, Some([24, 12]));
+    assert!(p.export_on_save);
+    let d = s.call("project.describe", json!({})).unwrap();
+    assert_eq!(d["blocking_values"], json!(["solid"]));
+    assert_eq!(d["default_level_size"], json!([24, 12]));
+    assert_eq!(d["export_on_save"], json!(true));
+    // null leaves the optional keys out.
+    s.call(
+        "project.update",
+        json!({ "blocking_values": null, "default_level_size": null }),
+    )
+    .unwrap();
+    assert_eq!(s.project().blocking_values, None);
+    assert_eq!(s.project().default_level_size, None);
+    s.call("history.undo", json!({})).unwrap();
+    s.call("history.undo", json!({})).unwrap();
+    assert_eq!(settings(s.project()), before);
+}
+
+#[test]
+fn project_update_sets_grid_size_only_without_levels() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("empty.worlds");
+    worlds_core::save_all(&mut Project::new("Empty"), &dir).unwrap();
+    let mut s = Session::open(&dir).unwrap().client("claude-code");
+    let r = s.call("project.update", json!({ "grid_size": 8 })).unwrap();
+    assert_eq!(
+        r["changes"],
+        json!([{ "change": "project", "key": "grid_size" }])
+    );
+    assert_eq!(s.project().grid_size, 8);
+    let e = err(
+        s.call("project.update", json!({ "grid_size": 0 })),
+        code::COMMAND_ERROR,
+    );
+    assert_eq!(kind(&e), "invalid");
+    s.call("history.undo", json!({})).unwrap();
+    assert_eq!(s.project().grid_size, Project::new("x").grid_size);
+}
+
+#[test]
 fn project_update_refusals_change_nothing() {
     let (_t, mut s) = session();
     let before = settings(s.project());
@@ -123,8 +194,24 @@ fn project_update_refusals_change_nothing() {
     );
     let e = err(s.call("project.update", json!({})), code::INVALID_PARAMS);
     assert!(e.message.contains("nothing to update"), "{}", e.message);
-    err(
+    // The grid can't change under levels.
+    let e = err(
         s.call("project.update", json!({ "grid_size": 8 })),
+        code::COMMAND_ERROR,
+    );
+    assert_eq!(kind(&e), "invalid");
+    assert!(e.message.contains("no levels"), "{}", e.message);
+    let e = err(
+        s.call("project.update", json!({ "default_level_size": [0, 4] })),
+        code::COMMAND_ERROR,
+    );
+    assert_eq!(kind(&e), "invalid");
+    err(
+        s.call("project.update", json!({ "export_on_save": "yes" })),
+        code::INVALID_PARAMS,
+    );
+    err(
+        s.call("project.update", json!({ "nonsense": 1 })),
         code::INVALID_PARAMS,
     );
     err(

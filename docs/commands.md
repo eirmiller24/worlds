@@ -378,7 +378,7 @@ Set an `auto` layer's per-level rule state (`seed`, `optional_groups`, `tilesets
 
 ### set_project_setting
 
-One of the simple settings in `project.json`: `name`, `bg_color` (or `null`), `collision_layer` (an `int_grid` layer, or `null`), `seed`, `grid_size` (at least 1; refused once the project has a level, since level sizes and positions are in cells of it), `blocking_values` (a list of the collision layer's value slugs, or `null` to leave the key out; values the collision layer doesn't have are left to validation).
+One of the simple settings in `project.json`: `name`, `bg_color` (or `null`), `collision_layer` (an `int_grid` layer, or `null`), `seed`, `grid_size` (at least 1; refused once the project has a level, since level sizes and positions are in cells of it), `blocking_values` (a list of the collision layer's value slugs, or `null` to leave the key out; values the collision layer doesn't have are left to validation), `default_level_size` (`[w, h]` in cells, both at least 1, or `null` to leave the key out), `export_on_save` (`true` or `false`).
 
 ```json
 { "op": "set_project_setting", "setting": { "key": "seed", "value": 1234 } }
@@ -388,7 +388,15 @@ One of the simple settings in `project.json`: `name`, `bg_color` (or `null`), `c
 { "op": "set_project_setting", "setting": { "key": "blocking_values", "value": ["solid", "fortified"] } }
 ```
 
-- **Inverse:** the old value. **Changes:** `project` with the key (a new `seed` rebakes everything, and so does a new `grid_size`; `collision_layer` and `blocking_values` bake nothing, they only matter to the export).
+```json
+{ "op": "set_project_setting", "setting": { "key": "default_level_size", "value": [32, 18] } }
+```
+
+```json
+{ "op": "set_project_setting", "setting": { "key": "export_on_save", "value": true } }
+```
+
+- **Inverse:** the old value. **Changes:** `project` with the key (a new `seed` rebakes everything, and so does a new `grid_size`; `collision_layer` and `blocking_values` bake nothing, they only matter to the export; `default_level_size` and `export_on_save` bake nothing either, they only matter to the editor's New Level command and to saving).
 
 ## Definition commands
 

@@ -475,6 +475,12 @@ struct ProjectPatch {
     #[serde(default, deserialize_with = "present")]
     collision_layer: Option<Option<String>>,
     seed: Option<i64>,
+    grid_size: Option<u32>,
+    #[serde(default, deserialize_with = "present")]
+    blocking_values: Option<Option<Vec<String>>>,
+    #[serde(default, deserialize_with = "present")]
+    default_level_size: Option<Option<[u32; 2]>>,
+    export_on_save: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -783,9 +789,15 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
         put(&mut p, "bg_color", &s.bg_color);
         put(&mut p, "collision_layer", &s.collision_layer);
         put(&mut p, "seed", &s.seed);
+        put(&mut p, "grid_size", &s.grid_size);
+        put(&mut p, "blocking_values", &s.blocking_values);
+        put(&mut p, "default_level_size", &s.default_level_size);
+        put(&mut p, "export_on_save", &s.export_on_save);
         if p.as_object().is_some_and(Map::is_empty) {
             return Err(
-                "set_project is empty: give name, bg_color, collision_layer or seed".into(),
+                "set_project is empty: give name, bg_color, collision_layer, seed, \
+                 grid_size, blocking_values, default_level_size or export_on_save"
+                    .into(),
             );
         }
         touch("project".into());

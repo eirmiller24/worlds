@@ -1667,6 +1667,13 @@ impl Project {
                 )));
             }
         }
+        if let ProjectSetting::DefaultLevelSize(Some([w, h])) = &setting
+            && (*w == 0 || *h == 0)
+        {
+            return Err(CommandError::Invalid(format!(
+                "default_level_size must be at least 1x1 cells, not {w}x{h}"
+            )));
+        }
         let old = match setting {
             ProjectSetting::Name(v) => ProjectSetting::Name(std::mem::replace(&mut self.name, v)),
             ProjectSetting::BgColor(v) => {
@@ -1685,6 +1692,12 @@ impl Project {
             ProjectSetting::BlockingValues(v) => {
                 ProjectSetting::BlockingValues(std::mem::replace(&mut self.blocking_values, v))
             }
+            ProjectSetting::DefaultLevelSize(v) => {
+                ProjectSetting::DefaultLevelSize(std::mem::replace(&mut self.default_level_size, v))
+            }
+            ProjectSetting::ExportOnSave(v) => {
+                ProjectSetting::ExportOnSave(std::mem::replace(&mut self.export_on_save, v))
+            }
         };
         let unchanged = match &old {
             ProjectSetting::Name(v) => *v == self.name,
@@ -1693,6 +1706,8 @@ impl Project {
             ProjectSetting::Seed(v) => *v == self.seed,
             ProjectSetting::GridSize(v) => *v == self.grid_size,
             ProjectSetting::BlockingValues(v) => *v == self.blocking_values,
+            ProjectSetting::DefaultLevelSize(v) => *v == self.default_level_size,
+            ProjectSetting::ExportOnSave(v) => *v == self.export_on_save,
         };
         if unchanged {
             return Ok(noop());

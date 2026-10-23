@@ -43,7 +43,7 @@ print(call("grid.fill_rect", level="crevasse", layer="collision",
 
 From there: [`project.describe`](#project) is the map (layers, values, entity types, levels), `level.get` with `format: "text"` shows a level, and every write is one undo entry. A script that makes several writes should wrap them in [`history.begin_batch`/`end_batch`](#history) so the user can undo them in one step.
 
-The project settings that [`project.update`](#project) writes (`name`, `bg_color`, `collision_layer`, `seed`) are [`set_project_setting`](commands.md#set_project_setting) commands. That command also sets `grid_size` and `blocking_values` (the editor's Project tab uses it), which `project.update` doesn't take yet; `default_level_size` and `export_on_save` have no command, so only the files can change them ([format.md](format.md)).
+The project settings that [`project.update`](#project) writes (`name`, `bg_color`, `collision_layer`, `seed`, `grid_size`, `blocking_values`, `default_level_size`, `export_on_save`) are [`set_project_setting`](commands.md#set_project_setting) commands, the same ones the editor's Project tab makes.
 
 ## Discovery: `.worlds/server.json`
 
@@ -218,7 +218,7 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 
 | Key | |
 | --- | --- |
-| `name`, `dir`, `grid_size`, `bg_color`, `collision_layer`, `seed`, `rev` | project settings (`dir` absolute) |
+| `name`, `dir`, `grid_size`, `bg_color`, `collision_layer`, `seed`, `blocking_values`, `default_level_size`, `export_on_save`, `rev` | project settings (`dir` absolute; `blocking_values` is the effective list, see [format.md](format.md#projectjson); `default_level_size` is `null` when left out) |
 | `mode` | `{ headless, approval, pending }`: `pending` counts approval batches waiting for the user |
 | `level_fields` | field definitions as in `project.json`, without `name` and `display` (`doc` is kept: it tells an agent what the field is for) |
 | `worlds[]` | `{ slug, name, levels: [slug], notes, guides, guide_groups }`: `notes` counts the world-scope annotations that aren't guides, `guides` the world's guides, `guide_groups` is `[{ slug, name?, offset, color?, guides }]` (`guides`: how many guides name the group), `[]` when there are none |
@@ -237,7 +237,8 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 ```json
 { "jsonrpc": "2.0", "id": 2, "result": {
   "rev": 0, "name": "Mini", "dir": "/tmp/mini.worlds", "grid_size": 16, "bg_color": "#1a1c2c",
-  "collision_layer": "collision", "seed": 42,
+  "collision_layer": "collision", "seed": 42, "blocking_values": ["solid", "fortified", "ramp_l"],
+  "default_level_size": null, "export_on_save": false,
   "mode": { "headless": true, "approval": false, "pending": 0 },
   "level_fields": [
     { "slug": "biome", "type": "enum", "enum": "biome", "array": true, "default": [] },
@@ -313,7 +314,7 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 
 **`project.reload { confirm? }`** reloads from disk, discarding unsaved edits (`confirm: true` needed if there are any) and the undo history. Bumps `rev`; sends `changed` with `"kind": "reload"`. Refused (`unsupported`) in approval mode. A reload, by request or because files changed on disk, closes every open batch without recording it (the history is gone anyway; the owner's `end_batch` then gets `batch_state`) and rejects every pending approval batch (a `batch` notification with status `rejected`).
 
-**`project.update { name?, bg_color?, collision_layer?, seed? }`** is a write: one `set_project_setting` per key given, in that order (a `batch` labelled like its first when there are several). `bg_color` and `collision_layer` take `null` to unset them; `collision_layer` must name an `int_grid` layer. Each setting reports `{ "change": "project", "key" }`; a new `seed` changes every bake, and any setting change drops the headless bake cache. A setting given its current value changes nothing (no `changes`, no `rev` bump when none of them change). Giving no key is `invalid params`. Examples are in [project settings, rule state and replacing a level](#project-settings-rule-state-and-replacing-a-level).
+**`project.update { name?, bg_color?, collision_layer?, seed?, grid_size?, blocking_values?, default_level_size?, export_on_save? }`** is a write: one `set_project_setting` per key given, in that order (a `batch` labelled like its first when there are several, all or nothing). `bg_color`, `collision_layer`, `blocking_values` and `default_level_size` take `null` to unset them (leave the key out of `project.json`). `collision_layer` must name an `int_grid` layer. `grid_size` must be at least 1 and is refused (`invalid`) once the project has a level, since level sizes and positions are in cells of it. `blocking_values` is a list of the collision layer's value slugs (values it doesn't have are left to validation). `default_level_size` is `[w, h]` in cells, both at least 1: the size of a level made with the editor's New Level command. `export_on_save` makes every save also write `export/`. Each setting reports `{ "change": "project", "key" }`; a new `seed` or `grid_size` changes every bake, and any setting change drops the headless bake cache. A setting given its current value changes nothing (no `changes`, no `rev` bump when none of them change). Giving no key is `invalid params`. Examples are in [project settings, rule state and replacing a level](#project-settings-rule-state-and-replacing-a-level).
 
 **`project.read_file { path }`** → `{ rev, path, text }`: a project file (`project.json`, `layers.json`, `entities/<slug>.json`, `worlds/<w>/levels/<l>/<layer>.json`, ...) rendered from memory exactly as saving would write it now, unsaved edits included. `path` is matched as a string against the set of project-relative paths a full save would write right now; nothing is read from the filesystem, so `..`, absolute paths and symlinks can't reach anything. A path not in that set is `command_error` (`invalid`).
 
@@ -1775,49 +1776,72 @@ The collision layer must be an `int_grid` layer:
 
 Re-rolling `main_tiling` in `crevasse` and switching its `pillars` group on there too; the state replaces the old one whole, so `flooded_decor` is listed again:
 
+The grid can't change once there are levels, since their sizes and positions are in cells of it:
+
 ```json
-{ "jsonrpc": "2.0", "id": 121, "method": "level.set_layer_state", "params": { "level": "crevasse", "layer": "main_tiling",
+{ "jsonrpc": "2.0", "id": 121, "method": "project.update", "params": { "grid_size": 8 } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 121, "error": { "code": -32004, "message": "grid_size can only change while the project has no levels (it has 3): their sizes and positions are in cells of it",
+  "data": { "kind": "invalid", "message": "grid_size can only change while the project has no levels (it has 3): their sizes and positions are in cells of it" } } }
+```
+
+Only `solid` blocks movement in the export, new levels are 24x12 cells, and every save also writes `export/` (`null` would leave `blocking_values` or `default_level_size` out of `project.json` again):
+
+```json
+{ "jsonrpc": "2.0", "id": 122, "method": "project.update", "params": { "blocking_values": ["solid"], "default_level_size": [24, 12], "export_on_save": true } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 122, "result": { "rev": 56, "status": "applied", "label": "claude-code: Set project blocking_values",
+  "changes": [ { "change": "project", "key": "blocking_values" }, { "change": "project", "key": "default_level_size" },
+               { "change": "project", "key": "export_on_save" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 123, "method": "level.set_layer_state", "params": { "level": "crevasse", "layer": "main_tiling",
   "state": { "seed": 9, "optional_groups": ["flooded_decor", "pillars"] } } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 121, "result": { "rev": 56, "status": "applied", "label": "claude-code: Set main_tiling rule state on crevasse",
+{ "jsonrpc": "2.0", "id": 123, "result": { "rev": 57, "status": "applied", "label": "claude-code: Set main_tiling rule state on crevasse",
   "changes": [ { "change": "layer_state", "world": "main", "level": "crevasse", "layer": "main_tiling" } ] } }
 ```
 
 Only `optional` groups are switched on per level:
 
 ```json
-{ "jsonrpc": "2.0", "id": 122, "method": "level.set_layer_state", "params": { "level": "crevasse", "layer": "main_tiling", "state": { "optional_groups": ["walls"] } } }
+{ "jsonrpc": "2.0", "id": 124, "method": "level.set_layer_state", "params": { "level": "crevasse", "layer": "main_tiling", "state": { "optional_groups": ["walls"] } } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 122, "error": { "code": -32004, "message": "rule group walls of main_tiling is not optional; only optional groups are switched on per level",
+{ "jsonrpc": "2.0", "id": 124, "error": { "code": -32004, "message": "rule group walls of main_tiling is not optional; only optional groups are switched on per level",
   "data": { "kind": "invalid", "message": "rule group walls of main_tiling is not optional; only optional groups are switched on per level" } } }
 ```
 
 Rewriting `hall` as a smaller room in one step. Its `marks` overrides aren't in the new content, so that needs `confirm`:
 
 ```json
-{ "jsonrpc": "2.0", "id": 123, "method": "level.replace", "params": {
+{ "jsonrpc": "2.0", "id": 125, "method": "level.replace", "params": {
   "level": { "slug": "hall", "name": "Hall", "world_px": [0, 160], "size": [8, 4], "depth": 0 },
   "content": { "int_grids": [ { "layer": "collision", "rows": ["########", "#......#", "#......#", "########"] } ] } } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 123, "error": { "code": -32002,
+{ "jsonrpc": "2.0", "id": 125, "error": { "code": -32002,
   "message": "replacing level hall drops the marks overrides, which the new content leaves out. Send confirm: true to do it",
   "data": { "reason": "drops the marks overrides, which the new content leaves out" } } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 124, "method": "level.replace", "params": {
+{ "jsonrpc": "2.0", "id": 126, "method": "level.replace", "params": {
   "level": { "slug": "hall", "name": "Hall", "world_px": [0, 160], "size": [8, 4], "depth": 0 },
   "content": { "int_grids": [ { "layer": "collision", "rows": ["########", "#......#", "#......#", "########"] } ] }, "confirm": true } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 124, "result": { "rev": 57, "status": "applied", "label": "claude-code: Replace level hall",
+{ "jsonrpc": "2.0", "id": 126, "result": { "rev": 58, "status": "applied", "label": "claude-code: Replace level hall",
   "changes": [
     { "change": "level_meta", "world": "main", "level": "hall", "part": "all" },
     { "change": "grid", "world": "main", "level": "hall", "layer": "collision", "rect": [0, 0, 16, 6] },
@@ -1827,11 +1851,11 @@ Rewriting `hall` as a smaller room in one step. Its `marks` overrides aren't in 
 Undo puts the old level back, overrides and all:
 
 ```json
-{ "jsonrpc": "2.0", "id": 125, "method": "history.undo", "params": {} }
+{ "jsonrpc": "2.0", "id": 127, "method": "history.undo", "params": {} }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 125, "result": { "rev": 58, "steps": [ { "label": "claude-code: Replace level hall", "origin": { "agent": "claude-code" } } ],
+{ "jsonrpc": "2.0", "id": 127, "result": { "rev": 59, "steps": [ { "label": "claude-code: Replace level hall", "origin": { "agent": "claude-code" } } ],
   "changes": [
     { "change": "level_meta", "world": "main", "level": "hall", "part": "all" },
     { "change": "grid", "world": "main", "level": "hall", "layer": "collision", "rect": [0, 0, 16, 6] },
