@@ -7,6 +7,7 @@ mod defs;
 mod duplicate;
 mod fields;
 mod rules;
+mod worlds;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -534,6 +535,15 @@ impl Project {
                 world,
                 world_px,
             } => self.duplicate_level(level, slug, name, world, world_px),
+            CreateWorld { slug, name } => self.create_world(slug, name),
+            RenameWorld { world, slug, name } => self.rename_world(world, slug, name),
+            RemoveWorld { world, confirm } => self.remove_world(world, confirm),
+            ReorderWorlds { order, restore } => self.reorder_worlds(order, restore),
+            MoveLevelToWorld {
+                level,
+                world,
+                world_px,
+            } => self.move_level_to_world(level, world, world_px),
         }
     }
 

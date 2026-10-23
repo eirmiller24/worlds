@@ -1613,6 +1613,27 @@ impl<'a> Validator<'a> {
 
     fn worlds(&mut self) {
         let p = self.p;
+        // The display order in project.json.
+        for (i, s) in p.world_order.iter().enumerate() {
+            let path = format!("worlds[{i}]");
+            if p.world(s.as_str()).is_none() {
+                self.push("project.json", path, format!("no world {s:?}"));
+            } else if p.world_order[..i].contains(s) {
+                self.push("project.json", path, format!("world {s:?} is listed twice"));
+            }
+        }
+        if !p.world_order.is_empty() {
+            for w in p.worlds.iter().filter(|w| !p.world_order.contains(&w.slug)) {
+                self.push(
+                    "project.json",
+                    "worlds",
+                    format!(
+                        "world {:?} isn't listed; it is shown after the listed worlds",
+                        w.slug.as_str()
+                    ),
+                );
+            }
+        }
         self.dups(
             "worlds",
             "world",

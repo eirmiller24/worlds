@@ -144,6 +144,13 @@ fn render_paths(
     known: &BTreeSet<PathBuf>,
     dirty: &BTreeSet<PathBuf>,
 ) -> Result<DirtyRender> {
+    let expanded;
+    let dirty = if dirty.iter().any(|p| is_world_dir(p)) {
+        expanded = expand_world_dirs(project, known, dirty);
+        &expanded
+    } else {
+        dirty
+    };
     let mut out: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
     let mut gone: BTreeSet<PathBuf> = BTreeSet::new();
     // Each level is rendered at most once, however many of its files are dirty.
@@ -290,6 +297,45 @@ fn render_paths(
         files: out,
         deleted: gone,
     })
+}
+
+/// `worlds/<world>`: a whole world directory (a created, removed or
+/// renamed world).
+fn is_world_dir(rel: &Path) -> bool {
+    let parts: Vec<_> = rel.iter().collect();
+    parts.len() == 2 && parts[0] == "worlds"
+}
+
+/// `dirty` with each whole world directory replaced by its `world.json`
+/// and a whole-level entry for every level the world has, in the project
+/// or among the known files (so saving deletes those it no longer has).
+fn expand_world_dirs(
+    project: &Project,
+    known: &BTreeSet<PathBuf>,
+    dirty: &BTreeSet<PathBuf>,
+) -> BTreeSet<PathBuf> {
+    let mut out = BTreeSet::new();
+    for rel in dirty {
+        if !is_world_dir(rel) {
+            out.insert(rel.clone());
+            continue;
+        }
+        out.insert(rel.join("world.json"));
+        let w = rel.iter().nth(1).and_then(|c| c.to_str()).unwrap_or("");
+        for l in project.world(w).into_iter().flat_map(|w| &w.levels) {
+            out.insert(rel.join("levels").join(l.slug.as_str()));
+        }
+        let levels = rel.join("levels");
+        for k in known {
+            if let Ok(rest) = k.strip_prefix(&levels)
+                && let Some(l) = rest.iter().next()
+                && rest.iter().count() > 1
+            {
+                out.insert(levels.join(l));
+            }
+        }
+    }
+    out
 }
 
 /// Every file a full save of `project` would write right now, as (path

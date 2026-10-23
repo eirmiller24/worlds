@@ -143,6 +143,11 @@ fn commands_md_examples_apply_in_order() {
         "remove_stamp",
         "batch",
         "duplicate_level",
+        "create_world",
+        "rename_world",
+        "remove_world",
+        "reorder_worlds",
+        "move_level_to_world",
     ];
     let missing: Vec<&str> = all.iter().copied().filter(|o| !ops.contains(*o)).collect();
     assert!(missing.is_empty(), "no example for {missing:?}");
