@@ -33,3 +33,15 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
         }
     }
 }
+
+/// A load error's text with the file path in `/` form: errors name the
+/// file by its native path (`C:\...\rules\main_tiling.json` on Windows), and
+/// tests match `/`-separated suffixes of it.
+pub fn slashed(e: impl std::fmt::Display) -> String {
+    let s = e.to_string();
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s
+    }
+}

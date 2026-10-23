@@ -282,10 +282,7 @@ fn cell_tests_parse_alternatives() {
 }
 
 fn err(rules: &str) -> String {
-    with_rules(rules, MACROS)
-        .1
-        .expect_err("load should fail")
-        .to_string()
+    common::slashed(with_rules(rules, MACROS).1.expect_err("load should fail"))
 }
 
 #[test]

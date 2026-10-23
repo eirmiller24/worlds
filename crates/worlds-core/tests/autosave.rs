@@ -29,12 +29,13 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// Every file (bytes) and directory under `dir`, except `.worlds/`.
+/// Every file (bytes) and directory under `dir`, except `.worlds/`, by
+/// `/`-separated relative path on every platform.
 fn tree(dir: &Path) -> BTreeMap<String, Option<Vec<u8>>> {
     fn walk(root: &Path, d: &Path, out: &mut BTreeMap<String, Option<Vec<u8>>>) {
         for e in std::fs::read_dir(d).unwrap() {
             let p = e.unwrap().path();
-            let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            let rel = autosave::slash(p.strip_prefix(root).unwrap());
             if rel == ".worlds" {
                 continue;
             }
@@ -88,13 +89,8 @@ fn roundtrip(first: &[Command], then: &[Command]) -> Result<usize, TestCaseError
 
     // 1. render_dirty is the save.
     for (rel, bytes) in &render.files {
-        let rel = rel.to_string_lossy();
-        prop_assert_eq!(
-            after.get(rel.as_ref()),
-            Some(&Some(bytes.clone())),
-            "{}",
-            rel
-        );
+        let rel = autosave::slash(rel);
+        prop_assert_eq!(after.get(&rel), Some(&Some(bytes.clone())), "{}", rel);
     }
     for (rel, bytes) in &after {
         if bytes.is_some() && before.get(rel) != Some(bytes) {
