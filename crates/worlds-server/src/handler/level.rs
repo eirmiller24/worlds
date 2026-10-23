@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use worlds_core::command::LevelContent;
 use worlds_core::format::IntGridFile;
 use worlds_core::text::{NoteFilter, render_level_baked_with};
-use worlds_core::{Color, Command, CommandError, Level, NoteStatus, Project, Slug};
+use worlds_core::{
+    Color, Command, CommandError, GroupMode, LayerState, Level, NoteStatus, Project, Slug,
+};
 
 use super::params::{self, default_world, ensure_id, fill_world, find_level, present};
 use super::{Confirm, Handler, Write, with_rev};
@@ -348,4 +350,194 @@ pub(crate) fn set_fields(project: &Project, method: &str, p: Value) -> Result<Wr
         )));
     }
     Ok(Write::cmds(cmds))
+}
+
+/// `level.set_layer_state { level, layer, state }` → `set_layer_state`
+/// (`state: null` removes the entry). The state is checked here, where the
+/// command takes anything: its optional groups must be optional groups of
+/// the layer's rules, its tilesets must exist.
+pub(crate) fn set_layer_state(
+    project: &Project,
+    method: &str,
+    p: Value,
+) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        level: Slug,
+        world: Option<Slug>,
+        layer: Slug,
+        #[serde(default, deserialize_with = "present")]
+        state: Option<Option<LayerState>>,
+    }
+    let p: P = params::parse(method, p)?;
+    let Some(state) = p.state else {
+        return Err(RpcError::invalid_params(format!(
+            "{method}: missing state; give the rule state, or null to remove it"
+        )));
+    };
+    let (world, _) = find_level(project, p.level.as_str())?;
+    check_world(&p.world, &world.slug, &p.level)?;
+    params::layer_of_kind(project, p.layer.as_str(), "auto")?;
+    if let Some(st) = &state {
+        let groups = project
+            .rules_for(p.layer.as_str())
+            .map_or(&[][..], |r| &r.groups[..]);
+        for g in &st.optional_groups {
+            match groups.iter().find(|x| &x.slug == g) {
+                None => {
+                    return Err(RpcError::command(&CommandError::UnknownRuleGroup {
+                        layer: p.layer.clone(),
+                        group: g.clone(),
+                    }));
+                }
+                Some(x) if x.mode != GroupMode::Optional => {
+                    return Err(RpcError::command(&CommandError::Invalid(format!(
+                        "rule group {g} of {} is not optional; only optional groups are switched on per level",
+                        p.layer
+                    ))));
+                }
+                Some(_) => {}
+            }
+        }
+        for t in st.tilesets.iter().flat_map(|(a, b)| [a, b]) {
+            if project.tileset(t.as_str()).is_none() {
+                return Err(RpcError::command(&CommandError::UnknownTileset(t.clone())));
+            }
+        }
+    }
+    Ok(Write::one(Command::SetLayerState {
+        level: p.level,
+        layer: p.layer,
+        state,
+    }))
+}
+
+/// `level.replace { world?, level, content?, confirm? }` → `replace_level`:
+/// the level with `level.slug`, metadata and content, wholesale. `level.id`
+/// left out keeps the level's id. Needs `confirm` when the new content
+/// leaves out something the level holds (a layer's content, an entity, a
+/// note).
+pub(crate) fn replace(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    let mut m = params::object(method, p)?;
+    for k in m.keys() {
+        if !["world", "level", "content"].contains(&k.as_str()) {
+            return Err(RpcError::invalid_params(format!(
+                "{method}: unknown key {k:?}; the keys are world, level, content"
+            )));
+        }
+    }
+    let mut level = m
+        .remove("level")
+        .ok_or_else(|| RpcError::invalid_params(format!("{method}: missing level")))?;
+    let slug = level
+        .get("slug")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            RpcError::invalid_params(format!("{method}: level.slug names the level to replace"))
+        })?
+        .to_string();
+    let (world, old) = find_level(project, &slug)?;
+    let given = m.get("world").and_then(Value::as_str).map(params::slug_of);
+    check_world(&given, &world.slug, &old.slug)?;
+    if let Value::Object(l) = &mut level
+        && matches!(l.get("id"), None | Some(Value::Null))
+    {
+        l.insert("id".into(), json!(old.id));
+    }
+    let level: Level = params::parse(method, level)?;
+    let content: LevelContent = match m.remove("content") {
+        None | Some(Value::Null) => LevelContent::default(),
+        Some(c) => params::parse(method, c)?,
+    };
+    let confirm = dropped(old, &content).map(|what| {
+        Confirm::new(
+            format!("drops {what}, which the new content leaves out"),
+            format!(
+                "replacing level {slug} drops {what}, which the new content leaves out. Send confirm: true to do it"
+            ),
+        )
+    });
+    Ok(Write::Commands {
+        cmds: vec![Command::ReplaceLevel {
+            world: world.slug.clone(),
+            level,
+            content,
+            restore: false,
+        }],
+        id: None,
+        confirm,
+    })
+}
+
+/// What `level` holds that `content` leaves out, in words ("the collision
+/// cells, 1 entity (doorcrev22)"), or `None` when nothing is dropped.
+fn dropped(level: &Level, content: &LevelContent) -> Option<String> {
+    let mut layers: Vec<String> = Vec::new();
+    let grids = content.int_grids.iter().map(|g| &g.layer);
+    let has_grid = |l: &Slug| grids.clone().any(|g| g == l);
+    for g in level.int_grids.iter().filter(|g| !g.is_empty()) {
+        if !has_grid(&g.layer) {
+            layers.push(format!("the {} cells", g.layer));
+        }
+    }
+    for o in level.overrides.iter().filter(|o| !o.is_empty()) {
+        if !has_grid(&o.layer) {
+            layers.push(format!("the {} overrides", o.layer));
+        }
+    }
+    for t in level.tiles.iter().filter(|t| !t.tiles.is_empty()) {
+        let kept = content
+            .tiles
+            .iter()
+            .any(|n| n.layer == t.layer && !n.tiles.is_empty());
+        if !kept {
+            layers.push(format!("the {} tiles", t.layer));
+        }
+    }
+    let ids = |list: Vec<&worlds_core::Id>| -> Option<(usize, String)> {
+        let n = list.len();
+        let mut s: Vec<String> = list.iter().take(5).map(|i| i.to_string()).collect();
+        if n > 5 {
+            s.push("...".into());
+        }
+        (n > 0).then(|| (n, s.join(", ")))
+    };
+    let entities = ids(level
+        .all_entities()
+        .filter(|e| {
+            !content
+                .entities
+                .iter()
+                .flat_map(|l| &l.entities)
+                .any(|n| n.id == e.id)
+        })
+        .map(|e| &e.id)
+        .collect());
+    if let Some((n, s)) = entities {
+        layers.push(format!(
+            "{n} {} ({s})",
+            if n == 1 { "entity" } else { "entities" }
+        ));
+    }
+    let notes = ids(level
+        .notes
+        .iter()
+        .filter(|e| !content.notes.iter().any(|n| n.id == e.id))
+        .map(|e| &e.id)
+        .collect());
+    if let Some((n, s)) = notes {
+        layers.push(format!(
+            "{n} {} ({s})",
+            if n == 1 { "note" } else { "notes" }
+        ));
+    }
+    match layers.len() {
+        0 => None,
+        1 => layers.pop(),
+        _ => {
+            let last = layers.pop().unwrap_or_default();
+            Some(format!("{} and {last}", layers.join(", ")))
+        }
+    }
 }
