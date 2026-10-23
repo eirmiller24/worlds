@@ -230,6 +230,7 @@ impl Handler {
             return self.submit(host, client, label, vec![cmd], id, false);
         }
 
+        let part = cmd.label();
         let applied = {
             let doc = host.doc();
             doc.project.apply(cmd)
@@ -246,13 +247,18 @@ impl Handler {
         match self.batches.get_mut(&client.conn) {
             Some(b) => {
                 b.inverses.push(applied.inverse);
+                b.parts.push(part);
                 b.changes.extend(changes.iter().cloned());
                 b.last_activity = Instant::now();
             }
             None => {
-                host.doc()
-                    .history
-                    .record(label.clone(), client.origin(), vec![applied.inverse]);
+                host.doc().history.record_with(
+                    label.clone(),
+                    client.origin(),
+                    vec![applied.inverse],
+                    vec![part],
+                    &changes,
+                );
                 self.agent_entry(client, &label, &changes, None);
             }
         }

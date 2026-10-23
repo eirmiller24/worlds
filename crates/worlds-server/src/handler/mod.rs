@@ -18,10 +18,12 @@ mod entity;
 pub(crate) mod events;
 mod grid;
 mod history;
+mod layer_ops;
 mod level;
 mod notes;
 pub(crate) mod params;
 mod project;
+mod references;
 mod rules;
 mod tiles;
 mod view;
@@ -113,6 +115,11 @@ pub(crate) struct OpenBatch {
     pub client: Client,
     /// Inverses of the writes not recorded in the history yet.
     pub inverses: Vec<Command>,
+    /// The labels of those writes' commands (the entry's parts, for the
+    /// editor's History pane).
+    pub parts: Vec<String>,
+    /// Where in `changes` the unrecorded writes start.
+    pub recorded_changes: usize,
     /// Every change of the batch so far (for `end_batch` and its event).
     pub changes: Vec<Change>,
     /// Entries recorded so far (parts flushed before a user edit or undo).
@@ -212,6 +219,13 @@ pub fn is_write(method: &str) -> bool {
             | "world.remove"
             | "world.reorder"
             | "level.move_to_world"
+            | "defs.duplicate"
+            | "defs.merge_down"
+            | "tiles.move_to_layer"
+            | "entity.move_to_layer"
+            | "reference.add"
+            | "reference.update"
+            | "reference.remove"
     )
 }
 
@@ -377,6 +391,7 @@ impl Handler {
                 events::subscribe(self, client, method, params)
             }
             "edit.copy" => read(host, edit::copy),
+            "reference.list" => read(host, references::list),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -463,6 +478,13 @@ fn write_builder(method: &str) -> Option<Builder> {
         "world.remove" => world::remove,
         "world.reorder" => world::reorder,
         "level.move_to_world" => world::move_level,
+        "defs.duplicate" => layer_ops::duplicate,
+        "defs.merge_down" => layer_ops::merge_down,
+        "tiles.move_to_layer" => layer_ops::move_tiles,
+        "entity.move_to_layer" => layer_ops::move_entities,
+        "reference.add" => references::add,
+        "reference.update" => references::update,
+        "reference.remove" => references::remove,
         _ => return None,
     })
 }

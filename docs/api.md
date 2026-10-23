@@ -143,6 +143,8 @@ These, and only these, need `confirm: true`; without it the error is `needs_conf
 | `project.reload` | when there are unsaved edits (they are discarded) |
 | `notes.update`, `notes.move` | only when a locked annotation would move: its geometry or a guide's `group` changes ([notes](#notes)) |
 | `notes.remove` | only when a listed annotation is locked |
+| `reference.update` | only when a locked reference image would move or scale: its `px` or `scale` changes ([reference images](#reference-images)) |
+| `reference.remove` | only when a listed reference image is locked |
 
 `defs.set` never drops data: stored values of a removed field or enum value stay in the files, where `project.validate` reports them, and undo brings the definition back. `confirm` is only there so an agent doesn't do it by accident. An `int_grid` layer's value can't be taken out while a cell holds it at all: that is refused (`command_error`, `invalid`) with or without `confirm`; `grid.replace_value` it first.
 
@@ -201,6 +203,7 @@ The JSON-RPC `message` is always a sentence meant for an agent to read. For `com
 | `invalid` | none: `message` says it all |
 | `batch` | `label`, `index` (of the failed command), `source` (its error, in this same form) |
 | `rollback` | `batch` (the batch's error), `failed` (the inverses that were refused, as errors); treat the project as changed |
+| `unknown_reference` | `id` (a reference image's) |
 
 New variants follow the same rule: a variant with one unnamed field names it after what it holds.
 
@@ -1321,7 +1324,7 @@ Stamps and macros aren't `defs.*` kinds:
 
 **`history.begin_batch { label }`** opens a batch on this connection: every write until `end_batch` applies at once as usual (the agent and the canvas see it, `rev` bumps per write), but the writes become **one undo entry** with `label`, origin the client, one `changed` event (at `end_batch`, with the final `rev` and the coalesced changes) and one toast. A batch belongs to its connection; other connections' writes wait until it ends ([Queue and ordering](#queue-and-ordering)).
 
-How it is recorded: the editor's undo history has one gesture slot, and it belongs to the user (a brush stroke). A batch doesn't use it. The server keeps the batch's state itself: it applies each write with `Project::apply`, collects the inverses, and at `end_batch` records them as one entry with `History::record` ([commands.md](commands.md#undo-and-redo)). So a user stroke during the batch never joins the agent's entry, and the agent's batch never swallows the user's stroke.
+How it is recorded: the editor's undo history has one gesture slot, and it belongs to the user (a brush stroke). A batch doesn't use it. The server keeps the batch's state itself: it applies each write with `Project::apply`, collects the inverses, and at `end_batch` records them as one entry with `History::record_with` ([commands.md](commands.md#undo-and-redo)), along with each write's command label and the files they changed, which the editor's History pane lists under the entry. So a user stroke during the batch never joins the agent's entry, and the agent's batch never swallows the user's stroke.
 
 - **`history.end_batch {}`** → `{ rev, status, label, changes, entries }`. `entries` is how many undo entries the batch became, normally 1. Before the user's edit is recorded as an entry, and before any undo or redo step, the server records the batch's part so far as an entry of its own; the rest of the batch becomes another entry with the same label. So a batch the user edited or undid during ends with `entries: 2` (or more), and each entry undoes only what was done in it. A batch where nothing changed has `entries: 0`.
 - A **dropped connection reverts the part of its open batch that isn't recorded yet**: the server applies those inverses (last first) without recording them and sends `changed` with `"kind": "cancel"`. Parts already recorded (because the user edited in between) stay in the history as normal entries, and nothing the user did is touched.
@@ -1491,7 +1494,7 @@ The user selecting a pin and two levels on the world view:
 
 - `origin`: who did this mutation, `"user"` or `{ "agent": "<name>" }`. For an undo or redo that is whoever stepped the history, not who made the entry.
 - `session`: when `origin` is an agent, the [`session`](#sessionhello) of its connection, so two clients with the same name can be told apart (and a client can recognise its own edits).
-- `entry_origin`: for `undo` and `redo` only, who made the entry being undone or redone.
+- `entry_origin`: for `undo` and `redo` only, who made the entry being undone or redone: `"user"`, `{ "agent": "<name>" }`, or `"disk"` for entity definition files changed on disk that the editor applied as an entry.
 - `label`: the entry's label (the batch label for a batch).
 - `kind`: `edit`, `undo`, `redo`, `reload` or `cancel` (an open batch reverted: its connection dropped, or `history.cancel_batch`). `reload` has empty `changes` and `files`: re-read everything.
 - `changes`: the [changes](commands.md#changes), coalesced; `files`: the project-relative files they touch (`Change::files()` of each, deduplicated, in order), the same files saving would write or delete: `worlds/<world>/world.json` for world-scope annotations (`note` with `level: null`) and guide groups, `worlds/<world>/levels/<level>/notes.json` for a level's notes, `level.json` for a level's tags (`level_meta` part `tags`).
@@ -2024,6 +2027,137 @@ The changes are `world_created`, `world_renamed` (`from`, `to`), `world_meta` (t
     { "change": "level_deleted", "world": "caves", "level": "hall" },
     { "change": "world_removed", "world": "caves" },
     { "change": "project", "key": "worlds" } ] } }
+```
+
+### layer operations
+
+Copy a layer, merge a tiles layer down into the one below it, or move tile stacks or entities to another layer of the same kind ([commands.md](commands.md#layer-operations)). Each is one write and one undo entry; merge and the moves are a `batch` built by `worlds_core::command::layer_ops`, so the editor's Layers pane and these methods make the same commands.
+
+| Method | Params | Result / command |
+| --- | --- | --- |
+| `defs.duplicate` | `{ kind: "layer", slug, to? }`, `to` default `<slug>_copy` | `duplicate_layer { layer: slug, slug: to }`: the definition right above the original, its content in every level, its rule state and (an `auto` layer) its rules. Copied entities get new ids |
+| `defs.merge_down` | `{ kind: "layer", slug }` | a `batch` labelled "Merge \<slug\> down into \<lower\>": a `set_tiles` per level on the layer right below (each of the upper layer's stacks on top of the lower's), then `remove_layer_def`. Refused (`command_error`) unless both are tiles layers on the same grid |
+| `tiles.move_to_layer` | `{ level, layer, to, cells: [[x, y]] }` | a `batch` labelled "Move \<n\> tile stacks to \<to\>": the stacks at `cells` go on top of `to`'s there, and leave `layer`. Both tiles layers on the same grid; cells without tiles are skipped |
+| `entity.move_to_layer` | `{ ids, layer }` | a `batch` labelled "Move \<id\> to \<layer\>" or "Move \<n\> entities to \<layer\>": per entity `remove_entity` and `add_entity` on `layer` in its level, same id, cell and fields. `layer` is an entities layer on the same grid; entities already on it are skipped |
+
+Nothing here needs `confirm`: no content is dropped, and undo puts everything back.
+
+```json
+{ "jsonrpc": "2.0", "id": 138, "method": "defs.duplicate", "params": { "kind": "layer", "slug": "decor_back" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 138, "result": { "rev": 67, "status": "applied", "label": "claude-code: Duplicate layer decor_back as decor_back_copy",
+  "changes": [
+    { "change": "def", "kind": "layer", "slug": "decor_back_copy" },
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back_copy", "rect": [0, 0, 40, 10] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 139, "method": "tiles.move_to_layer", "params": { "level": "crevasse", "layer": "decor_back", "to": "decor_back_copy", "cells": [[4, 2], [10, 6]] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 139, "result": { "rev": 68, "status": "applied", "label": "claude-code: Move 2 tile stacks to decor_back_copy",
+  "changes": [
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back_copy", "rect": [4, 2, 7, 5] },
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back", "rect": [4, 2, 7, 5] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 140, "method": "defs.merge_down", "params": { "kind": "layer", "slug": "decor_back_copy" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 140, "result": { "rev": 69, "status": "applied", "label": "claude-code: Merge decor_back_copy down into decor_back",
+  "changes": [
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back", "rect": [4, 2, 19, 5] },
+    { "change": "def", "kind": "layer", "slug": "decor_back_copy" },
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back_copy", "rect": [0, 0, 40, 10] } ] } }
+```
+
+A tiles layer doesn't merge into the auto layer below it, and an entity only moves to an entities layer:
+
+```json
+{ "jsonrpc": "2.0", "id": 141, "method": "defs.merge_down", "params": { "kind": "layer", "slug": "decor_back" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 141, "error": { "code": -32004,
+  "message": "the layer below decor_back is main_tiling, an auto layer; only a tiles layer merges into a tiles layer",
+  "data": { "kind": "invalid", "message": "the layer below decor_back is main_tiling, an auto layer; only a tiles layer merges into a tiles layer" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 142, "method": "entity.move_to_layer", "params": { "ids": ["doorcrev22"], "layer": "collision" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 142, "error": { "code": -32004,
+  "message": "layer \"collision\" is a int_grid layer, this needs a entities layer",
+  "data": { "kind": "wrong_layer_kind", "layer": "collision", "expected": "entities", "actual": "int_grid",
+    "message": "layer \"collision\" is a int_grid layer, this needs a entities layer" } } }
+```
+
+### reference images
+
+Reference images are drawn under the layer stack in the editor and never exported ([format.md](format.md#reference-images)). On the wire a reference is `{ scope, reference }`, `scope` being `{ "world": slug }` or `{ "level": slug }` and `reference` the entry in file form (`id`, `image`, `px`, and `scale`, `opacity`, `locked`, `visible` when not at their default). `image` is a path inside the project; a file that doesn't exist is accepted and reported by `project.validate`. As for notes, `locked` is this API's rule, not the commands': moving or scaling a locked reference (`px`, `scale`) with `reference.update`, or removing one, needs `confirm: true`; its opacity, visibility, image and `locked` itself never do.
+
+| Method | Params | Result / command |
+| --- | --- | --- |
+| `reference.list` | `{ scope? }` | `{ rev, references }`, world references first, then levels in `level.list` order, each list bottom first |
+| `reference.add` | `{ scope, reference, index? }`; `reference.id` optional | `add_reference`; result has `id` |
+| `reference.update` | `{ id, reference }` (wholesale) or `{ id, patch }` (top-level keys merged in; `null` puts a key back to its default), plus `confirm?` for a locked one | `update_reference` |
+| `reference.remove` | `{ ids, confirm? }` | `batch` of `remove_reference` |
+
+A reference's change is `{ "change": "reference", "world", "level", "id" }` (`level: null` at world scope); its file is the `level.json` or `world.json` that holds it.
+
+```json
+{ "jsonrpc": "2.0", "id": 143, "method": "reference.add", "params": { "scope": { "level": "crevasse" },
+  "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "opacity": 0.5 } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 143, "result": { "rev": 70, "status": "applied", "label": "claude-code: Add reference image", "id": "refsketch2",
+  "changes": [ { "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 144, "method": "reference.update", "params": { "id": "refsketch2", "patch": { "scale": 2, "locked": true } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 144, "result": { "rev": 71, "status": "applied", "label": "claude-code: Edit reference image refsketch2",
+  "changes": [ { "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 145, "method": "reference.list", "params": {} }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 145, "result": { "rev": 71, "references": [
+  { "scope": { "level": "crevasse" }, "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "scale": 2.0, "opacity": 0.5, "locked": true } } ] } }
+```
+
+It is locked now, so moving it needs `confirm`:
+
+```json
+{ "jsonrpc": "2.0", "id": 146, "method": "reference.update", "params": { "id": "refsketch2", "patch": { "px": [16, -16] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 146, "error": { "code": -32002, "message": "reference image refsketch2 is locked; moving or scaling it needs confirm: true",
+  "data": { "reason": "reference image refsketch2 is locked; moving or scaling it needs confirm: true" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 147, "method": "reference.remove", "params": { "ids": ["refsketch2"], "confirm": true } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 147, "result": { "rev": 72, "status": "applied", "label": "claude-code: Remove reference image refsketch2",
+  "changes": [ { "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" } ] } }
 ```
 
 ## Headless mode

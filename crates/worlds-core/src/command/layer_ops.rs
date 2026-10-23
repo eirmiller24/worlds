@@ -37,11 +37,16 @@ pub fn merge_target<'p>(p: &'p Project, layer: &Slug) -> Result<&'p LayerDef> {
         )));
     };
     if !lower.is_tiles() {
+        let kind = lower.kind.name();
+        let a = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) {
+            "an"
+        } else {
+            "a"
+        };
         return Err(CommandError::Invalid(format!(
-            "the layer below {layer} is {}, a {} layer; only a tiles layer merges into a tiles \
-             layer",
+            "the layer below {layer} is {}, {a} {kind} layer; only a tiles layer merges into a \
+             tiles layer",
             lower.slug,
-            lower.kind.name()
         )));
     }
     if p.layer_grid(upper) != p.layer_grid(lower) {
