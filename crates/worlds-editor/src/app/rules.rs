@@ -4576,7 +4576,7 @@ mod tests {
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
-    /// D12: the "matched but didn't fire" outline reads on any cell colour,
+    /// The "matched but didn't fire" outline reads on any cell colour,
     /// `pillar_base`'s orange (#E0A040) included: some ring of it stands
     /// out at least 4:1 from the cell, and the rings nest inside the cell.
     #[test]
@@ -4602,7 +4602,7 @@ mod tests {
         }
     }
 
-    /// D10: the auto layer's Palette list groups its groups by pass, like
+    /// The auto layer's Palette list groups its groups by pass, like
     /// the Rules pane: run order, a `Pass n` header per pass.
     #[test]
     fn palette_rows_group_by_pass() {
@@ -4626,7 +4626,7 @@ mod tests {
         );
     }
 
-    /// D13: an unset region bound shows `none`, never `0`; `0`, empty or
+    /// An unset region bound shows `none`, never `0`; `0`, empty or
     /// `none` typed in unset it (a bound is at least 1).
     #[test]
     fn region_bounds_show_none_when_unset() {
@@ -5048,7 +5048,7 @@ mod tests {
     /// `pillars` (pass 0 group `find` with region rule `floor_marks`
     /// writing marks, pass 1 group `art` drawing on them), baked, in a
     /// pane state with `pillars` active.
-    fn m6_state() -> (tempfile::TempDir, EditorState) {
+    fn derived_state() -> (tempfile::TempDir, EditorState) {
         fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
             std::fs::create_dir_all(to).unwrap();
             for e in std::fs::read_dir(from).unwrap() {
@@ -5118,7 +5118,7 @@ mod tests {
         for height in [
             150.0, 170.0, 190.0, 210.0, 230.0, 260.0, 300.0, 400.0, 700.0,
         ] {
-            let (_tmp, mut st) = m6_state();
+            let (_tmp, mut st) = derived_state();
             let ctx = egui::Context::default();
             let mut t = 0.0;
             let mut frame = |st: &mut EditorState| {
@@ -5185,7 +5185,7 @@ mod tests {
     /// a selected region rule highlights its regions and floor runs.
     #[test]
     fn passes_and_region_rules_edit_one_entry_each() {
-        let (_tmp, mut st) = m6_state();
+        let (_tmp, mut st) = derived_state();
         let ctx = egui::Context::default();
         let mut t = 0.0;
         let mut frame = |st: &mut EditorState, events: Vec<egui::Event>| {
@@ -5301,7 +5301,7 @@ mod tests {
         assert!(!h.regions.is_empty());
         assert!(h.regions.iter().any(|r| r.selected && !r.runs.is_empty()));
         assert_eq!(h.fired.len(), 5, "{h:?}");
-        // Unset bounds read `none`, a set one its number (D13).
+        // Unset bounds read `none`, a set one its number.
         let shown = |k: &str| {
             ctx.data(|d| d.get_temp::<String>(egui::Id::new(("rules num text", k))))
                 .unwrap_or_else(|| panic!("{k} drawn"))

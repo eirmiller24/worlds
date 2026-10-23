@@ -1,7 +1,7 @@
 //! LDtk structural parity: import each LDtk fixture, bake every auto layer of
 //! every level, and compare against the `autoLayerTiles` LDtk saved.
 //!
-//! The gate is *structural* parity, not byte parity. Worlds uses its own
+//! The check is *structural* parity, not byte parity. Worlds uses its own
 //! hash, so random rolls (which alternative, random offsets, chance and
 //! perlin outcomes) are never compared. Per rule category:
 //!

@@ -1,4 +1,4 @@
-//! M3 rule format additions: `@`, `[a|b]`, `require`, named patterns and
+//! Rule format features: `@`, `[a|b]`, `require`, named patterns and
 //! legends, templates and `use` references, the built-in `blob47`, and the
 //! transpose flips.
 

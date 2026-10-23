@@ -111,7 +111,7 @@ fn enum_fields_take_exactly_one_source_in_the_schema() {
     }
 }
 
-/// M5 keys: `guide_groups` and a guide's `group` in world.json, `tags` in
+/// Guide groups and level tags: `guide_groups` and a guide's `group` in world.json, `tags` in
 /// level.json; `group` on another kind is refused by the schema too.
 #[test]
 fn guide_groups_and_level_tags_are_in_the_schemas() {

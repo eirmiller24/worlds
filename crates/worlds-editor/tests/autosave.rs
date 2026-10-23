@@ -864,7 +864,7 @@ fn the_prompt_waits_recovers_and_discards() {
         t += 1.0 / 60.0;
     }
     let img = hl.read().unwrap();
-    let png = tmp.path().join("m7_recovery_prompt_headless.png");
+    let png = tmp.path().join("recovery_prompt_headless.png");
     img.save(&png).unwrap();
     if let Some(out) = std::env::var_os("WORLDS_TEST_OUT") {
         std::fs::create_dir_all(&out).unwrap();
@@ -1017,7 +1017,7 @@ fn stop(child: &mut Child, sig: &str) -> std::process::ExitStatus {
 
 /// the window under Xvfb: edits over the live API, autosave, kill -9;
 /// relaunched, the window shows the recovery prompt (screenshot
-/// `m7_recovery_prompt.png` to `WORLDS_TEST_OUT`); SIGTERM while undecided
+/// `recovery_prompt.png` to `WORLDS_TEST_OUT`); SIGTERM while undecided
 /// keeps the autosave; relaunched with `--recover apply`, a save over the
 /// API gives the control tree.
 #[test]
@@ -1052,7 +1052,7 @@ fn window_offers_recovery_after_a_kill() {
     assert!(!stop(&mut w, "-KILL").success());
 
     let mut w = x.window(&dir, &[]);
-    let png = tmp.path().join("m7_recovery_prompt.png");
+    let png = tmp.path().join("recovery_prompt.png");
     x.screenshot(&png);
     let img = image::open(&png).unwrap().to_rgba8();
     assert!(
@@ -1061,7 +1061,7 @@ fn window_offers_recovery_after_a_kill() {
     );
     if let Some(out) = std::env::var_os("WORLDS_TEST_OUT") {
         std::fs::create_dir_all(&out).unwrap();
-        std::fs::copy(&png, Path::new(&out).join("m7_recovery_prompt.png")).unwrap();
+        std::fs::copy(&png, Path::new(&out).join("recovery_prompt.png")).unwrap();
     }
     assert!(stop(&mut w, "-TERM").success());
     assert!(
@@ -1087,10 +1087,10 @@ fn window_offers_recovery_after_a_kill() {
         second.try_wait().unwrap().is_none(),
         "the second window died"
     );
-    let png = tmp.path().join("m7_already_open.png");
+    let png = tmp.path().join("already_open.png");
     x.screenshot(&png);
     if let Some(out) = std::env::var_os("WORLDS_TEST_OUT") {
-        std::fs::copy(&png, Path::new(&out).join("m7_already_open.png")).unwrap();
+        std::fs::copy(&png, Path::new(&out).join("already_open.png")).unwrap();
     }
     stop(&mut second, "-TERM");
     let r = rpc(&dir, &[("project.save", json!({}))]);

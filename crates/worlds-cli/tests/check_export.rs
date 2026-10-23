@@ -1,5 +1,5 @@
-//! `worlds-cli check-export`: the `godot-rooms` importer-contract fixtures,
-//! one test per problem kind, and `--fresh` against an in-memory bake.
+//! `worlds-cli check-export`: the export fixtures, one test per problem
+//! kind, and `--fresh` against an in-memory bake.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -11,7 +11,7 @@ fn cli() -> Command {
 }
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/importer_contract")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exports")
 }
 
 fn check(args: &[&std::ffi::OsStr]) -> (Option<i32>, String) {
@@ -24,19 +24,12 @@ fn check(args: &[&std::ffi::OsStr]) -> (Option<i32>, String) {
     (out.status.code(), text)
 }
 
-/// `check-export <dir> --json`, with `--profile godot-rooms` unless
-/// `extra` names a profile.
+/// `check-export <dir> --json`, plus `extra`.
 fn check_json(dir: &Path, extra: &[&str]) -> (Option<i32>, Value) {
-    let profile: &[&str] = if extra.contains(&"--profile") {
-        &[]
-    } else {
-        &["--profile", "godot-rooms"]
-    };
     let out = cli()
         .arg("check-export")
         .arg(dir)
         .arg("--json")
-        .args(profile)
         .args(extra)
         .output()
         .unwrap();
@@ -95,14 +88,14 @@ fn one_problem(dir: &Path) -> (String, String, String) {
 }
 
 #[test]
-fn importer_contract_fixtures() {
+fn fixture_cases() {
     let mut cases: Vec<PathBuf> = std::fs::read_dir(fixtures())
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.join("expect.json").is_file())
         .collect();
     cases.sort();
-    assert!(cases.len() >= 22, "{cases:?}");
+    assert!(cases.len() >= 11, "{cases:?}");
     let readme = std::fs::read_to_string(fixtures().join("README.md")).unwrap();
     for dir in cases {
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
@@ -133,10 +126,9 @@ fn importer_contract_fixtures() {
         let warnings = v["warnings"].as_array().unwrap();
         match expect["warning_contains"].as_str() {
             Some(w) => assert!(
-                warnings
-                    .iter()
-                    .any(|x| x["message"].as_str().unwrap().contains(w)
-                        && (x["kind"] == "annotation" || x["kind"] == "importer")),
+                warnings.iter().any(
+                    |x| x["message"].as_str().unwrap().contains(w) && x["kind"] == "annotation"
+                ),
                 "{name}: no warning contains {w:?}: {v:#}"
             ),
             None => assert!(warnings.is_empty(), "{name}: {v:#}"),
@@ -144,48 +136,16 @@ fn importer_contract_fixtures() {
     }
 }
 
-/// `--profile none` checks the format only: the skin and layer-name rules
-/// are the godot-rooms profile's, the flip range is the format's.
-#[test]
-fn profile_none_is_format_only() {
-    for (name, ok) in [
-        ("skin_offgrid", true),
-        ("skin_16px", true),
-        ("skin_stacked", true),
-        ("unknown_tiles_layer", true),
-        ("reserved_layer_name", true),
-        ("reserved_breakables", true),
-        ("empty_layer_name", true),
-        ("layer_name_collision", true),
-        ("project_grid_16", true),
-        ("no_collision_layer", true),
-        ("layer_order", true),
-        ("transposed_nonsquare", true),
-        ("flip_out_of_range", false),
-    ] {
-        let (code, v) = check_json(&fixtures().join(name), &["--profile", "none"]);
-        assert_eq!(code, Some(if ok { 0 } else { 1 }), "{name}: {v:#}");
-        if name == "layer_order" {
-            assert_eq!(v["warnings"], json!([]), "{v:#}");
-        }
-    }
-}
-
 #[test]
 fn text_output_and_exit_codes() {
-    // The default profile is none: the skin rules don't apply.
-    let (code, text) = check(&[fixtures().join("skin_offgrid").as_os_str()]);
+    let (code, text) = check(&[fixtures().join("clean_minimal").as_os_str()]);
     assert_eq!(code, Some(0), "{text}");
-    let (code, text) = check(&[
-        fixtures().join("skin_offgrid").as_os_str(),
-        "--profile".as_ref(),
-        "godot-rooms".as_ref(),
-    ]);
+    assert_eq!(text, "ok: 1 levels, no problems\n");
+    let (code, text) = check(&[fixtures().join("flip_out_of_range").as_os_str()]);
     assert_eq!(code, Some(1));
     assert!(
         text.starts_with(
-            "levels/room.json: tile_layers[main_tiling].tilesets[0].tiles[1]: level room: \
-             main_tiling: 1 tile(s) off the 32 px grid;"
+            "levels/room.json: tile_layers[back].tilesets[0].tiles[0]: flip 8 is outside 0..7"
         ),
         "{text}"
     );
@@ -205,7 +165,7 @@ fn text_output_and_exit_codes() {
     let (code, text) = check(&[tmp.path().join("nope").as_os_str()]);
     assert_eq!(code, Some(2), "{text}");
     assert_eq!(check(&[]).0, Some(2));
-    let (code, _) = check(&["x".as_ref(), "--profile".as_ref(), "godot".as_ref()]);
+    let (code, _) = check(&["x".as_ref(), "--bogus".as_ref()]);
     assert_eq!(code, Some(2));
     let (code, text) = check(&[
         fixtures().join("clean_minimal").as_os_str(),
@@ -282,7 +242,7 @@ fn format_problems() {
         (
             "tile outside the level",
             level(|l| l["tile_layers"][0]["tilesets"][0]["tiles"][0] = json!([320, 64, 1, 1, 0])),
-            "levels/room.json: tile_layers[decor_back].tilesets[0].tiles[0]",
+            "levels/room.json: tile_layers[back].tilesets[0].tiles[0]",
             "outside the level's 320x192 px",
         ),
         (
@@ -382,143 +342,7 @@ fn reference_problems() {
     }
 }
 
-/// Every importer refusal of the fixtures has kind `importer`.
-#[test]
-fn importer_problems() {
-    for name in [
-        "skin_offgrid",
-        "skin_16px",
-        "skin_stacked",
-        "unknown_tiles_layer",
-        "reserved_layer_name",
-        "reserved_breakables",
-        "empty_layer_name",
-        "layer_name_collision",
-        "project_grid_16",
-        "no_collision_layer",
-        "transposed_nonsquare",
-    ] {
-        let (kind, _, _) = one_problem(&fixtures().join(name));
-        assert_eq!(kind, "importer", "{name}");
-    }
-    // Reserved names, one Godot sanitizes into a reserved one, one starting
-    // with _ (the profile's reserved names, in full).
-    for name in [
-        "Skin",
-        "_Private",
-        "Darkness",
-        "SeamAprons",
-        "Breakables",
-        "Props",
-        "Seam.Aprons",
-    ] {
-        let (_t, dir) = case("two_auto_layers");
-        edit(&dir.join("levels/room.json"), |l| {
-            assert_eq!(l["tile_layers"][1]["layer"], "pillars");
-            l["tile_layers"][1]["name"] = json!(name)
-        });
-        if name == "Seam.Aprons" {
-            // "Seam_Aprons" isn't reserved.
-            assert_eq!(check_json(&dir, &[]).0, Some(0), "{name}");
-            continue;
-        }
-        let (kind, _, message) = one_problem(&dir);
-        assert_eq!(kind, "importer", "{name}");
-        assert!(message.contains("reserved name"), "{message}");
-    }
-}
-
-/// The skin layer becomes the node `Skin` whatever its display name, so its
-/// name is never a reserved or colliding one; any other layer named like
-/// the skin's node is refused.
-#[test]
-fn skin_layer_maps_to_the_skin_node() {
-    let (_t, dir) = case("clean_minimal");
-    edit(&dir.join("levels/room.json"), |l| {
-        assert_eq!(l["tile_layers"][1]["layer"], "main_tiling");
-        l["tile_layers"][1]["name"] = json!("Objects");
-    });
-    let (code, v) = check_json(&dir, &[]);
-    assert_eq!(code, Some(0), "{v:#}");
-    // A tiles layer slugged main_tiling isn't the skin: a tiles layer with
-    // no place.
-    edit(&dir.join("levels/room.json"), |l| {
-        l["tile_layers"][1]["kind"] = json!("tiles");
-    });
-    let (_, _, message) = one_problem(&dir);
-    assert!(message.contains("decor_back* or decor_front*"), "{message}");
-}
-
-/// F12: an empty tiles layer the importer has no place for is skipped (its
-/// name isn't checked either, as the importer skips it before naming it);
-/// with tiles it is refused.
-#[test]
-fn empty_unsupported_tiles_layer_is_skipped() {
-    let (_t, dir) = case("empty_unknown_tiles_layer");
-    edit(&dir.join("levels/room.json"), |l| {
-        assert_eq!(l["tile_layers"][1]["layer"], "trim");
-        l["tile_layers"][1]["name"] = json!("Objects");
-    });
-    let (code, v) = check_json(&dir, &[]);
-    assert_eq!(code, Some(0), "{v:#}");
-    assert_eq!(v["warnings"], json!([]), "{v:#}");
-    edit(&dir.join("levels/room.json"), |l| {
-        l["tile_layers"][1]["tilesets"] = json!([{ "tileset": "tiles", "image": "tiles.png",
-            "tile_size": [32, 32], "tiles": [[96, 96, 0, 1, 0]] }]);
-    });
-    let (kind, _, message) = one_problem(&dir);
-    assert_eq!(kind, "importer");
-    assert!(message.contains("tiles layer trim"), "{message}");
-}
-
-/// F10: the project prerequisites the importer refuses the whole export
-/// without, and the walls warning.
-#[test]
-fn project_prerequisites() {
-    let (_, path, message) = one_problem(&fixtures().join("project_grid_16"));
-    assert_eq!(path, "world.json: grid_size");
-    assert!(message.contains("needs 32 px"), "{message}");
-    let (_, path, _) = one_problem(&fixtures().join("no_collision_layer"));
-    assert_eq!(path, "world.json: collision_layer");
-    let (_t, dir) = case("clean_minimal");
-    edit(&dir.join("world.json"), |w| {
-        w["blocking_values"] = json!(["solid"]);
-        w["worlds"][0]["levels"][0]["open_edges"] =
-            json!({ "left": [], "right": [], "top": [], "bottom": [] });
-    });
-    let (code, v) = check_json(&dir, &[]);
-    assert_eq!(code, Some(0), "{v:#}");
-    let w = &v["warnings"][0];
-    assert_eq!(w["kind"], "importer", "{v:#}");
-    assert!(
-        w["message"]
-            .as_str()
-            .unwrap()
-            .contains("infers seams from the scenes"),
-        "{v:#}"
-    );
-}
-
-/// The layer-order warning: one per pair Worlds stacks one way and the
-/// importer the other, across levels.
-#[test]
-fn layer_order_warning() {
-    let (code, v) = check_json(&fixtures().join("layer_order"), &[]);
-    assert_eq!(code, Some(0), "{v:#}");
-    let w = v["warnings"].as_array().unwrap();
-    assert_eq!(w.len(), 1, "{v:#}");
-    assert_eq!(w[0]["kind"], "importer");
-    assert_eq!(
-        w[0]["message"],
-        "Worlds draws main_tiling above decor_front, but the importer draws DecorFront (z 2) above \
-         Skin (z -1); reorder the layers in Worlds (layers.json) so both agree"
-    );
-    // An empty layer still counts: the order is the project's.
-    let (_, v) = check_json(&fixtures().join("clean_minimal"), &[]);
-    assert_eq!(v["warnings"], json!([]));
-}
-
-/// F14: `open_edges` missing is reported even when the rows don't fit the
+/// `open_edges` missing is reported even when the rows don't fit the
 /// level; a derived collision layer is reported in each level file that
 /// has it, not as one world.json path repeated.
 #[test]
@@ -610,7 +434,7 @@ fn bake(dir: &Path) -> String {
 fn fresh_compares_an_in_memory_bake() {
     let (_t, dir) = sample();
     let first = bake(&dir);
-    // D17: what changed, not what was kept.
+    // The summary counts what changed, not what was kept.
     assert!(first.contains("; 6 files (6 changed) in "), "{first}");
     assert!(bake(&dir).contains("; 6 files (0 changed) in "));
     let export = dir.join("export");
@@ -713,7 +537,7 @@ fn fresh_uses_the_checked_directory_for_image_paths() {
     assert_eq!(code, Some(2), "{text}");
 }
 
-/// docs/format.md's `--json` example is the real output for `skin_offgrid`.
+/// docs/format.md's `--json` example is the real output for `flip_out_of_range`.
 #[test]
 fn format_md_json_example_is_real() {
     let doc =
@@ -722,6 +546,6 @@ fn format_md_json_example_is_real() {
     let section = &doc[doc.find("### Checking an export").unwrap()..];
     let block = section.split("```json\n").nth(1).unwrap();
     let example: Value = serde_json::from_str(block.split("\n```").next().unwrap()).unwrap();
-    let (_, real) = check_json(&fixtures().join("skin_offgrid"), &[]);
+    let (_, real) = check_json(&fixtures().join("flip_out_of_range"), &[]);
     assert_eq!(example, real);
 }

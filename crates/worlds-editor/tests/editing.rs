@@ -2002,16 +2002,16 @@ fn superseded_layer_jobs_are_skipped_not_baked() {
 }
 
 // ---------------------------------------------------------------------
-// M6: derived layers, passes, region rules
+// Derived layers, passes, region rules
 // ---------------------------------------------------------------------
 
-/// mini.worlds plus an M6 setup as one entry: a derived layer `marks`
+/// mini.worlds plus a derived-layer setup as one entry: a derived layer `marks`
 /// (value `pillar_base`, glyph `p`) and an auto layer `pillars` whose pass 0
 /// region rule writes marks along every floor run (every 4, margin 1) and
 /// whose pass 1 rule draws a tile on each mark. In crevasse the marks land
 /// at (9, 1), (5, 2), (16, 2), (8, 3), (12, 3).
-fn m6_setup() -> serde_json::Value {
-    serde_json::json!({ "op": "batch", "label": "M6 setup", "commands": [
+fn derived_setup() -> serde_json::Value {
+    serde_json::json!({ "op": "batch", "label": "Derived layer setup", "commands": [
         { "op": "set_layer_def", "layer": "marks", "index": 1,
           "def": { "slug": "marks", "name": "Marks", "kind": "int_grid", "derived": true,
                    "values": [{ "slug": "pillar_base", "name": "Pillar base", "color": "#e0a040", "glyph": "p" }] } },
@@ -2032,10 +2032,10 @@ fn m6_setup() -> serde_json::Value {
 
 const MARKS: [[i32; 2]; 5] = [[9, 1], [5, 2], [16, 2], [8, 3], [12, 3]];
 
-/// A rig with the M6 setup applied and saved.
-fn m6_rig() -> Rig {
+/// A rig with the derived-layer setup applied and saved.
+fn derived_rig() -> Rig {
     let mut r = Rig::new();
-    r.apply(m6_setup());
+    r.apply(derived_setup());
     r.save();
     r
 }
@@ -2068,7 +2068,7 @@ fn assert_fresh(r: &Rig) {
 
 #[test]
 fn derived_layer_bakes_and_draws_its_marks() {
-    let r = m6_rig();
+    let r = derived_rig();
     let rows = marks_rows(&r);
     for [x, y] in MARKS {
         assert_eq!(rows[y as usize].as_bytes()[x as usize], b'p', "{rows:?}");
@@ -2087,7 +2087,7 @@ fn derived_layer_bakes_and_draws_its_marks() {
 /// file back byte for byte (the file goes away with the last override).
 #[test]
 fn derived_layer_gestures_save_one_file_and_undo_byte_exact() {
-    let mut r = m6_rig();
+    let mut r = derived_rig();
     let dir = r.doc.dir.clone();
     let bytes = |d: &Path| -> BTreeMap<PathBuf, Vec<u8>> {
         files(d).into_iter().map(|(p, (b, _))| (p, b)).collect()
@@ -2211,7 +2211,7 @@ fn derived_layer_gestures_save_one_file_and_undo_byte_exact() {
 /// value, Suppress, or Erase where the rules decide.
 #[test]
 fn derived_layer_alt_click_samples_the_stored_state() {
-    let mut r = m6_rig();
+    let mut r = derived_rig();
     r.apply(
         serde_json::json!({ "op": "paint_cells", "level": "crevasse", "layer": "marks",
         "cells": [[2, 1, "pillar_base"], [9, 1, "!"]] }),
@@ -2239,7 +2239,7 @@ fn derived_layer_alt_click_samples_the_stored_state() {
 /// The status bar names a derived cell's state.
 #[test]
 fn derived_cells_describe_their_state() {
-    let mut r = m6_rig();
+    let mut r = derived_rig();
     r.apply(
         serde_json::json!({ "op": "paint_cells", "level": "crevasse", "layer": "marks",
         "cells": [[2, 1, "pillar_base"], [9, 1, "!"]] }),
@@ -2258,7 +2258,7 @@ fn derived_cells_describe_their_state() {
 /// bake` writes) byte for byte.
 #[test]
 fn export_on_save_with_a_derived_layer_equals_bake_for_export() {
-    let mut r = m6_rig();
+    let mut r = derived_rig();
     r.doc.project.export_on_save = true;
     r.apply(
         serde_json::json!({ "op": "paint_cells", "level": "crevasse", "layer": "marks",
@@ -2311,7 +2311,7 @@ fn export_on_save_with_a_derived_layer_equals_bake_for_export() {
 /// at once and on the workers elsewhere.
 #[test]
 fn a_writer_rule_edit_rebakes_its_readers() {
-    let mut r = m6_rig();
+    let mut r = derived_rig();
     // A reader in another layer: `deco` draws on the marks.
     r.apply(
         serde_json::json!({ "op": "batch", "label": "reader", "commands": [
@@ -2348,7 +2348,7 @@ fn a_writer_rule_edit_rebakes_its_readers() {
 /// nobody, and the effective grid is the overrides alone.
 #[test]
 fn a_writer_that_stops_writing_rebakes_the_readers() {
-    let mut r = m6_rig();
+    let mut r = derived_rig();
     r.apply(
         serde_json::json!({ "op": "batch", "label": "reader", "commands": [
         { "op": "set_layer_def", "layer": "deco", "index": 3,
@@ -2379,7 +2379,7 @@ fn a_writer_that_stops_writing_rebakes_the_readers() {
 /// whole: the first stroke in a level re-sweeps from the worker's bake.
 #[test]
 fn worker_level_bakes_seed_the_cache_in_dependency_order() {
-    let mut r = m6_rig();
+    let mut r = derived_rig();
     // Rebake everything as at open (on this thread, through the same path).
     r.doc.bake_all_blocking();
     let ix = r.doc.level_ix("crevasse").unwrap();

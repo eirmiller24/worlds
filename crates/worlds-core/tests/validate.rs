@@ -930,7 +930,7 @@ fn category_paths_and_tags() {
     );
 }
 
-// ---- annotations, guide groups and level tags (M5) ----
+// ---- annotations, guide groups and level tags ----
 
 const WORLD: &str = "worlds/main/world.json";
 

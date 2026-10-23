@@ -900,7 +900,7 @@ fn agent_toasts_stack_above_the_status_bar() {
         bounds.unwrap().bottom() - rects[0].bottom() <= 24.0,
         "{rects:?}"
     );
-    let png = tmp.path().join("m2_toasts_stacked.png");
+    let png = tmp.path().join("toasts_stacked.png");
     hl.read().unwrap().save(&png).unwrap();
     keep(&png);
 
@@ -1055,7 +1055,7 @@ fn oriented(tile: &image::RgbaImage, b: u8) -> image::RgbaImage {
 /// The renderer draws a tile in all 8 orientations (flips `x`, `y`, `xy`
 /// and the transposed `t`, `xt`, `yt`, `xyt`) exactly as an independently
 /// rotated and flipped copy of the tile: pixel for pixel at 4x, through
-/// `--snapshot`. The PNG `m3_orientations.png` is the render (top) over the
+/// `--snapshot`. The PNG `orientations.png` is the render (top) over the
 /// expected picture (bottom).
 #[test]
 fn eight_orientations_match_the_image_crate() {
@@ -1100,7 +1100,7 @@ fn eight_orientations_match_the_image_crate() {
     });
     p.worlds[0].levels.push(level);
     worlds_core::save(&mut p, &dir).unwrap();
-    let out = tmp.path().join("m3_orientations_render.png");
+    let out = tmp.path().join("orientations_render.png");
     let (code, _, err) = worlds(&[
         os("--screenshot"),
         out.as_os_str(),
@@ -1162,7 +1162,7 @@ fn eight_orientations_match_the_image_crate() {
     let mut both = image::RgbaImage::new(img.width(), img.height() * 2);
     image::imageops::replace(&mut both, &img, 0, 0);
     image::imageops::replace(&mut both, &expected, 0, img.height() as i64);
-    let pair = tmp.path().join("m3_orientations.png");
+    let pair = tmp.path().join("orientations.png");
     both.save(&pair).unwrap();
     keep(&pair);
 }
@@ -1191,11 +1191,11 @@ fn rules_pane_highlights_the_selected_rule() {
         (image::open(&out).unwrap().to_rgba8(), r)
     };
     let (plain, r0) = shot(
-        "m3_rules_none",
+        "rules_none",
         r#"[{ "ui": "rules", "layer": "main_tiling", "level": "level_4" }]"#,
     );
     let (lit, r1) = shot(
-        "m3_rules_selected",
+        "rules_selected",
         r#"[{ "ui": "rules", "layer": "main_tiling", "level": "level_4", "rule": "wall_fill" }]"#,
     );
     let map = r1.map_rect.expect("map drawn");
@@ -1272,14 +1272,14 @@ fn script_set_rule_and_ui_step_save_only_the_rules_file() {
     std::fs::write(
         &script,
         r#"[
-          { "op": "set_rule", "layer": "main_tiling", "group": "base_tile", "rule": "m3_probe", "index": 0,
-            "def": { "slug": "m3_probe", "match": { "rows": ["*.*", ".#.", "*#*"] },
+          { "op": "set_rule", "layer": "main_tiling", "group": "base_tile", "rule": "probe", "index": 0,
+            "def": { "slug": "probe", "match": { "rows": ["*.*", ".#.", "*#*"] },
                      "out": { "tileset": "props", "tiles": [[1, 0]] }, "break": true } },
-          { "ui": "rules", "layer": "main_tiling", "level": "level_4", "rule": "m3_probe" }
+          { "ui": "rules", "layer": "main_tiling", "level": "level_4", "rule": "probe" }
         ]"#,
     )
     .unwrap();
-    let out = tmp.path().join("m3_rules_script.png");
+    let out = tmp.path().join("rules_script.png");
     let r = screenshot(&ScreenshotOptions {
         level: Some("level_4".into()),
         size: [1600, 900],
@@ -1302,7 +1302,7 @@ fn script_set_rule_and_ui_step_save_only_the_rules_file() {
     assert_eq!(differ, [PathBuf::from("rules/main_tiling.json")]);
     let saved: serde_json::Value =
         serde_json::from_slice(&after[&dir.join("rules/main_tiling.json")]).unwrap();
-    assert_eq!(saved["groups"][0]["rules"][0]["slug"], "m3_probe");
+    assert_eq!(saved["groups"][0]["rules"][0]["slug"], "probe");
 }
 
 /// The entity palette over 100 synthetic types: searching "door" with the
@@ -1334,8 +1334,8 @@ fn entity_palette_search_renders_and_benches() {
         keep(&out);
         (image::open(&out).unwrap().to_rgba8(), report)
     };
-    let (all, _) = shot("m4_palette_all", "", 0);
-    let (door, report) = shot("m4_palette_door", "door", 6);
+    let (all, _) = shot("palette_all", "", 0);
+    let (door, report) = shot("palette_door", "door", 6);
     // The palette (bottom left) differs; the map shows entities either way.
     let mut diff = 0;
     for y in 440..860 {
@@ -1377,7 +1377,7 @@ fn entity_gesture_places_and_saves_only_entities_json() {
         .to_string(),
     )
     .unwrap();
-    let out = tmp.path().join("m4_placed.png");
+    let out = tmp.path().join("placed.png");
     let r = screenshot(&ScreenshotOptions {
         level: Some("crevasse".into()),
         script: Some(script),
@@ -1576,7 +1576,7 @@ fn diff_in(a: &image::RgbaImage, b: &image::RgbaImage, r: egui::Rect) -> usize {
     n
 }
 
-/// D13: the `duplicate` and `delete` script steps are Ctrl-D and Delete:
+/// The `duplicate` and `delete` script steps are Ctrl-D and Delete:
 /// one entry each, the copies selected; Delete with a level selected asks
 /// first, which the step refuses without `confirm` (nothing deleted) and
 /// answers yes with it.
@@ -1647,7 +1647,7 @@ fn multi_select_inspector_duplicate_and_delete() {
     }
     frames(&mut app, 3);
     let img = hl.read().unwrap();
-    let out = tmp.path().join("m4_inspector_multi.png");
+    let out = tmp.path().join("inspector_multi.png");
     img.save(&out).unwrap();
     keep(&out);
     let sel: Vec<String> = app
@@ -1741,7 +1741,7 @@ fn types_pane_opens_on_a_type_and_field() {
         hl.frame(&ctx, &mut app, t);
     }
     let img = hl.read().unwrap();
-    let out = tmp.path().join("m4_types_pane.png");
+    let out = tmp.path().join("types_pane.png");
     img.save(&out).unwrap();
     keep(&out);
     assert_eq!(
@@ -1936,7 +1936,7 @@ fn problems_pane_lists_a_live_problem_and_a_click_selects_it() {
     );
     assert_eq!(app.st.view.active_level, doc.level_ix("level_2"));
     let img = hl.read().unwrap();
-    let out = tmp.path().join("m4_problems.png");
+    let out = tmp.path().join("problems.png");
     img.save(&out).unwrap();
     keep(&out);
     // Undo: the problem goes again.
@@ -2329,7 +2329,7 @@ fn snapshots_draw_annotations() {
         keep(&out);
         image::open(&out).unwrap().to_rgba8()
     };
-    let before = shot("m5_snapshot_before.png");
+    let before = shot("snapshot_before.png");
     let script = tmp.path().join("guides.json");
     std::fs::write(&script, format!("[{}]", layout_guides())).unwrap();
     let (code, _, err) = worlds(&[
@@ -2343,7 +2343,7 @@ fn snapshots_draw_annotations() {
         dir.as_os_str(),
     ]);
     assert_eq!(code, 0, "{err}");
-    let after = shot("m5_snapshot_guides.png");
+    let after = shot("snapshot_guides.png");
     let all = egui::Rect::from_min_size(
         egui::Pos2::ZERO,
         egui::vec2(after.width() as f32, after.height() as f32),
@@ -2392,14 +2392,14 @@ fn notes_are_cards_zoomed_in_and_dots_zoomed_out() {
         let at = screen_of(&app, [p[0], p[1], p[0], p[1]]).min;
         (img, at, app.st.viewport.camera.zoom)
     };
-    let (with, at, z) = render(3, true, "m5_cards.png");
-    let (without, _, _) = render(3, false, "m5_cards_without.png");
+    let (with, at, z) = render(3, true, "cards.png");
+    let (without, _, _) = render(3, false, "cards_without.png");
     assert!(z * 32.0 >= 12.0, "zoom {z}");
     let r = egui::Rect::from_min_size(at - egui::vec2(4.0, 4.0), egui::vec2(200.0, 60.0));
     let card = diff_in(&with, &without, r);
     assert!(card > 2500, "card: {card} pixels");
-    let (with, at, z) = render(-4, true, "m5_dots.png");
-    let (without, _, _) = render(-4, false, "m5_dots_without.png");
+    let (with, at, z) = render(-4, true, "dots.png");
+    let (without, _, _) = render(-4, false, "dots_without.png");
     assert!(z * 32.0 < 12.0, "zoom {z}");
     let r = egui::Rect::from_min_size(at - egui::vec2(10.0, 10.0), egui::vec2(200.0, 60.0));
     let dot = diff_in(&with, &without, r);
@@ -2532,7 +2532,7 @@ fn synthetic_guides_and_notes_bench() {
         return;
     }
     let (tmp, dir) = temp_copy(&game());
-    let out = tmp.path().join("m5_bench.png");
+    let out = tmp.path().join("bench.png");
     let r = screenshot(&ScreenshotOptions {
         size: [800, 450],
         synthetic_guides: Some(200),
@@ -2564,7 +2564,7 @@ fn synthetic_guides_and_notes_bench() {
     assert_eq!(a.worlds[0].notes.len(), 20 + 2 + 20);
 }
 
-/// D11: in a `--screenshot --script` run, "within 8 screen px" is worked
+/// In a `--screenshot --script` run, "within 8 screen px" is worked
 /// out at the zoom of the picture: a drag that leaves level_1's left edge
 /// 12 world px short of a vertical guide (x 2212) snaps at the
 /// world fit (17%: 8 screen px is about 47 world px), and doesn't once a
@@ -2623,7 +2623,7 @@ fn guide_snapping_uses_the_scripts_view() {
 /// An authoring batch: `pillar_marks` (derived) and
 /// `pillars` (auto) with the region rule writing marks along the floor of
 /// rooms 15+ wide and the pass 1 stamp rule drawing a pillar on each.
-const M6_AUTHOR: &str = r##"
+const DERIVED_AUTHOR: &str = r##"
   { "op": "batch", "label": "Pillars from two rules", "commands": [
     { "op": "set_layer_def", "layer": "pillar_marks", "index": 2,
       "def": { "slug": "pillar_marks", "name": "Pillar marks", "kind": "int_grid", "derived": true,
@@ -2648,13 +2648,13 @@ const M6_AUTHOR: &str = r##"
 
 /// An override paint: two marks by hand in crevasse (the second
 /// one blocked by the first's footprint) and one computed mark suppressed.
-const M6_OVERRIDES: &str = r#"
+const DERIVED_OVERRIDES: &str = r#"
   { "op": "paint_cells", "level": "crevasse", "layer": "pillar_marks",
     "cells": [[6, 24, "pillar_base"], [7, 24, "pillar_base"], [58, 24, "!"]] }"#;
 
 /// Render `steps` (JSON items, after the authoring batch unless they
 /// start with `!`, which is dropped) at 1600x900.
-fn m6_shot(
+fn derived_shot(
     tmp: &std::path::Path,
     dir: &std::path::Path,
     name: &str,
@@ -2666,9 +2666,9 @@ fn m6_shot(
     let body = if let Some(own) = steps.trim().strip_prefix('!') {
         format!("[{own}]")
     } else if steps.trim().is_empty() {
-        format!("[{M6_AUTHOR}]")
+        format!("[{DERIVED_AUTHOR}]")
     } else {
-        format!("[{M6_AUTHOR}, {steps}]")
+        format!("[{DERIVED_AUTHOR}, {steps}]")
     };
     std::fs::write(&script, body).unwrap();
     let out = tmp.join(format!("{name}.png"));
@@ -2688,20 +2688,20 @@ fn m6_shot(
 /// and the window): a computed mark is the value's color, faint; an override
 /// is the full color; a suppressed cell a grey cross; other cells nothing.
 #[test]
-fn m6_derived_overlay_computed_faint_override_solid_suppressed_crossed() {
+fn derived_overlay_computed_faint_override_solid_suppressed_crossed() {
     if !gpu_tests() {
         return;
     }
     let (tmp, dir) = temp_copy(&game());
-    m6_shot(
+    derived_shot(
         tmp.path(),
         &dir,
-        "m6_author_overrides",
+        "author_overrides",
         Some("crevasse"),
-        M6_OVERRIDES,
+        DERIVED_OVERRIDES,
         true,
     );
-    let snap = tmp.path().join("m6_snapshot_marks.png");
+    let snap = tmp.path().join("snapshot_marks.png");
     let (code, _, err) = worlds(&[
         os("--screenshot"),
         snap.as_os_str(),
@@ -2757,19 +2757,20 @@ fn m6_derived_overlay_computed_faint_override_solid_suppressed_crossed() {
 /// room in the accent, the closet dim) and runs; "Show occupancy" hatches
 /// the stamps' footprints.
 #[test]
-fn m6_region_highlight_and_occupancy_render() {
+fn region_highlight_and_occupancy_render() {
     if !gpu_tests() {
         return;
     }
     let (tmp, dir) = temp_copy(&game());
-    let shot =
-        |name: &str, steps: &str| m6_shot(tmp.path(), &dir, name, Some("level_4"), steps, false);
+    let shot = |name: &str, steps: &str| {
+        derived_shot(tmp.path(), &dir, name, Some("level_4"), steps, false)
+    };
     let (plain, r) = shot(
-        "m6_regions_off",
+        "regions_off",
         r#"{ "ui": "rules", "layer": "pillars", "level": "level_4", "rule": "big_room_pillars", "show_regions": false }"#,
     );
     let (lit, _) = shot(
-        "m6_regions_on",
+        "regions_on",
         r#"{ "ui": "rules", "layer": "pillars", "level": "level_4", "rule": "big_room_pillars", "show_regions": true }"#,
     );
     let map = r.map_rect.expect("map drawn");
@@ -2781,11 +2782,11 @@ fn m6_region_highlight_and_occupancy_render() {
     assert!(count_in(&lit, map, accent) > count_in(&plain, map, accent) + 500);
 
     let (no_occ, _) = shot(
-        "m6_occupancy_off",
+        "occupancy_off",
         r#"{ "ui": "rules", "layer": "pillars", "level": "level_4", "rule": "pillar_stamp" }"#,
     );
     let (occ, _) = shot(
-        "m6_occupancy_on",
+        "occupancy_on",
         r#"{ "ui": "rules", "layer": "pillars", "level": "level_4", "rule": "pillar_stamp", "show_occupancy": true }"#,
     );
     let hatch = |p: &image::Rgba<u8>| p[0] > 180 && p[1] < 140 && p[2] > 150;
@@ -2799,17 +2800,17 @@ fn m6_region_highlight_and_occupancy_render() {
 /// and `"erase"`, save exactly that level's overrides file; undone, the
 /// tree is as before.
 #[test]
-fn m6_suppress_gesture_saves_one_file_and_undo_restores() {
+fn suppress_gesture_saves_one_file_and_undo_restores() {
     if !gpu_tests() {
         return;
     }
     let (tmp, dir) = temp_copy(&game());
-    m6_shot(tmp.path(), &dir, "m6_authored", None, "", true);
+    derived_shot(tmp.path(), &dir, "authored", None, "", true);
     let before = files_of(&dir);
-    let (_, r) = m6_shot(
+    let (_, r) = derived_shot(
         tmp.path(),
         &dir,
-        "m6_suppress",
+        "suppress",
         Some("crevasse"),
         r#"!{ "gesture": "brush", "level": "crevasse", "layer": "pillar_marks", "path": [[10, 24], [16, 24]], "brush": "suppress" },
            { "gesture": "brush", "level": "crevasse", "layer": "pillar_marks", "path": [[16, 24]], "brush": "erase" }"#,
@@ -2840,20 +2841,20 @@ fn m6_suppress_gesture_saves_one_file_and_undo_restores() {
     // the file comes back byte for byte, then goes away and the tree is
     // the authored one again.
     let with_file = files_of(&dir);
-    m6_shot(
+    derived_shot(
         tmp.path(),
         &dir,
-        "m6_suppress_undone",
+        "suppress_undone",
         None,
         r#"!{ "gesture": "rect", "level": "crevasse", "layer": "pillar_marks", "path": [[10, 24], [15, 24]], "brush": "erase" },
            { "undo": 1 }"#,
         true,
     );
     assert_eq!(files_of(&dir), with_file);
-    m6_shot(
+    derived_shot(
         tmp.path(),
         &dir,
-        "m6_suppress_cleared",
+        "suppress_cleared",
         None,
         r#"!{ "gesture": "rect", "level": "crevasse", "layer": "pillar_marks", "path": [[10, 24], [15, 24]], "brush": "erase" }"#,
         true,
@@ -2865,14 +2866,14 @@ fn m6_suppress_gesture_saves_one_file_and_undo_restores() {
 /// `--synthetic 500 --bench` with the pillar layers: every level bakes the two
 /// passes, and frames stay timed.
 #[test]
-fn m6_synthetic_500_bench_smoke() {
+fn derived_synthetic_500_bench_smoke() {
     if !gpu_tests() {
         return;
     }
     let (tmp, dir) = temp_copy(&game());
-    let script = tmp.path().join("m6_author.json");
-    std::fs::write(&script, format!("[{M6_AUTHOR}]")).unwrap();
-    let out = tmp.path().join("m6_synthetic500.png");
+    let script = tmp.path().join("author.json");
+    std::fs::write(&script, format!("[{DERIVED_AUTHOR}]")).unwrap();
+    let out = tmp.path().join("synthetic500.png");
     let r = screenshot(&ScreenshotOptions {
         size: [1600, 900],
         synthetic: Some(500),

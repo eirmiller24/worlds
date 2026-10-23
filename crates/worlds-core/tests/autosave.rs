@@ -1,4 +1,4 @@
-//! Autosave and recovery against saving (M7, `docs/format.md`
+//! Autosave and recovery against saving (`docs/format.md`
 //! "Autosave"): `render_dirty` is exactly what `save_dirty` writes and
 //! deletes, for every shape of dirty set; and an autosave written from it,
 //! loaded on a pristine copy with `load_with_overlay` and saved, gives the

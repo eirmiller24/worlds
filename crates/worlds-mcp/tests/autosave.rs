@@ -1,4 +1,4 @@
-//! M7: headless worlds-mcp and an editor session's autosave. A crashed
+//! Headless worlds-mcp and an editor session's autosave. A crashed
 //! session's (lock free, manifest present) is reported in describe_project's
 //! `autosave` and as a notice; a live editor's (lock held) is not.
 
