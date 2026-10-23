@@ -901,3 +901,39 @@ fn preview_rule_unknown_slugs_with_underscores_list_the_rules() {
         );
     }
 }
+
+/// `resize_level` passes `anchor` through; `crop_level` shrinks shaft to
+/// its door, and on disk.
+#[test]
+fn resize_and_crop_level() {
+    let (_t, dir) = mini();
+    let mut e = engine(&dir, true);
+    let level_json = |dir: &std::path::Path| -> Value {
+        let p = dir.join("worlds/main/levels/shaft/level.json");
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    };
+    let r = ok(
+        &mut e,
+        "resize_level",
+        json!({ "level": "shaft", "size": [8, 9], "anchor": [1, 1] }),
+    );
+    assert_eq!(r["undo_label"], "Agent: resize_level shaft");
+    let l = level_json(&dir);
+    assert_eq!(
+        (l["size"].clone(), l["world_px"].clone()),
+        (json!([8, 9]), json!([288, 64]))
+    );
+    let r = ok(
+        &mut e,
+        "crop_level",
+        json!({ "level": "shaft", "label": "tight" }),
+    );
+    assert_eq!(r["undo_label"], "Agent: crop_level tight");
+    let l = level_json(&dir);
+    assert_eq!(
+        (l["size"].clone(), l["world_px"].clone()),
+        (json!([1, 3]), json!([352, 160]))
+    );
+    assert!(err(&mut e, "crop_level", json!({ "level": "nope" })).contains("nope"));
+    assert!(err(&mut e, "resize_level", json!({ "level": "shaft" })).contains("size"));
+}
