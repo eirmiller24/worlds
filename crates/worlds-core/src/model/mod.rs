@@ -86,8 +86,8 @@ pub struct Project {
     /// `worlds`: the display order of the worlds, by slug. Optional: left
     /// out, worlds are in slug order. A world it doesn't list comes after
     /// the listed ones (in slug order), and validation reports it; so does
-    /// a listed slug with no world. The world commands keep it equal to
-    /// [`Self::worlds`]' order as soon as there is more than one world.
+    /// a listed slug with no world. The world commands write it as soon as
+    /// there is more than one world.
     #[serde(rename = "worlds", default, skip_serializing_if = "Vec::is_empty")]
     pub world_order: Vec<Slug>,
 
