@@ -1,0 +1,26 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A small project directory (zipped) or the edit commands that trigger it help a lot.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Worlds version or commit
+  - type: input
+    id: platform
+    attributes:
+      label: OS and GPU
+      description: For editor issues, e.g. "Fedora 42, Intel UHD (Vulkan)".
