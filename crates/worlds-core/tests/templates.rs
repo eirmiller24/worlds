@@ -351,8 +351,8 @@ fn load_errors_name_the_exact_field() {
         ),
     )
     .1
-    .unwrap_err()
-    .to_string();
+    .unwrap_err();
+    let e = common::slashed(e);
     assert!(
         e.contains("rules/macros.json: at templates.frame.rules[0].brake: unknown field `brake`"),
         "{e}"
