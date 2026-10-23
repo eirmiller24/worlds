@@ -207,7 +207,25 @@ Finding your way around a big project, and planning on the map.
 
 ## Phase 4: content and the game loop
 
-### 4.1 Per-tile metadata
+### 4.1 Non-rectangular levels
+
+**What.** L-, T- and U-shaped rooms, a corridor with a side chamber, a level that wraps around another: a level whose outline isn't its bounding box. Today a level is `world_px` plus `size`, and a shape can only be faked with two touching levels, which splits one room in two and bakes each half without seeing the other.
+
+**Format.** `level.json` gains `void: [[x, y, w, h], ...]`, rectangles in project-grid cells cut out of the level's box, left out when empty, so every existing level stays as it is. A cell is in the level when it is inside `size` and in no void rect; a layer with its own grid size has a cell void when all of its pixels are. Layer files don't change: grids stay dense `w × h`, and void cells are empty. Validation reports content in a void cell (grid values, tiles, an entity whose cell is void), a void rect reaching outside the box, a level with no cells left, and a level the void splits into pieces that don't touch (one room is one 4-connected piece).
+
+**Rules.** Void cells read as out of bounds: a pattern cell over void takes the rule's `out_of_bounds` value, or the rule doesn't fire, exactly as past the level's edge (one branch in the matcher), so walls close around the inside corner of an L. Region rules treat void as the level border: no region contains a void cell and edge runs stop at it. Derived layers compute nothing in void. Levels without `void` bake exactly as before, which the bake snapshots check.
+
+**Commands.** `set_level_void { level, void }` replaces the list. Grid cells and tiles that fall in the new void are cleared and come back with the inverse; an entity there refuses the command, as `resize_level` refuses one left outside. `resize_level` (with 2.8's anchor) shifts and clips the rects along with the content; `create_level` and `replace_level` take `void`; `duplicate_level` (2.2) copies it. Paint, fill and paste clip at void as they clip at the level's edge; `add_entity` and `move_entity` refuse a void cell.
+
+**Export.** The level file and its `world.json` entry carry `void` (left out when empty) and `outline`: the polygon in world pixels, clockwise from the top-left corner, so the game can set camera limits or room bounds without deriving it. `touching` and `open_edges` follow the outline instead of the four sides: each `touching` entry gains `at`, the coordinate of its edge line in world pixels (redundant on a rectangle, so it is additive), and an L's two `top` edges are told apart the same way. `check-export` checks `outline` and the seams against the void. The Godot builder stores the outline as room metadata (`worlds_outline`); collision is built from cells already, so nothing else changes there.
+
+**API / MCP.** `project.describe` and `level.get` report `void`; `level.set_void`; `level.get` with `format: "text"` shows void cells with a reserved glyph. MCP: `create_level` takes `void`, a new `shape_level { level, void }` sets it, `read_level` shows it in the header and the text.
+
+**Editor.** In the world view a level draws only its cells: void is transparent, and a neighbour sitting in the notch is picked, drawn and snapped to as if the L weren't there (level hit tests, the selection outline, edge snapping from 2.4 and thumbnails follow the outline). In the active level, void cells are hatched. A Shape mode from the level's context menu: drag to cut a rectangle out, Shift-drag to fill one back in, each gesture one `set_level_void`. The Inspector lists the rects for exact values.
+
+**Decisions.** Rectangles cut out of a box, not a cell mask and not a polygon: any grid-aligned shape is a union of rects, the list stays short and readable for the shapes rooms actually have, and the layer storage, the bake cache and the chunked renderer keep their dense grids. A cell mask (`rows`, like the grids) can follow if someone draws a shape that needs dozens of rects. Open: whether a shaped level's `open_edges` runs become `[first, end, at]` within `format` 1 or the export moves to `format` 2; whether grid vania layout (3.9) requires the void to be whole lattice cells (probably yes).
+
+### 4.2 Per-tile metadata
 
 **What.** Tags and typed data on tiles of a tileset: material, footstep sound, "is grass", damage. Searchable in the palette and Find, carried into the export so the game can read it, and dropped by the LDtk importer today (it warns about `tags`, per-tile enum tags and custom data).
 
@@ -217,11 +235,11 @@ Finding your way around a big project, and planning on the map.
 
 **Editor.** A tile inspector when a palette tile is selected (tags, fields); the palette filters by tag; Alt+click on the map shows the tile's metadata in the status bar. **Rules**: a later step may let a `require` pattern test tags of a tiles layer; not in the first cut.
 
-### 4.2 Tiled importer
+### 4.3 Tiled importer
 
 **What.** `worlds-cli import-tiled <map.tmx | map.json | world.world> <out.worlds>`: orthogonal maps only. Tile layers become `tiles` layers (one per Tiled layer, flips carried), tilesets become tilesets (image collections are refused with a message), object layers become `entities` layers with one entity type per Tiled class or type and fields from custom properties, each map a level, a `.world` file a world with positions. Tiled's terrains and Wang sets are not converted (a warning lists them; Worlds rules are the replacement). Same report style as the LDtk importer (Carried / Warned / Errors).
 
-### 4.3 Play from here
+### 4.4 Play from here
 
 **What.** One key launches the game at the current level, or at the cell under the pointer. The design doc rules out an embedded play mode; this is a configurable external command, which is what every engine integration actually needs.
 
@@ -229,11 +247,42 @@ Finding your way around a big project, and planning on the map.
 
 **Editor.** A Play button in the toolbar and Ctrl+F5 (F5 is reload); with `bake_first` the export is written first from the cached bakes. Output streams into the Log pane; a non-zero exit is a toast. **API / MCP.** `project.run { level?, at? }`; MCP `run_game`. The Godot addon gets a small runtime entry point that reads those arguments and loads the level scene.
 
-### 4.4 A second engine
+### 4.5 A second engine
 
 **What.** The export is engine-neutral JSON; the Godot addon is the only reader. Add one more first-party reader so the format is proven generic: a Rust crate `worlds-export` that loads `export/` into typed structs (useful for Bevy and for tests), and later a Unity package if there is demand. Both are checked by the same `check-export` fixtures as the Godot addon.
 
-### 4.5 User-defined lint rules
+### 4.6 Scripting packages for Python and JavaScript
+
+**What.** First-party client libraries for the live API, one for Python (3.10+) and one for JavaScript and TypeScript (Node 22+, Deno, Bun), so a project can be scripted from outside: procedural generation, bulk fixes, pipeline steps, project-specific checks. With the editor open a script's edits show live and land in the undo history as the client's; without it the package starts a headless server. Scripting is the API with nicer hands; nothing runs inside the editor.
+
+```python
+import worlds
+
+with worlds.open("mygame.worlds", client="cavegen") as w, w.batch("Carve caves"):
+    for level in w.project.describe()["levels"]:
+        w.grid.paint_cells(level=level["slug"], layer="collision", cells=carve(level))
+```
+
+```ts
+import { open } from "@worlds/client";
+
+const w = await open("mygame.worlds", { client: "cavegen" });
+await w.batch("Carve caves", async () => {
+  for (const level of (await w.project.describe()).levels)
+    await w.grid.paintCells({ level: level.slug, layer: "collision", cells: carve(level) });
+});
+await w.close();
+```
+
+**Packages.** Both thin and with the same behaviour: discovery from `.worlds/server.json` with the liveness check of [api.md](api.md#discovery-worldsserverjson); `session.hello` with the token and a client name; request and response matching, with notifications as callbacks (Python) or an async iterator (JS); the API's errors as typed exceptions (`StaleRev` carrying `expected` and `current`, the command errors by code); `batch` as a context manager or a callback around `history.begin_batch`/`end_batch` that ends the batch when the body throws; approval mode's `queued` status and `approval_wait_ms` passed through. With no live editor, `open` starts `worlds-server <dir>` as a child process (`$WORLDS_SERVER` or `PATH`, with an opt-in `save_on_write`) and stops it on close. Python depends on `websockets` only (its sync client); JS on nothing (the built-in `WebSocket`, which sends no `Origin`). Browsers can't connect, by design: the server refuses any handshake with an `Origin`.
+
+**Generated surface.** Method wrappers and their parameter and result types (Python `TypedDict`s with a `.pyi`, TypeScript `.d.ts`) are generated from a method catalog, so the clients can't drift from the server. `worlds-cli schema` also writes `schema/api.json`: every method with its params and result as JSON Schema, from the same types the handler parses (the commands have schemas already; results need `JsonSchema` derives). A test fails when the catalog and the handler's method table disagree, and CI checks that the generated code is up to date. `call(method, params)` stays as the escape hatch.
+
+**Where.** `clients/python/` and `clients/js/` in this repo, versioned with the API protocol: a client refuses a `session.hello` protocol it doesn't know. Published to PyPI and npm. Each package's tests run in CI against `worlds-server` on the mini fixture with the same scenarios: describe, paint, a batch is one undo entry, a stale `expect_rev` raises, events arrive, the headless fallback starts and stops. `docs/scripting.md` has getting started in both languages and recipes (generate a cave, rename a field value across every entity, a pre-bake check in CI), and the hand-rolled Python client in [api.md](api.md#getting-started) becomes a pointer to it.
+
+**Decisions.** External processes, not an embedded interpreter: the live API already gives scripts undo, approval, ordering and the gesture wait, and a script that crashes or loops forever can't take the editor with it (embedding is a stretch goal). No `worlds-cli run` wrapper: the package starts the headless server itself. Python is sync-only at first, since scripts are mostly sequential; asyncio can follow. Open: the package names (`worlds` is likely taken on PyPI).
+
+### 4.7 User-defined lint rules
 
 **What.** Declarative checks the project's designer writes once and the problems panel, `worlds-cli validate` and `bake_and_validate` run forever after: "every level has exactly one `player_spawn`", "no `exit` whose `target` is null", "every level tagged `boss` has the field `music` set". Fits the agent story: an agent can read the lints to learn the project's rules and write new ones.
 
@@ -247,7 +296,7 @@ Finding your way around a big project, and planning on the map.
 
 The check vocabulary starts small: `count` of entities by type or tag (min, max) per level or per world; `field` constraints (`not_null`, `in`, `matches`) on entities of a type or on levels; `pair` (for every entity of type A with field f, an entity of type B whose field g equals it exists). Anything else waits for a real need. **Validation** reports lint failures with the lint's slug and `doc`, at the offending level or entity, so the agent's `bake_and_validate` shows them too.
 
-### 4.6 LDtk parity: constraints that keep content valid
+### 4.8 LDtk parity: constraints that keep content valid
 
 **What.** From the importer's "Warned (meaning Worlds can't hold yet)" list, the items that stop invalid content rather than change how it looks:
 
@@ -269,7 +318,7 @@ Display-only LDtk settings (nine-slice entity rendering, per-field presentation 
 
 Worth doing for some games, deliberately not planned. Each one is a format change, so if one is picked up it gets a full entry above first.
 
-- **Tile animation.** Frames and durations per tile in the tile metadata (4.1), a preview in the palette, exported for the game. Worlds has no animation model today; the game owns time.
+- **Tile animation.** Frames and durations per tile in the tile metadata (4.2), a preview in the palette, exported for the game. Worlds has no animation model today; the game owns time.
 - **Shaped collision.** Slopes, polygons and explicit one-way shapes per tile or per collision value. Today the Godot builder makes rectangles from blocking cells, which is right for most tile games; ramps are a collision value the game interprets.
 - **Hexagonal and isometric grids.** Everything in the model and the rule engine assumes a square orthogonal grid. Tiled covers these well.
 - **Level background images and parallax.** A game-facing background (as opposed to a reference image, 3.4) with scroll factors, exported. Simple to add once the game needs it.
@@ -277,4 +326,5 @@ Worth doing for some games, deliberately not planned. Each one is a format chang
 - **Direct Aseprite loading.** Read `.aseprite` files as tileset images. Image hot-reload already covers the export-a-PNG workflow.
 - **Nine-slice and other entity presentation modes** from LDtk.
 - **Multi-user editing.** The design doc's one-writer model is deliberate; the file format is already git-friendly, and a rendered diff of two revisions on the canvas (reusing the crash-recovery diff) would be the next step before any live collaboration.
-- **In-editor scripting or a plugin system, and a web build.** Listed as out of scope in the design doc; the MCP server is the extension point.
+- **An embedded scripting language.** A Script pane that runs Lua (`mlua`, vendored) on a worker thread as one more live API connection, so ordering, the gesture wait, approval and undo come from the API unchanged; output in the Log pane, a Stop button, scripts bindable to toolbar buttons. Lua over embedded Python (libpython to ship on three platforms, no real sandbox, the GIL against the UI thread) and over JavaScript (more runtime for the same API). Only worth it if the scripting packages (4.6) show a need for tools inside the editor. Scripts inside the data (custom rules, brushes or export hooks the bake runs) are a much bigger step: a deterministic runtime, declared inputs for the incremental bake, and opening a project would run code.
+- **A plugin system and a web build.** Listed as out of scope in the design doc; the scripting packages (4.6) and the MCP server are the extension points.
