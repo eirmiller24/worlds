@@ -149,7 +149,7 @@ fn set_project_sets_the_export_and_new_level_settings() {
     let r = ok(
         &mut e,
         "edit_definitions",
-        json!({ "patch": { "set_project": { "blocking_values": ["solid"],
+        json!({ "patch": { "set_project": { "blocking_values": ["solid", "fortified"],
             "default_level_size": [24, 12], "export_on_save": true } } }),
     );
     assert_eq!(
@@ -161,7 +161,7 @@ fn set_project_sets_the_export_and_new_level_settings() {
         ])
     );
     let p = json_file(&dir, "project.json");
-    assert_eq!(p["blocking_values"], json!(["solid"]));
+    assert_eq!(p["blocking_values"], json!(["solid", "fortified"]));
     assert_eq!(p["default_level_size"], json!([24, 12]));
     assert_eq!(p["export_on_save"], true);
     // null leaves the key out again.

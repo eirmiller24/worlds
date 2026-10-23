@@ -112,7 +112,7 @@ fn project_update_sets_the_other_settings_and_undoes_them() {
     let r = s
         .call(
             "project.update",
-            json!({ "blocking_values": ["solid"], "default_level_size": [24, 12],
+            json!({ "blocking_values": ["solid", "fortified"], "default_level_size": [24, 12],
                 "export_on_save": true }),
         )
         .unwrap();
@@ -126,11 +126,11 @@ fn project_update_sets_the_other_settings_and_undoes_them() {
         ])
     );
     let p = s.project();
-    assert_eq!(json!(p.blocking_values), json!(["solid"]));
+    assert_eq!(json!(p.blocking_values), json!(["solid", "fortified"]));
     assert_eq!(p.default_level_size, Some([24, 12]));
     assert!(p.export_on_save);
     let d = s.call("project.describe", json!({})).unwrap();
-    assert_eq!(d["blocking_values"], json!(["solid"]));
+    assert_eq!(d["blocking_values"], json!(["solid", "fortified"]));
     assert_eq!(d["default_level_size"], json!([24, 12]));
     assert_eq!(d["export_on_save"], json!(true));
     // null leaves the optional keys out.

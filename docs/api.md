@@ -1787,10 +1787,10 @@ The grid can't change once there are levels, since their sizes and positions are
   "data": { "kind": "invalid", "message": "grid_size can only change while the project has no levels (it has 3): their sizes and positions are in cells of it" } } }
 ```
 
-Only `solid` blocks movement in the export, new levels are 24x12 cells, and every save also writes `export/` (`null` would leave `blocking_values` or `default_level_size` out of `project.json` again):
+`solid` and `fortified` block movement in the export, new levels are 24x12 cells, and every save also writes `export/` (`null` would leave `blocking_values` or `default_level_size` out of `project.json` again):
 
 ```json
-{ "jsonrpc": "2.0", "id": 122, "method": "project.update", "params": { "blocking_values": ["solid"], "default_level_size": [24, 12], "export_on_save": true } }
+{ "jsonrpc": "2.0", "id": 122, "method": "project.update", "params": { "blocking_values": ["solid", "fortified"], "default_level_size": [24, 12], "export_on_save": true } }
 ```
 
 ```json
