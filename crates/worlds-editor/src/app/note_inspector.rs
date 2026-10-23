@@ -145,14 +145,23 @@ fn single(
             ui.end_row();
             ui.weak("Title");
             let focus_key = k("title");
-            if view.focus_title.as_ref() == Some(&id) {
-                view.focus_title = None;
+            let focus = view.focus_title.as_ref() == Some(&id);
+            if focus && !bufs.contains_key(&focus_key) {
                 let t = a.title.clone().unwrap_or_default();
                 bufs.insert(focus_key.clone(), t);
-                ui.memory_mut(|m| m.request_focus(egui::Id::new(("focus title", id.as_str()))));
             }
-            if let Some(t) = title_edit(ui, bufs, &focus_key, a.title.as_deref().unwrap_or(""), &id)
-            {
+            let (edited, focused) = title_edit(
+                ui,
+                bufs,
+                &focus_key,
+                a.title.as_deref().unwrap_or(""),
+                &id,
+                focus,
+            );
+            if focused {
+                view.focus_title = None;
+            }
+            if let Some(t) = edited {
                 update(pending, a, "title", |n| {
                     n.title = Some(t.clone()).filter(|t| !t.is_empty())
                 });
@@ -440,7 +449,8 @@ fn title_edit(
     key: &str,
     initial: &str,
     id: &worlds_core::Id,
-) -> Option<String> {
+    focus: bool,
+) -> (Option<String>, bool) {
     let mut s = bufs
         .get(key)
         .cloned()
@@ -451,16 +461,36 @@ fn title_edit(
             .desired_width(220.0),
     );
     mark(ui, key, r.rect);
+    // Asked to take the keyboard (a note just added): after the field is
+    // added, and only once it is really there. A new Grid's first frame is
+    // an invisible sizing pass whose widgets are disabled, and a disabled
+    // widget gives the focus straight back: asking before adding it (as this
+    // did) lost the request there, so typing went to the shortcuts.
+    let focused = focus && ui.is_enabled() && ui.is_visible() && !ui.is_sizing_pass();
+    if focused {
+        r.request_focus();
+        // All of it selected, so typing replaces the placeholder title.
+        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), r.id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(s.chars().count()),
+            )));
+        state.store(ui.ctx(), r.id);
+    }
     if r.changed() {
         bufs.insert(key.to_string(), s);
     }
     if r.lost_focus() {
-        let t = bufs.remove(key)?;
-        if t != initial {
-            return Some(t);
+        let t = bufs.remove(key);
+        if let Some(t) = t
+            && t != initial
+        {
+            return (Some(t), focused);
         }
     }
-    None
+    (None, focused)
 }
 
 /// The geometry keys as JSON (`{"px": [x, y]}`, `{"points": [...]}`,
@@ -797,6 +827,32 @@ mod tests {
         assert_eq!(ed.history().undo_entries().len(), 1);
         let n = crate::annot::find_note(cx.doc, &id("notecrev22")).unwrap();
         assert_eq!(n.note.title.as_deref(), Some("Wider gap"));
+    }
+
+    /// A note just added (`focus_title`, as the Note tool sets it): its
+    /// title takes the keyboard, asked once, with the text selected, so
+    /// typing replaces it. (`tests/editor_ui.rs` checks it in the real app,
+    /// shortcuts included.)
+    #[test]
+    fn a_new_notes_title_takes_the_keyboard() {
+        let (_tmp, mut st) = state();
+        let note = id("notecrev22");
+        st.view.selection.set([SelItem::Note(note.clone())]);
+        st.view.focus_title = Some(note.clone());
+        let mut d = driver();
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        let field = egui::Id::new(("focus title", "notecrev22"));
+        assert_eq!(d.ctx.memory(|m| m.focused()), Some(field));
+        assert!(d.ctx.egui_wants_keyboard_input());
+        assert_eq!(st.view.focus_title, None, "asked once");
+        d.type_enter(&mut st, "Gap");
+        let b = batches(&mut st);
+        let [(_, cmds)] = &b[..] else { panic!("{b:?}") };
+        let [Command::UpdateNote { note, .. }] = &cmds[..] else {
+            panic!("{b:?}")
+        };
+        assert_eq!(note.title.as_deref(), Some("Gap"), "typed over");
     }
 
     #[test]

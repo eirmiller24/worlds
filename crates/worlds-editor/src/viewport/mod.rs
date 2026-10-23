@@ -119,6 +119,11 @@ pub struct Viewport {
     /// Where the Paint mode strip was drawn this frame (`None`: it wasn't;
     /// the tool isn't a Paint mode).
     pub paint_strip: Option<Rect>,
+    /// The other levels' name labels drawn this frame (screen points), by
+    /// level (tests).
+    pub level_labels: Vec<(LevelIx, Rect)>,
+    /// Where the active level's name tab was drawn this frame (tests).
+    pub level_tab: Option<Rect>,
     /// The scene was rebuilt: drop every GPU chunk buffer next frame.
     clear_gpu: bool,
     /// Where the context menu was opened: world px and the level there.
@@ -159,6 +164,8 @@ impl Viewport {
             note_press: None,
             readout: None,
             paint_strip: None,
+            level_labels: Vec::new(),
+            level_tab: None,
             context_at: None,
             clear_gpu: false,
             pending_fit: None,
@@ -267,6 +274,8 @@ impl Viewport {
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut ViewportCx<'_>) {
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.paint_strip = None;
+        self.level_tab = None;
+        self.level_labels.clear();
         let ppp = ui.ctx().pixels_per_point() as f64;
         let left = (rect.min.x as f64 * ppp).round();
         let top = (rect.min.y as f64 * ppp).round();
@@ -690,6 +699,9 @@ impl Viewport {
         // The active level's name tab: drawn at every zoom; with Select,
         // dragging it moves the level (a drag on the active level's body is
         // the marquee).
+        // The tool's strip at the top left of the map (Note options, Paint
+        // modes) floats above the map: the tab steps aside from it.
+        let strip = tool_strip_rect(ui.ctx(), rect, tool);
         let tab = active.map(|ix| {
             let l = doc.level(ix);
             let name = if l.name.is_empty() {
@@ -698,7 +710,7 @@ impl Viewport {
                 l.name.as_str()
             };
             (
-                level_tab(to_srect(&scene.levels[ix].rect), name, rect),
+                level_tab(to_srect(&scene.levels[ix].rect), name, rect, strip),
                 name.to_string(),
             )
         });
@@ -1039,6 +1051,52 @@ impl Viewport {
                 painter.rect_stroke(r, 0.0, Stroke::new(1.0, cx.accent), StrokeKind::Inside);
             }
             _ => {}
+        }
+
+        // The other levels' names (with tiles drawn; the flat view centres
+        // every name): a quiet label in each one's top-left corner where it
+        // fits inside the level and clears the active tab, the tool strip
+        // and the labels already placed.
+        self.level_labels.clear();
+        self.level_tab = tab.as_ref().map(|(r, _)| *r);
+        if detail {
+            let mut taken: Vec<Rect> = tab.iter().map(|(r, _)| *r).chain(strip).collect();
+            for &ix in &scene.draw_order {
+                if Some(ix) == active {
+                    continue;
+                }
+                let lr = scene.levels[ix].rect;
+                if !lr.intersects(&view) {
+                    continue;
+                }
+                let sr = to_srect(&lr).intersect(rect);
+                let level = doc.level(ix);
+                let name = if level.name.is_empty() {
+                    level.slug.as_str()
+                } else {
+                    level.name.as_str()
+                };
+                let galley = painter.layout_no_wrap(
+                    name.to_string(),
+                    FontId::proportional(12.0),
+                    Color32::from_gray(220),
+                );
+                let r = Rect::from_min_size(
+                    sr.min + egui::vec2(3.0, 3.0),
+                    galley.size() + egui::vec2(12.0, 4.0),
+                );
+                if !sr.shrink(2.0).contains_rect(r) || taken.iter().any(|t| t.intersects(r)) {
+                    continue;
+                }
+                painter.rect_filled(r, 3.0, Color32::from_rgba_unmultiplied(20, 22, 30, 190));
+                painter.galley(
+                    r.min + egui::vec2(6.0, 2.0),
+                    galley,
+                    Color32::from_gray(220),
+                );
+                taken.push(r);
+                self.level_labels.push((ix, r));
+            }
         }
 
         // The active level's name tab (every tool, every zoom).
@@ -1449,7 +1507,7 @@ fn draw_dragged_selection(
 /// as the mode's key. Returns where it was drawn.
 fn paint_strip(ctx: &egui::Context, map: Rect, tool: Tool, actions: &mut Vec<Action>) -> Rect {
     egui::Area::new(egui::Id::new("paint tool strip"))
-        .fixed_pos(map.min + egui::vec2(8.0, 8.0))
+        .fixed_pos(map.min + STRIP_OFFSET)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -1476,7 +1534,7 @@ fn paint_strip(ctx: &egui::Context, map: Rect, tool: Tool, actions: &mut Vec<Act
 fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
     use crate::view::NoteKind;
     egui::Area::new(egui::Id::new("note tool strip"))
-        .fixed_pos(map.min + egui::vec2(8.0, 8.0))
+        .fixed_pos(map.min + STRIP_OFFSET)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -2030,21 +2088,59 @@ pub fn entities_in_rect(
 /// level's top-left corner, kept inside the map `clip`, drawn at every
 /// zoom. With the Select tool, dragging it moves the level (its body is
 /// the marquee's).
-pub fn level_tab(level: Rect, name: &str, clip: Rect) -> Rect {
+///
+/// `avoid` is the tool's strip ([`tool_strip_rect`]), which floats over the
+/// map's top left: a tab that would be under it moves to the strip's right
+/// while it stays over its level's width there, else just below the strip.
+pub fn level_tab(level: Rect, name: &str, clip: Rect, avoid: Option<Rect>) -> Rect {
     let w = (name.chars().count().min(32) as f32 * 7.0 + 14.0).max(28.0);
     let h = 18.0;
     let mut min = pos2(level.min.x, level.min.y - h - 3.0);
     // Keep it on screen: inside the map, and above the level when that fits.
-    min.x = min.x.clamp(
-        clip.min.x + 2.0,
-        (clip.max.x - w - 2.0).max(clip.min.x + 2.0),
-    );
-    min.y = min.y.clamp(
-        clip.min.y + 2.0,
-        (clip.max.y - h - 2.0).max(clip.min.y + 2.0),
-    );
+    let keep = |min: &mut egui::Pos2| {
+        min.x = min.x.clamp(
+            clip.min.x + 2.0,
+            (clip.max.x - w - 2.0).max(clip.min.x + 2.0),
+        );
+        min.y = min.y.clamp(
+            clip.min.y + 2.0,
+            (clip.max.y - h - 2.0).max(clip.min.y + 2.0),
+        );
+    };
+    keep(&mut min);
+    let r = Rect::from_min_size(min, egui::vec2(w, h));
+    let Some(a) = avoid.filter(|a| a.expand(2.0).intersects(r)) else {
+        return r;
+    };
+    let right = a.max.x + 4.0;
+    if right + w <= level.max.x.min(clip.max.x - 2.0) {
+        min.x = right;
+    } else {
+        min.y = a.max.y + 3.0;
+    }
+    keep(&mut min);
     Rect::from_min_size(min, egui::vec2(w, h))
 }
+
+/// Where the tool's options strip (Note) or mode strip (Paint) floats over
+/// the top left of `map` this frame, if the tool has one: its size as
+/// drawn last frame (an estimate the first time).
+pub fn tool_strip_rect(ctx: &egui::Context, map: Rect, tool: Tool) -> Option<Rect> {
+    let (id, guess) = if tool == Tool::Note {
+        ("note tool strip", egui::vec2(420.0, 40.0))
+    } else if tool.is_paint_mode() {
+        ("paint tool strip", egui::vec2(280.0, 40.0))
+    } else {
+        return None;
+    };
+    let size = ctx
+        .memory(|m| m.area_rect(egui::Id::new(id)))
+        .map_or(guess, |r| r.size());
+    Some(Rect::from_min_size(map.min + STRIP_OFFSET, size))
+}
+
+/// The tool strips' place: this far in from the map's top left.
+const STRIP_OFFSET: egui::Vec2 = egui::vec2(8.0, 8.0);
 
 /// World rect of level `ix`.
 pub fn level_wrect(doc: &Document, ix: LevelIx) -> WRect {

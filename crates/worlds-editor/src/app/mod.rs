@@ -1905,6 +1905,21 @@ impl EditorApp {
             top.bottom()..=bottom.top(),
         ));
         self.rules_frame();
+        // A note just added: its title takes the keyboard in the Inspector,
+        // so the Inspector comes to the front until it has (unless the
+        // note is no longer what is selected).
+        if let Some(id) = &self.st.view.focus_title {
+            if self
+                .st
+                .view
+                .selection
+                .contains(&crate::view::SelItem::Note(id.clone()))
+            {
+                show_pane(&mut self.dock, Pane::Inspector);
+            } else {
+                self.st.view.focus_title = None;
+            }
+        }
         let rev = self.commands.editing_ref().map_or(0, |e| e.rev());
         entities::refresh(&mut self.st, rev, &ctx);
         self.st.notes.rev = rev;
