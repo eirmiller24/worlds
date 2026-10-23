@@ -116,12 +116,88 @@ fn set_project_goes_after_the_layer_sets_and_a_refusal_cancels_the_call() {
         json!({ "patch": { "set_project": {} } }),
     );
     assert!(m.contains("set_project is empty"), "{m}");
+    // The grid can't change under levels; the error says why.
     let m = err(
         &mut e,
         "edit_definitions",
         json!({ "patch": { "set_project": { "grid_size": 8 } } }),
     );
-    assert!(m.contains("grid_size"), "{m}");
+    assert!(m.contains("no levels"), "{m}");
+    let m = err(
+        &mut e,
+        "edit_definitions",
+        json!({ "patch": { "set_project": { "default_level_size": [10, 0] } } }),
+    );
+    assert!(m.contains("at least 1x1"), "{m}");
+    let m = err(
+        &mut e,
+        "edit_definitions",
+        json!({ "patch": { "set_project": { "tile_size": 8 } } }),
+    );
+    assert!(m.contains("tile_size"), "{m}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("project.json")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn set_project_sets_the_export_and_new_level_settings() {
+    let (_t, dir) = mini();
+    let mut e = engine(&dir, true);
+    let before = resource(&mut e, "worlds://project.json");
+    let r = ok(
+        &mut e,
+        "edit_definitions",
+        json!({ "patch": { "set_project": { "blocking_values": ["solid"],
+            "default_level_size": [24, 12], "export_on_save": true } } }),
+    );
+    assert_eq!(
+        r["changes"],
+        json!([
+            { "change": "project", "key": "blocking_values" },
+            { "change": "project", "key": "default_level_size" },
+            { "change": "project", "key": "export_on_save" }
+        ])
+    );
+    let p = json_file(&dir, "project.json");
+    assert_eq!(p["blocking_values"], json!(["solid"]));
+    assert_eq!(p["default_level_size"], json!([24, 12]));
+    assert_eq!(p["export_on_save"], true);
+    // null leaves the key out again.
+    ok(
+        &mut e,
+        "edit_definitions",
+        json!({ "patch": { "set_project": { "default_level_size": null } } }),
+    );
+    assert!(
+        json_file(&dir, "project.json")
+            .get("default_level_size")
+            .is_none()
+    );
+    ok(&mut e, "undo", json!({}));
+    ok(&mut e, "undo", json!({}));
+    assert_eq!(resource(&mut e, "worlds://project.json"), before);
+}
+
+#[test]
+fn set_project_sets_grid_size_in_a_project_without_levels() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("empty.worlds");
+    worlds_core::save_all(&mut worlds_core::Project::new("Empty"), &dir).unwrap();
+    let mut e = engine(&dir, true);
+    let r = ok(
+        &mut e,
+        "edit_definitions",
+        json!({ "patch": { "set_project": { "grid_size": 8 } } }),
+    );
+    assert_eq!(
+        r["changes"],
+        json!([{ "change": "project", "key": "grid_size" }])
+    );
+    assert_eq!(json_file(&dir, "project.json")["grid_size"], 8);
+    ok(&mut e, "undo", json!({}));
+    assert_eq!(json_file(&dir, "project.json")["grid_size"], 16);
 }
 
 #[test]

@@ -20,7 +20,7 @@
 //!   (with the uses listed) while anything draws from it.
 //! - **Settings** (`project.json`): name, grid size (only while there are
 //!   no levels), background, collision layer and its blocking values,
-//!   seed, each one `set_project_setting`.
+//!   seed, new level size, export on save, each one `set_project_setting`.
 //!
 //! Every edit is one labelled undo entry. The pane's commands go through
 //! [`ProjectState::pending`], so a refusal (changing the kind of a layer
@@ -1782,7 +1782,73 @@ fn settings_section(
                 }
             }
             ui.end_row();
+            ui.weak("New level size")
+                .on_hover_text("Size in cells of a level made with New Level");
+            ui.horizontal(|ui| {
+                let shown = p
+                    .default_level_size
+                    .map_or(String::new(), |[w, h]| format!("{w}x{h}"));
+                if let Some(s) =
+                    text_commit(ui, bufs, "project:level_size", &shown, false, false, 60.0)
+                {
+                    match parse_level_size(&s) {
+                        Ok(size) => set(
+                            ps,
+                            "New level size".into(),
+                            vec![ProjectSetting::DefaultLevelSize(size)],
+                        ),
+                        Err(e) => ps.error = Some(format!("New level size: {e}")),
+                    }
+                }
+                if p.default_level_size.is_none() {
+                    let [w, h] = super::default_level_size(p);
+                    ui.weak(format!("most common ({w}x{h})"));
+                } else if ui
+                    .small_button("×")
+                    .on_hover_text("Back to the most common level size")
+                    .clicked()
+                {
+                    set(
+                        ps,
+                        "New level size".into(),
+                        vec![ProjectSetting::DefaultLevelSize(None)],
+                    );
+                }
+            });
+            ui.end_row();
+            ui.weak("Export on save")
+                .on_hover_text("Write export/ every time the project is saved");
+            let mut on = p.export_on_save;
+            let r = ui.checkbox(&mut on, "write export/ on every save");
+            mark(ui, "project:export_on_save", r.rect);
+            if r.changed() {
+                set(
+                    ps,
+                    format!("Export on save {}", if on { "on" } else { "off" }),
+                    vec![ProjectSetting::ExportOnSave(on)],
+                );
+            }
+            ui.end_row();
         });
+}
+
+/// `"40x22"` (or `"40 22"`, `"40,22"`) as a level size; empty is none.
+fn parse_level_size(s: &str) -> Result<Option<[u32; 2]>, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<&str> = s
+        .split(|c: char| c == 'x' || c == 'X' || c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .collect();
+    match parts[..] {
+        [w, h] => match (w.parse::<u32>(), h.parse::<u32>()) {
+            (Ok(w), Ok(h)) if w > 0 && h > 0 => Ok(Some([w, h])),
+            _ => Err(format!("{s:?} isn't a size in cells, like 40x22")),
+        },
+        _ => Err(format!("{s:?} isn't a size in cells, like 40x22")),
+    }
 }
 
 /// The collision layer: none or an int_grid layer. Choosing one also sets
@@ -2020,6 +2086,34 @@ mod tests {
         // Grid size is fixed with levels.
         d.frame(&mut st, vec![]);
         assert!(super::super::fields::marked(&d.ctx, "project:grid").is_none());
+    }
+
+    #[test]
+    fn export_on_save_and_new_level_size() {
+        let (_tmp, mut st) = state();
+        st.project.show(Section::Settings);
+        let mut d = Driver::new(pane_frame);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        let r = d.rect("project:export_on_save");
+        d.click(&mut st, r.center());
+        let q = queued(&mut st);
+        assert_eq!(
+            q,
+            vec![(
+                "Export on save on".to_string(),
+                vec![Command::SetProjectSetting {
+                    setting: ProjectSetting::ExportOnSave(true)
+                }]
+            )]
+        );
+        assert!(super::super::fields::marked(&d.ctx, "project:level_size").is_some());
+        assert_eq!(parse_level_size(" 40x22 "), Ok(Some([40, 22])));
+        assert_eq!(parse_level_size("40, 22"), Ok(Some([40, 22])));
+        assert_eq!(parse_level_size(""), Ok(None));
+        assert!(parse_level_size("0x5").is_err());
+        assert!(parse_level_size("40").is_err());
+        assert!(parse_level_size("ax5").is_err());
     }
 
     #[test]

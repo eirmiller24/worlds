@@ -962,6 +962,11 @@ pub enum ProjectSetting {
     /// see the migration rule in docs/format.md). Values that aren't the
     /// collision layer's are left to validation.
     BlockingValues(Option<Vec<Slug>>),
+    /// Size in cells of a level made with the editor's New Level command
+    /// (both at least 1; `None`: left out, the most common level size).
+    DefaultLevelSize(Option<[u32; 2]>),
+    /// Whether the editor writes `export/` on every save.
+    ExportOnSave(bool),
 }
 
 impl ProjectSetting {
@@ -973,6 +978,8 @@ impl ProjectSetting {
             ProjectSetting::Seed(_) => ProjectKey::Seed,
             ProjectSetting::GridSize(_) => ProjectKey::GridSize,
             ProjectSetting::BlockingValues(_) => ProjectKey::BlockingValues,
+            ProjectSetting::DefaultLevelSize(_) => ProjectKey::DefaultLevelSize,
+            ProjectSetting::ExportOnSave(_) => ProjectKey::ExportOnSave,
         }
     }
 }
@@ -994,6 +1001,10 @@ pub enum ProjectKey {
     GridSize,
     /// Matters only to the export.
     BlockingValues,
+    /// Matters only to the editor's New Level command.
+    DefaultLevelSize,
+    /// Matters only to saving.
+    ExportOnSave,
 }
 
 impl ProjectKey {
@@ -1006,6 +1017,8 @@ impl ProjectKey {
             ProjectKey::LevelFields => "level_fields",
             ProjectKey::GridSize => "grid_size",
             ProjectKey::BlockingValues => "blocking_values",
+            ProjectKey::DefaultLevelSize => "default_level_size",
+            ProjectKey::ExportOnSave => "export_on_save",
         }
     }
 }

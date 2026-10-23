@@ -290,8 +290,10 @@ pub(crate) fn reload(
     Ok(json!({ "rev": rev }))
 }
 
-/// `project.update { name?, bg_color?, collision_layer?, seed? }` → one
-/// `set_project_setting` per key given (a `batch` when several).
+/// `project.update { name?, bg_color?, collision_layer?, seed?, grid_size?,
+/// blocking_values?, default_level_size?, export_on_save? }` → one
+/// `set_project_setting` per key given, in that order (a `batch` when
+/// several).
 pub(crate) fn update(_project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -302,6 +304,12 @@ pub(crate) fn update(_project: &Project, method: &str, p: Value) -> Result<Write
         #[serde(default, deserialize_with = "present")]
         collision_layer: Option<Option<Slug>>,
         seed: Option<i64>,
+        grid_size: Option<u32>,
+        #[serde(default, deserialize_with = "present")]
+        blocking_values: Option<Option<Vec<Slug>>>,
+        #[serde(default, deserialize_with = "present")]
+        default_level_size: Option<Option<[u32; 2]>>,
+        export_on_save: Option<bool>,
     }
     let p: P = params::parse(method, p)?;
     let mut settings = Vec::new();
@@ -317,9 +325,22 @@ pub(crate) fn update(_project: &Project, method: &str, p: Value) -> Result<Write
     if let Some(s) = p.seed {
         settings.push(ProjectSetting::Seed(s));
     }
+    if let Some(g) = p.grid_size {
+        settings.push(ProjectSetting::GridSize(g));
+    }
+    if let Some(v) = p.blocking_values {
+        settings.push(ProjectSetting::BlockingValues(v));
+    }
+    if let Some(s) = p.default_level_size {
+        settings.push(ProjectSetting::DefaultLevelSize(s));
+    }
+    if let Some(b) = p.export_on_save {
+        settings.push(ProjectSetting::ExportOnSave(b));
+    }
     if settings.is_empty() {
         return Err(RpcError::invalid_params(format!(
-            "{method}: nothing to update; give name, bg_color, collision_layer or seed"
+            "{method}: nothing to update; give name, bg_color, collision_layer, seed, grid_size, \
+             blocking_values, default_level_size or export_on_save"
         )));
     }
     Ok(Write::cmds(

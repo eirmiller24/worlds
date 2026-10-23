@@ -52,6 +52,12 @@ pub fn describe(project: &Project, dir: &Path, rev: u64, mode: Mode) -> Value {
     out.insert("bg_color".into(), json!(project.bg_color));
     out.insert("collision_layer".into(), json!(project.collision_layer));
     out.insert("seed".into(), project.seed.into());
+    out.insert("blocking_values".into(), json!(project.blocking_values));
+    out.insert(
+        "default_level_size".into(),
+        json!(project.default_level_size),
+    );
+    out.insert("export_on_save".into(), project.export_on_save.into());
     out.insert(
         "mode".into(),
         json!({ "headless": mode.headless, "approval": mode.approval, "pending": mode.pending }),
