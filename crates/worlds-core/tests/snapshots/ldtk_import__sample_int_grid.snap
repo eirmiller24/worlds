@@ -1,0 +1,50 @@
+---
+source: crates/worlds-core/tests/ldtk_import.rs
+expression: "std::fs::read_to_string(level_dir.join(\"int_grid_layer.json\")).unwrap()"
+---
+{
+  "$schema": "../../../../schema/intgrid.json",
+  "format": 1,
+  "layer": "int_grid_layer",
+  "legend": { ".": null, "L": "lava", "l": "ladder", "w": "walls", "~": "water" },
+  "rows": [
+    ".....................................",
+    ".....................................",
+    ".....................................",
+    ".....................................",
+    ".....................................",
+    "........wwwwwwwwwwwww................",
+    ".........w......wwwwww...............",
+    "...ww....w......wwwww...wwwwwwww.....",
+    "...ww~~~~w.........ww.....wwwwwww....",
+    "...ww~~~~w.................wwwwww....",
+    "...ww~~~ww..................wwwww....",
+    "...www~wwwww....wwwwwwwwlwwwwwwww....",
+    "...www~wwwwwwwwwwwwwwwwwlwwww..www...",
+    "...www~wwww..l..wwwwwwwwlwwww.www....",
+    "...www~.www..l...www....lwwwwwwww....",
+    "..ww..~..ww..l...ww.....l.ww.www.....",
+    "...w..~......l....w.....l.ww.........",
+    "......~......l....wwwwwwwww.........w",
+    "......~......l......l...www.......www",
+    "..ww..~......l......l........wwwwwwww",
+    "..ww~~~~~~~~www.....l........wwwwwwww",
+    "..wwwww~~~~~wwwwwwwwwwwwwwwwwwwwwwwww",
+    "...wwww~ww~wwwwww.........wwwwwwwwwww",
+    "...wwww~wwwwwwwww............wwwwwwww",
+    "...wwww~wwwwwwwww....ww......wwwwwwww",
+    "..wwwww~wwwwwwww....www.......wwwwwww",
+    ".wwwwww~wwww~w.....wwwwww.....wwwwwww",
+    ".wwwwww~wwww~.....wwwww...ww...wwwwww",
+    "wwwwwww~ww..~......www....ww....wwwww",
+    "wwwwwww~w...~.............wwLLLLwwwww",
+    "wwwwww.~....~.............wwwLwwwwwww",
+    "wwwww..~....~.........wwwwwwwLwwwwwww",
+    "wwwww..~....~...........www..L..wwwww",
+    "wwwww..~....~..........www...L..wwwww",
+    "wwww...~....~.........wwwwLLLLLLwwwww",
+    "wwww~~~~~~~~~~~~~~~~~~wwwwwLLLLLwwwww",
+    "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww",
+    "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww"
+  ]
+}

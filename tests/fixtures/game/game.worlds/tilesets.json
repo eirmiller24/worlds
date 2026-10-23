@@ -1,0 +1,8 @@
+{
+  "$schema": "schema/tilesets.json",
+  "format": 1,
+  "tilesets": [
+    { "slug": "tiles", "image": "../assets/tiles.png", "tile_size": [32, 32] },
+    { "slug": "props", "image": "../assets/props.png", "tile_size": [32, 32] }
+  ]
+}

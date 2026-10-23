@@ -1,0 +1,155 @@
+{
+  "format": 1,
+  "enums": [
+    {
+      "slug": "facing",
+      "name": "facing",
+      "values": [
+        {
+          "slug": "right",
+          "name": "right"
+        },
+        {
+          "slug": "left",
+          "name": "left"
+        }
+      ]
+    },
+    {
+      "slug": "block_material",
+      "name": "block_material",
+      "values": [
+        {
+          "slug": "stone",
+          "name": "stone"
+        },
+        {
+          "slug": "iron",
+          "name": "iron"
+        },
+        {
+          "slug": "wood",
+          "name": "wood"
+        }
+      ]
+    },
+    {
+      "slug": "skin",
+      "name": "skin",
+      "values": [
+        {
+          "slug": "none",
+          "name": "none"
+        },
+        {
+          "slug": "greybox",
+          "name": "greybox"
+        },
+        {
+          "slug": "cave",
+          "name": "cave"
+        },
+        {
+          "slug": "stone",
+          "name": "stone"
+        },
+        {
+          "slug": "forest",
+          "name": "forest"
+        }
+      ]
+    },
+    {
+      "slug": "background",
+      "name": "background",
+      "values": [
+        {
+          "slug": "greybox",
+          "name": "greybox"
+        },
+        {
+          "slug": "black",
+          "name": "black"
+        },
+        {
+          "slug": "cave",
+          "name": "cave"
+        },
+        {
+          "slug": "castle",
+          "name": "castle"
+        },
+        {
+          "slug": "outside",
+          "name": "outside"
+        }
+      ]
+    },
+    {
+      "slug": "music",
+      "name": "music",
+      "values": [
+        {
+          "slug": "silence",
+          "name": "silence"
+        },
+        {
+          "slug": "title",
+          "name": "title"
+        },
+        {
+          "slug": "cave",
+          "name": "cave"
+        },
+        {
+          "slug": "boss",
+          "name": "boss"
+        }
+      ]
+    },
+    {
+      "slug": "species",
+      "name": "species",
+      "values": [
+        {
+          "slug": "green_slime",
+          "name": "green_slime"
+        },
+        {
+          "slug": "blue_slime",
+          "name": "blue_slime"
+        },
+        {
+          "slug": "bat",
+          "name": "bat"
+        },
+        {
+          "slug": "golem",
+          "name": "golem"
+        }
+      ]
+    },
+    {
+      "slug": "exit_direction",
+      "name": "exit_direction",
+      "values": [
+        {
+          "slug": "right",
+          "name": "right"
+        },
+        {
+          "slug": "left",
+          "name": "left"
+        },
+        {
+          "slug": "up",
+          "name": "up"
+        },
+        {
+          "slug": "down",
+          "name": "down"
+        }
+      ]
+    }
+  ]
+}

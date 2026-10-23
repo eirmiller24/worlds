@@ -1,0 +1,33 @@
+{
+  "$schema": "schema/enums.json",
+  "format": 1,
+  "enums": [
+    {
+      "slug": "facing",
+      "name": "Facing",
+      "values": [
+        { "slug": "right" },
+        { "slug": "left" }
+      ]
+    },
+    {
+      "slug": "exit_direction",
+      "name": "ExitDirection",
+      "values": [
+        { "slug": "right" },
+        { "slug": "left" },
+        { "slug": "up" },
+        { "slug": "down" }
+      ]
+    },
+    {
+      "slug": "music",
+      "name": "Music",
+      "values": [
+        { "slug": "cave" },
+        { "slug": "calm" },
+        { "slug": "chase" }
+      ]
+    }
+  ]
+}

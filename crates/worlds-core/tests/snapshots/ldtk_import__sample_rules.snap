@@ -1,0 +1,710 @@
+---
+source: crates/worlds-core/tests/ldtk_import.rs
+expression: "std::fs::read_to_string(out.join(\"rules/int_grid_layer_tiles.json\")).unwrap()"
+---
+{
+  "$schema": "../schema/rules.json",
+  "format": 1,
+  "layer": "int_grid_layer_tiles",
+  "groups": [
+    {
+      "slug": "wall_drop_shadows",
+      "name": "Wall drop shadows",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [10, 9] },
+      "rules": [
+        {
+          "slug": "r_103",
+          "match": {
+            "rows": [
+              "***",
+              "w.*",
+              "***"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[10, 8]] },
+          "salt": 103
+        },
+        {
+          "slug": "r_102",
+          "match": {
+            "rows": [
+              "**w**",
+              "**w**",
+              "**.**",
+              "*****",
+              "*****"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[10, 9]] },
+          "salt": 102
+        }
+      ]
+    },
+    {
+      "slug": "wall_fog",
+      "name": "Wall fog",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [11, 8] },
+      "rules": [
+        {
+          "slug": "r_100",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "www",
+              "www",
+              "wwW"
+            ]
+          },
+          "symmetry": ["mirror_x", "mirror_y"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[11, 9]] },
+          "break": true,
+          "out_of_bounds": "walls",
+          "salt": 100
+        },
+        {
+          "slug": "r_99",
+          "match": {
+            "rows": [
+              "www",
+              "www",
+              "www"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[11, 7]] },
+          "break": true,
+          "out_of_bounds": "walls",
+          "salt": 99
+        }
+      ]
+    },
+    {
+      "slug": "water",
+      "name": "Water",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [1, 10] },
+      "rules": [
+        {
+          "slug": "r_28",
+          "match": {
+            "legend": { "#": "!water" },
+            "rows": [
+              "*#*",
+              "#~#",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[0, 10], [1, 10], [2, 10]] },
+          "break": true,
+          "salt": 28
+        },
+        {
+          "slug": "r_31",
+          "match": {
+            "rows": [
+              "*.*",
+              "*~*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[0, 10], [1, 10], [2, 10]] },
+          "chance": 0.55,
+          "break": true,
+          "perlin": { "active": false, "seed": 1550742, "scale": 0.06, "octaves": 2 },
+          "salt": 31
+        },
+        {
+          "slug": "r_42",
+          "match": {
+            "rows": [
+              "*~*",
+              "*.*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[0, 11]] },
+          "break": true,
+          "salt": 42
+        },
+        {
+          "slug": "r_43",
+          "match": {
+            "legend": { "#": "!water" },
+            "rows": [
+              "***",
+              "#~#",
+              "~~~"
+            ]
+          },
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[0, 9, 3, 1]],
+            "tile_mode": "stamp",
+            "pivot": [0.5, 1.0]
+          },
+          "break": true,
+          "salt": 43
+        },
+        {
+          "slug": "r_44",
+          "match": {
+            "legend": { "#": "!water" },
+            "rows": [
+              "*~*",
+              "#~#",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[1, 8]] },
+          "chance": 0.53,
+          "break": true,
+          "salt": 44
+        },
+        {
+          "slug": "r_45",
+          "match": {
+            "legend": { "#": "!water" },
+            "rows": [
+              "*#*",
+              "*~*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[3, 10]] },
+          "break": true,
+          "salt": 45
+        },
+        {
+          "slug": "r_46",
+          "match": {
+            "rows": [
+              "~"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[2, 11]] },
+          "break": true,
+          "salt": 46
+        },
+        {
+          "slug": "r_29",
+          "match": {
+            "rows": [
+              "**~**",
+              "**~**",
+              "*~w**",
+              "*****",
+              "*****"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[3, 1]] },
+          "break": true,
+          "salt": 29
+        },
+        {
+          "slug": "r_30",
+          "match": {
+            "rows": [
+              "**~**",
+              "**~**",
+              "**w**",
+              "*****",
+              "*****"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[4, 1], [1, 4]] },
+          "break": true,
+          "salt": 30
+        }
+      ]
+    },
+    {
+      "slug": "lava",
+      "name": "Lava",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [4, 10] },
+      "rules": [
+        {
+          "slug": "r_80",
+          "match": {
+            "legend": { "^": "!lava" },
+            "rows": [
+              "L**",
+              "L^*",
+              "LL*"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[3, 8]] },
+          "salt": 80
+        },
+        {
+          "slug": "r_36",
+          "match": {
+            "legend": { "^": "!lava" },
+            "rows": [
+              "*L*",
+              "^L^",
+              "LLL"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[4, 9]] },
+          "break": true,
+          "salt": 36
+        },
+        {
+          "slug": "r_37",
+          "match": {
+            "legend": { "^": "!lava" },
+            "rows": [
+              "*^*",
+              "*L*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[4, 10]] },
+          "break": true,
+          "salt": 37
+        },
+        {
+          "slug": "r_38",
+          "match": {
+            "rows": [
+              "L"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[4, 8]] },
+          "break": true,
+          "salt": 38
+        }
+      ]
+    },
+    {
+      "slug": "misc_props",
+      "name": "Misc props",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [5, 5] },
+      "rules": [
+        {
+          "slug": "r_85",
+          "match": {
+            "rows": [
+              "*****",
+              "*****",
+              "**.**",
+              "**w**",
+              "**w**"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[4, 5]] },
+          "chance": 0.2,
+          "perlin": { "active": true, "seed": 8026598, "scale": 0.77, "octaves": 2 },
+          "salt": 85
+        },
+        {
+          "slug": "r_33",
+          "match": {
+            "rows": [
+              "*****",
+              "*...*",
+              "*...*",
+              "*...*",
+              "*www*"
+            ]
+          },
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[5, 5, 1, 2]],
+            "tile_mode": "stamp",
+            "pivot": [0.5, 0.5]
+          },
+          "chance": 0.17,
+          "perlin": { "active": true, "seed": 5431587, "scale": 0.99, "octaves": 2 },
+          "salt": 33
+        },
+        {
+          "slug": "r_49",
+          "match": {
+            "rows": [
+              "*****",
+              "*****",
+              "**.**",
+              "*www*",
+              "**w**"
+            ]
+          },
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[8, 2], [8, 3], [9, 2], [9, 3], [10, 2], [10, 3], [11, 2], [11, 3]]
+          },
+          "chance": 0.63,
+          "salt": 49
+        }
+      ]
+    },
+    {
+      "slug": "ladders",
+      "name": "Ladders",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [6, 6] },
+      "rules": [
+        {
+          "slug": "r_64",
+          "match": {
+            "rows": [
+              "*****",
+              "*****",
+              "**.**",
+              "**w**",
+              "**l**"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[6, 5]] },
+          "salt": 64
+        },
+        {
+          "slug": "r_63",
+          "match": {
+            "rows": [
+              "*.*",
+              "*w*",
+              "*l*"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[6, 6]] },
+          "break": true,
+          "salt": 63
+        },
+        {
+          "slug": "r_40",
+          "match": {
+            "rows": [
+              "***",
+              "*.*",
+              "*l*"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[6, 5]] },
+          "salt": 40
+        },
+        {
+          "slug": "r_41",
+          "match": {
+            "rows": [
+              "l"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[6, 6]] },
+          "break": true,
+          "salt": 41
+        }
+      ]
+    },
+    {
+      "slug": "thin_platforms",
+      "name": "Thin platforms",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [7, 1] },
+      "rules": [
+        {
+          "slug": "r_26",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "*.*",
+              "*ww",
+              "*Ww"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[6, 2]] },
+          "break": true,
+          "salt": 26
+        },
+        {
+          "slug": "r_66",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "*.w",
+              "*ww",
+              "*W*"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[7, 1]] },
+          "break": true,
+          "salt": 66
+        },
+        {
+          "slug": "r_84",
+          "match": {
+            "rows": [
+              "*l*",
+              "*w*",
+              "*.*"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[9, 8]] },
+          "salt": 84
+        },
+        {
+          "slug": "r_27",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "*.*",
+              "*w*",
+              "*W*"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[9, 8]] },
+          "salt": 27
+        }
+      ]
+    },
+    {
+      "slug": "vegetation",
+      "name": "Vegetation",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [6, 10] },
+      "rules": [
+        {
+          "slug": "r_32",
+          "match": {
+            "rows": [
+              "*****",
+              "***w*",
+              "**.ww",
+              "**.**",
+              "*****"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[0, 21], [0, 22], [0, 23], [0, 24]]
+          },
+          "chance": 0.3,
+          "break": true,
+          "salt": 32
+        },
+        {
+          "slug": "r_34",
+          "match": {
+            "rows": [
+              "*****",
+              "*****",
+              "**.**",
+              "**w**",
+              "**w**"
+            ]
+          },
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[5, 10], [0, 21], [0, 22], [0, 23], [0, 24]]
+          },
+          "chance": 0.3,
+          "break": true,
+          "salt": 34
+        },
+        {
+          "slug": "r_47",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "***",
+              "wW*",
+              "wW*"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[2, 2]] },
+          "chance": 0.79,
+          "break": true,
+          "salt": 47
+        },
+        {
+          "slug": "r_50",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "***",
+              "*W*",
+              "*w*"
+            ]
+          },
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[2, 3], [8, 4], [9, 4], [10, 4], [11, 4]]
+          },
+          "chance": 0.8,
+          "salt": 50
+        },
+        {
+          "slug": "r_48",
+          "match": {
+            "rows": [
+              "**w**",
+              "**w**",
+              "**.**",
+              "**.**",
+              "**.**"
+            ]
+          },
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[6, 10], [7, 10], [3, 12], [4, 12]]
+          },
+          "chance": 0.42,
+          "salt": 48
+        }
+      ]
+    },
+    {
+      "slug": "walls",
+      "name": "Walls",
+      "icon": { "tileset": "cavernas_by_adam_saltsman", "tile": [0, 1] },
+      "rules": [
+        {
+          "slug": "r_67",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "*****",
+              "*w***",
+              "WwW**",
+              "*****",
+              "*****"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[2, 2]] },
+          "salt": 67
+        },
+        {
+          "slug": "r_51",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "*W*",
+              "Ww*",
+              "***"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[0, 1]] },
+          "break": true,
+          "salt": 51
+        },
+        {
+          "slug": "r_52",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "*W*",
+              "*w*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[1, 4]] },
+          "chance": 0.4,
+          "break": true,
+          "salt": 52
+        },
+        {
+          "slug": "r_53",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "***",
+              "Ww*",
+              "*W*"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[0, 3]] },
+          "break": true,
+          "salt": 53
+        },
+        {
+          "slug": "r_54",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "***",
+              "Ww*",
+              "***"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[0, 2]] },
+          "break": true,
+          "salt": 54
+        },
+        {
+          "slug": "r_55",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "*W*",
+              "*w*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[1, 1]] },
+          "break": true,
+          "salt": 55
+        },
+        {
+          "slug": "r_56",
+          "match": {
+            "legend": { "W": "!walls" },
+            "rows": [
+              "***",
+              "*w*",
+              "*W*"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[1, 3]] },
+          "break": true,
+          "salt": 56
+        },
+        {
+          "slug": "r_57",
+          "match": {
+            "rows": [
+              "w"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[1, 2]] },
+          "chance": 0.83,
+          "break": true,
+          "modulo": { "x": 2, "y": 1 },
+          "checker": "horizontal",
+          "perlin": { "active": false, "seed": 1787092, "scale": 0.43, "octaves": 2 },
+          "salt": 57
+        },
+        {
+          "slug": "r_58",
+          "match": {
+            "rows": [
+              "w"
+            ]
+          },
+          "out": {
+            "tileset": "cavernas_by_adam_saltsman",
+            "tiles": [[1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0]]
+          },
+          "chance": 0.41,
+          "break": true,
+          "perlin": { "active": false, "seed": 9436988, "scale": 0.29, "octaves": 3 },
+          "salt": 58
+        },
+        {
+          "slug": "r_59",
+          "match": {
+            "rows": [
+              "w"
+            ]
+          },
+          "out": { "tileset": "cavernas_by_adam_saltsman", "tiles": [[0, 0]] },
+          "break": true,
+          "salt": 59
+        }
+      ]
+    }
+  ]
+}

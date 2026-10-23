@@ -1,0 +1,5 @@
+{ "$schema": "schema/tilesets.json", "format": 1,
+  "tilesets": [
+    { "slug": "castle_main", "image": "art/castle_main.png", "tile_size": [16, 16] },
+    { "slug": "ssw_set5", "image": "art/ssw_set5.png", "tile_size": [32, 32], "spacing": 1, "padding": 2 }
+  ] }

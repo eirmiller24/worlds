@@ -1,0 +1,6 @@
+{ "$schema": "schema/project.json", "format": 1,
+  "name": "Mini", "grid_size": 16, "seed": 42, "bg_color": "#1a1c2c", "collision_layer": "collision",
+  "level_fields": [
+    { "slug": "biome", "type": "enum", "enum": "biome", "array": true, "default": [] },
+    { "slug": "music", "type": "string", "nullable": true }
+  ] }

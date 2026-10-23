@@ -1,0 +1,66 @@
+---
+source: crates/worlds-cli/tests/bake.rs
+expression: world
+---
+{
+  "format": 1,
+  "name": "sample",
+  "grid_size": 8,
+  "bg_color": "#000000",
+  "files": { "enums": "enums.json" },
+  "entity_types": [],
+  "worlds": [
+    {
+      "slug": "main",
+      "notes": [],
+      "levels": [
+        {
+          "slug": "antique_manor",
+          "id": "levelaaaaa",
+          "name": "Antique_manor",
+          "file": "levels/antique_manor.json",
+          "rect": [512, 0, 256, 256],
+          "depth": 0,
+          "touching": [
+            { "level": "frozen_caves", "edge": "left", "span": [0, 256] },
+            { "level": "only_base_rules", "edge": "right", "span": [0, 256] }
+          ]
+        },
+        {
+          "slug": "frozen_caves",
+          "id": "levelaaaab",
+          "name": "Frozen_caves",
+          "file": "levels/frozen_caves.json",
+          "rect": [256, 0, 256, 256],
+          "depth": 0,
+          "touching": [
+            { "level": "antique_manor", "edge": "right", "span": [0, 256] },
+            { "level": "green_hills", "edge": "left", "span": [0, 256] }
+          ]
+        },
+        {
+          "slug": "green_hills",
+          "id": "levelaaaac",
+          "name": "Green_hills",
+          "file": "levels/green_hills.json",
+          "rect": [0, 0, 256, 256],
+          "depth": 0,
+          "touching": [
+            { "level": "frozen_caves", "edge": "right", "span": [0, 256] }
+          ]
+        },
+        {
+          "slug": "only_base_rules",
+          "id": "levelaaaad",
+          "name": "Only_base_rules",
+          "file": "levels/only_base_rules.json",
+          "rect": [768, 0, 256, 256],
+          "depth": 0,
+          "touching": [
+            { "level": "antique_manor", "edge": "left", "span": [0, 256] }
+          ]
+        }
+      ]
+    }
+  ]
+}

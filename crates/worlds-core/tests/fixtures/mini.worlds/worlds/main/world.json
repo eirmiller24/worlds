@@ -1,0 +1,9 @@
+{ "$schema": "../../schema/world.json", "format": 1,
+  "slug": "main", "name": "Main",
+  "notes": [
+    { "id": "guidestem2", "kind": "guide", "title": "Wall line", "locked": true,
+      "points": [[0, 0], [0, 480], [320, 480]], "tags": ["layout"] },
+    { "id": "pinstatue2", "kind": "pin", "title": "Old statue", "icon": "statue", "label": "Statue",
+      "px": [96, 64], "export": true, "tags": ["landmark"], "links": ["level:crevasse"] },
+    { "id": "regioneast", "kind": "region", "title": "Forest", "rect": [0, 0, 640, 480], "color": "#40c04080" }
+  ] }

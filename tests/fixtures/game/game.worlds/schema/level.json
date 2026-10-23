@@ -1,0 +1,144 @@
+{
+  "$defs": {
+    "Color": {
+      "description": "Hex color, #rrggbb or #rrggbbaa.",
+      "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "type": "string"
+    },
+    "Id": {
+      "description": "Instance id: 10 characters from a-z and 2-7.",
+      "pattern": "^[a-z2-7]{10}$",
+      "type": "string"
+    },
+    "LayerState": {
+      "additionalProperties": false,
+      "description": "Per-level rule state for one `auto` layer, stored in `level.json` under\n`layers`. A layer without an entry uses the defaults.",
+      "properties": {
+        "optional_groups": {
+          "description": "`optional` rule groups switched on in this level.",
+          "items": {
+            "$ref": "#/$defs/Slug"
+          },
+          "type": "array"
+        },
+        "seed": {
+          "description": "Extra seed for this layer's rules in this level. Default 0. The rule\nhash already differs per project, level, layer and rule; change this\nonly to re-roll the layer's random choices in this level.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "tilesets": {
+          "additionalProperties": false,
+          "description": "Tileset substitutions in this level: every rule output drawing from\nthe key tileset draws from the value tileset instead, same\n`[col, row]` (LDtk overrideTilesetUid).",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "$ref": "#/$defs/Slug"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A level: `level.json` plus one file per stored layer, `entities.json` and `notes.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/level.json.",
+      "type": "string"
+    },
+    "bg_color": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Color"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "depth": {
+      "description": "Draw order in the world view; higher is in front.",
+      "format": "int32",
+      "type": "integer"
+    },
+    "fields": {
+      "additionalProperties": false,
+      "description": "Values for the project's `level_fields`, by field slug.",
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": true
+      },
+      "type": "object"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "id": {
+      "$ref": "#/$defs/Id"
+    },
+    "layers": {
+      "additionalProperties": false,
+      "description": "Per-layer rule state by `auto` layer slug. A layer without an entry\nhas seed 0, no optional groups and no tileset substitutions.",
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/LayerState"
+        }
+      },
+      "type": "object"
+    },
+    "name": {
+      "type": "string"
+    },
+    "size": {
+      "description": "`[width, height]` in cells of the project grid. Layers with their own\ngrid size cover the same pixels.",
+      "items": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "slug": {
+      "$ref": "#/$defs/Slug",
+      "description": "Same as the directory name; also the Godot room name."
+    },
+    "tags": {
+      "description": "Free tags (`knowledge`), the same vocabulary as annotation tags.\nNon-empty, no repeats (validation).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "world_px": {
+      "description": "Top-left corner in world pixels.",
+      "items": {
+        "format": "int64",
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "id",
+    "slug",
+    "name",
+    "world_px",
+    "size",
+    "depth"
+  ],
+  "title": "Worlds level file",
+  "type": "object"
+}

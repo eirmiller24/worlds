@@ -1,0 +1,38 @@
+---
+source: crates/worlds-core/tests/text.rs
+expression: "render_level(&p, \"crevasse\", None).unwrap()"
+---
+level crevasse "Crevasse" world main id crevasse22
+size 20x5 cells of 16 px, world_px [0, 0], depth 0, bg #202020
+fields: biome = ["flooded"], music = null
+rule state main_tiling: seed 8123 optional_groups [flooded_decor]
+
+int_grid collision (20x5 cells of 16 px)
+legend: . empty, # solid, f fortified, o oneway, ~ water, L ramp_l
+  0         1
+  01234567890123456789
+0 ####################
+1 #..................#
+2 #.......oooo.......#
+3 #L..~~~.......ff####
+4 ####################
+
+auto main_tiling: generated from collision by rules/main_tiling.json (not shown)
+
+tiles decor_back (40x10 cells of 8 px): 3 tiles
+  [4, 1] ssw_set5 [0, 3] alpha 0.5
+  [4, 2] castle_main [5, 1]
+  [5, 2] castle_main [6, 1] flip x
+
+entities: 2
+  doorcrev22 locked_door in objects at [18, 3] size [1, 2] fields {"exit_to": "doorshaft2", "facing": "right", "needs_item": "brass_key", "script": "scripts/door.gd", "speed": 2, "sprite": {"tile": [4, 4], "tileset": "castle_main"}, "tint": "#ff8080", "waypoints": [[1, 1], [2, 1]]}
+  btncrev222 floor_button in objects at [12, 3] offset_px [0, -2] fields {"channel": 3, "latching": true, "target": "doorcrev22"}
+
+notes: 2
+  notecrev22 note open at [160, 48] title "Widen the gap" tags ["todo"] links ["entity:btncrev222", "note:pinstatue2", "https://example.com"] body "Jump is **too easy**.\nTry 5 cells."
+  pathcrev22 path done points [[16, 64], [300, 64]]
+
+world notes over this level: 2 (world pixels)
+  pinstatue2 pin open at [96, 64] icon "statue" label "Statue" title "Old statue" tags ["landmark"] links ["level:crevasse"] export
+  regioneast region open rect [0, 0, 640, 480] title "Forest"
+guides over this level: 1 (list_notes kind guide)

@@ -1,0 +1,17 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "push_block",
+  "name": "PushBlock",
+  "tags": ["object"],
+  "size": [1, 1],
+  "color": "#B08060",
+  "fields": [
+    {
+      "slug": "heavy",
+      "type": "bool",
+      "default": false,
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

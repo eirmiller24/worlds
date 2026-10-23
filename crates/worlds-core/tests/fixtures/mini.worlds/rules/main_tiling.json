@@ -1,0 +1,40 @@
+{ "$schema": "../schema/rules.json", "format": 1,
+  "layer": "main_tiling",
+  "stamps": [
+    { "slug": "pillar", "tileset": "ssw_set5", "rect": [12, 4, 2, 3], "pivot": [0.5, 1.0], "occupies": true }
+  ],
+  "groups": [
+    { "slug": "walls", "name": "Walls", "color": "#ff8000", "rules": [
+      { "slug": "wall_top_edge",
+        "match": { "grid": "collision", "legend": { "#": "solid", ".": "!solid" },
+                   "rows": [ "***", ".#.", "###" ] },
+        "symmetry": [ "mirror_x" ],
+        "out": { "tileset": "castle_main", "tiles": [ [15, 0], [16, 0], [17, 0], { "rect": [18, 0, 1, 1], "weight": 3 } ] },
+        "break": true, "salt": 1101 },
+      { "slug": "wall_fill",
+        "match": { "rows": [ "+" ] },
+        "out": { "tileset": "castle_main", "tiles": [ [1, 1], { "stack": [[5, 0], [4, 0], [4, 0]] } ] },
+        "out_of_bounds": "solid" },
+      { "slug": "any_wall_group",
+        "match": { "legend": { "n": "!walls" }, "rows": [ "n", "w", "*" ] },
+        "out": { "tileset": "castle_main", "tiles": [ [2, 0, 2, 1] ], "tile_mode": "stamp", "pivot": [0.0, 1.0] },
+        "out_of_bounds": ".", "salt": -7 }
+    ] },
+    { "slug": "flooded_decor", "mode": "optional",
+      "requires_level_field": { "field": "biome", "values": ["flooded"], "mode": "any" },
+      "rules": [
+      { "slug": "drips", "active": false,
+        "match": { "grid": "collision", "rows": [ ".", "~", "*" ] },
+        "symmetry": [ "mirror_x", "mirror_y", "rotate" ],
+        "out": { "tileset": "ssw_set5", "tiles": [ [0, 0], [1, 0] ], "alpha": 0.5, "offset_px": [0, -4],
+                 "random_offset_px": { "x": [-2, 2], "y": [0, 1] } },
+        "chance": 0.25, "modulo": { "x": 3, "y": 1, "x_offset": 1 }, "checker": "horizontal",
+        "perlin": { "active": true, "seed": 9, "scale": 0.2, "octaves": 2 }, "salt": 1201 }
+    ] },
+    { "slug": "pillars", "mode": "optional", "icon": { "tileset": "ssw_set5", "tile": [12, 4] }, "rules": [
+      { "slug": "pillar_on_floor",
+        "match": { "rows": [ "...", "...", "+++" ] },
+        "out": { "stamp": "pillar", "avoid_overlap": true } }
+    ] },
+    { "slug": "retired", "mode": "off", "rules": [] }
+  ] }

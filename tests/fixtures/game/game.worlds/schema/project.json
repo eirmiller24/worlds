@@ -1,0 +1,808 @@
+{
+  "$defs": {
+    "Color": {
+      "description": "Hex color, #rrggbb or #rrggbbaa.",
+      "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "type": "string"
+    },
+    "FieldDef": {
+      "description": "A typed field. Options after `default` depend on `type`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max": {
+              "description": "int and float: inclusive upper bound.",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "min": {
+              "description": "int and float: inclusive lower bound.",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "int"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "int",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max": {
+              "description": "int and float: inclusive upper bound.",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "min": {
+              "description": "int and float: inclusive lower bound.",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "float"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "float",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "bool"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "bool",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "regex": {
+              "description": "string and text: a regex the whole value must match (Rust `regex`\nsyntax; `(?i)` ignores case).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "string"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "string",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "regex": {
+              "description": "string and text: a regex the whole value must match (Rust `regex`\nsyntax; `(?i)` ignores case).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "text"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "text",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "color"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "color",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "enum": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Slug"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "enum: a project enum slug. Give this or `values`."
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "enum"
+            }
+          },
+          "required": [
+            "slug",
+            "type",
+            "enum"
+          ],
+          "title": "enum",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "enum"
+            },
+            "values": {
+              "description": "enum: inline allowed values. Give this or `enum`.",
+              "items": {
+                "$ref": "#/$defs/Slug"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "slug",
+            "type",
+            "values"
+          ],
+          "title": "enum",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "point"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "point",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_tags": {
+              "description": "entity_ref: allowed if the target type has any of these tags.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "allowed_types": {
+              "description": "entity_ref: allowed entity types.",
+              "items": {
+                "$ref": "#/$defs/Slug"
+              },
+              "type": "array"
+            },
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "cross_level": {
+              "description": "entity_ref: the target may be in another level.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "entity_ref"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "entity_ref",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "extensions": {
+              "description": "path: allowed file extensions without the dot.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "path"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "path",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "tileset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Slug"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "tile: restrict to this tileset."
+            },
+            "type": {
+              "const": "tile"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "tile",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "array": {
+              "description": "The value is an array of `type`.",
+              "type": "boolean"
+            },
+            "default": {
+              "description": "Default value, same shape as an instance value."
+            },
+            "display": {
+              "$ref": "#/$defs/FieldDisplay"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nullable": {
+              "description": "`null` is a valid value.",
+              "type": "boolean"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "type": {
+              "const": "json"
+            }
+          },
+          "required": [
+            "slug",
+            "type"
+          ],
+          "title": "json",
+          "type": "object"
+        }
+      ]
+    },
+    "FieldDisplay": {
+      "additionalProperties": false,
+      "description": "Where the editor shows a field's value.",
+      "properties": {
+        "arrow": {
+          "description": "entity_ref and point: draw an arrow to the target.",
+          "type": "boolean"
+        },
+        "canvas": {
+          "description": "Show the value next to the entity on the canvas.",
+          "type": "boolean"
+        },
+        "world": {
+          "description": "Show in the zoomed-out world view.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "TypeTag": {
+      "enum": [
+        "int",
+        "float",
+        "bool",
+        "string",
+        "text",
+        "color",
+        "enum",
+        "point",
+        "entity_ref",
+        "path",
+        "tile",
+        "json"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A whole project. The serialized part is `project.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/project.json.",
+      "type": "string"
+    },
+    "bg_color": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Color"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Default level background."
+    },
+    "blocking_values": {
+      "description": "Values of the collision layer that block movement. The export's\n`open_edges` are the border cells holding anything else (empty\nincluded). `None` (left out of the file) is not the same as `[]`:\nloading fills an absent list from [`DEFAULT_BLOCKING_VALUES`] (see\n[`Project::default_blocking_values`]); `[]` means nothing blocks.",
+      "items": {
+        "$ref": "#/$defs/Slug"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "collision_layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Slug"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The `int_grid` layer whose values are the collision kinds. The game\nexport reads level `open_edges` from it; unset, there are none."
+    },
+    "default_level_size": {
+      "description": "Size in cells of a level made with the editor's New Level command.\nUnset, the editor uses the most common level size in the project.",
+      "items": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "export_on_save": {
+      "description": "The editor writes `export/` on every save (as `worlds-cli bake` does).",
+      "type": "boolean"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "grid_size": {
+      "description": "Cell size in pixels. Level sizes and cell coordinates are in these cells.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "level_fields": {
+      "description": "Fields every level has (values in each `level.json`).",
+      "items": {
+        "$ref": "#/$defs/FieldDef"
+      },
+      "type": "array"
+    },
+    "name": {
+      "type": "string"
+    },
+    "seed": {
+      "description": "Project-wide seed mixed into every rule's random choices.",
+      "format": "int64",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "name",
+    "grid_size",
+    "seed"
+  ],
+  "title": "Worlds project file",
+  "type": "object"
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../../schema/entities.json",
+  "format": 1,
+  "layers": [
+    {
+      "layer": "entities",
+      "entities": [
+        { "id": "leveraaaa2", "type": "lever", "cell": [9, 7] },
+        { "id": "pickupbbb2", "type": "pickup", "cell": [16, 11] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+{ "mcpServers": { "worlds": {
+  "command": "/path/to/worlds/target/release/worlds-mcp",
+  "args": ["--project", "mygame.worlds"] } } }

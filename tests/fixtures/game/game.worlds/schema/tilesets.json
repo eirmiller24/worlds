@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "TilesetDef": {
+      "additionalProperties": false,
+      "description": "One entry of `tilesets.json`. Image dimensions are read from the PNG, not stored.",
+      "properties": {
+        "image": {
+          "description": "Path to the PNG, relative to the project directory, `/`-separated.",
+          "type": "string"
+        },
+        "padding": {
+          "description": "Pixels between the image edge and the first tile. Default 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug"
+        },
+        "spacing": {
+          "description": "Pixels between adjacent tiles. Default 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tile_size": {
+          "description": "`[width, height]` of one tile in pixels. Stamp layouts step by this\nsize; it may differ from any layer's grid.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "slug",
+        "image",
+        "tile_size"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `tilesets.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/tilesets.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "tilesets": {
+      "items": {
+        "$ref": "#/$defs/TilesetDef"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "tilesets"
+  ],
+  "title": "Worlds tilesets file",
+  "type": "object"
+}

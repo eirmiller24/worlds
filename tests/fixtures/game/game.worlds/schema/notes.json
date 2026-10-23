@@ -1,0 +1,498 @@
+{
+  "$defs": {
+    "Annotation": {
+      "description": "An annotation. Geometry keys depend on `kind`; coordinates are pixels.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Markdown.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "export": {
+              "description": "Included in `export/` for the game.",
+              "type": "boolean"
+            },
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "note"
+            },
+            "links": {
+              "description": "`level:<slug>`, `entity:<id>`, `note:<id>`, or a URL.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "locked": {
+              "description": "Not movable in the editor.",
+              "type": "boolean"
+            },
+            "px": {
+              "description": "note, pin (required): the point, in pixels.",
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/NoteStatus"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "px"
+          ],
+          "title": "note",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Markdown.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "export": {
+              "description": "Included in `export/` for the game.",
+              "type": "boolean"
+            },
+            "icon": {
+              "description": "pin: icon name.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "pin"
+            },
+            "label": {
+              "description": "pin: short label drawn next to the icon.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "links": {
+              "description": "`level:<slug>`, `entity:<id>`, `note:<id>`, or a URL.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "locked": {
+              "description": "Not movable in the editor.",
+              "type": "boolean"
+            },
+            "px": {
+              "description": "note, pin (required): the point, in pixels.",
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/NoteStatus"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "px"
+          ],
+          "title": "pin",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Markdown.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "export": {
+              "description": "Included in `export/` for the game.",
+              "type": "boolean"
+            },
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "path"
+            },
+            "links": {
+              "description": "`level:<slug>`, `entity:<id>`, `note:<id>`, or a URL.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "locked": {
+              "description": "Not movable in the editor.",
+              "type": "boolean"
+            },
+            "points": {
+              "description": "path, guide (2+), region polygon (3+): `[[x, y], ...]` in pixels.",
+              "items": {
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "status": {
+              "$ref": "#/$defs/NoteStatus"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "points"
+          ],
+          "title": "path",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Markdown.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "export": {
+              "description": "Included in `export/` for the game.",
+              "type": "boolean"
+            },
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "region"
+            },
+            "links": {
+              "description": "`level:<slug>`, `entity:<id>`, `note:<id>`, or a URL.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "locked": {
+              "description": "Not movable in the editor.",
+              "type": "boolean"
+            },
+            "points": {
+              "description": "path, guide (2+), region polygon (3+): `[[x, y], ...]` in pixels.",
+              "items": {
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "rect": {
+              "description": "region: `[x, y, width, height]` instead of `points`.",
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/NoteStatus"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind"
+          ],
+          "title": "region",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Markdown.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "closed": {
+              "description": "guide: join the last point back to the first.",
+              "type": "boolean"
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "export": {
+              "description": "Included in `export/` for the game.",
+              "type": "boolean"
+            },
+            "group": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Slug"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "guide: the `world.json` guide group it belongs to."
+            },
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "guide"
+            },
+            "links": {
+              "description": "`level:<slug>`, `entity:<id>`, `note:<id>`, or a URL.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "locked": {
+              "description": "Not movable in the editor.",
+              "type": "boolean"
+            },
+            "points": {
+              "description": "path, guide (2+), region polygon (3+): `[[x, y], ...]` in pixels.",
+              "items": {
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "status": {
+              "$ref": "#/$defs/NoteStatus"
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "points"
+          ],
+          "title": "guide",
+          "type": "object"
+        }
+      ]
+    },
+    "Color": {
+      "description": "Hex color, #rrggbb or #rrggbbaa.",
+      "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "type": "string"
+    },
+    "Id": {
+      "description": "Instance id: 10 characters from a-z and 2-7.",
+      "pattern": "^[a-z2-7]{10}$",
+      "type": "string"
+    },
+    "KindTag": {
+      "enum": [
+        "note",
+        "pin",
+        "path",
+        "region",
+        "guide"
+      ],
+      "type": "string"
+    },
+    "NoteStatus": {
+      "enum": [
+        "open",
+        "done"
+      ],
+      "type": "string"
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of a level's `notes.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/notes.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "notes": {
+      "items": {
+        "$ref": "#/$defs/Annotation"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "notes"
+  ],
+  "title": "Worlds notes file",
+  "type": "object"
+}

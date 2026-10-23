@@ -1,0 +1,3 @@
+{ "$schema": "../../../../schema/entities.json", "format": 1,
+  "layers": [ { "layer": "objects", "entities": [
+    { "id": "doorshaft2", "type": "locked_door", "cell": [2, 7] } ] } ] }

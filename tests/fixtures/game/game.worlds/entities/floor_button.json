@@ -1,0 +1,26 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "floor_button",
+  "name": "FloorButton",
+  "tags": ["object", "puzzle"],
+  "size": [1, 1],
+  "pivot": [0.5, 1.0],
+  "color": "#E6C84A",
+  "fields": [
+    {
+      "slug": "channel",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 31,
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "latching",
+      "type": "bool",
+      "default": false,
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

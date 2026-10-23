@@ -1,0 +1,60 @@
+[workspace]
+resolver = "3"
+members = ["crates/worlds-core", "crates/worlds-rules", "crates/worlds-cli", "crates/worlds-editor", "crates/worlds-server", "crates/worlds-mcp"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace.dependencies]
+worlds-core = { path = "crates/worlds-core" }
+worlds-rules = { path = "crates/worlds-rules" }
+worlds-server = { path = "crates/worlds-server" }
+worlds-mcp = { path = "crates/worlds-mcp" }
+serde = { version = "1.0", features = ["derive"] }
+# float_roundtrip: rule floats must parse to the exact f64 LDtk used (docs/ldtk_parity.md).
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+# Not in the original list: gives load errors a JSON path ("layers[2].values[0].glyph").
+serde_path_to_error = "0.1"
+schemars = "1.2"
+thiserror = "2.0"
+# Field `regex` checks in validate: `(?i)` needs unicode-case; no perf features needed.
+regex = { version = "1.12", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
+# Parses a field `regex` on its own so whole-value anchoring is structural (see validate.rs).
+regex-syntax = { version = "0.8", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
+anyhow = "1.0"
+rand = "0.10"
+# Autosave manifests: a stable 64-bit content hash (not DefaultHasher).
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+clap = { version = "4.6", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+insta = "1.49"
+tempfile = "3.27"
+# Dev only: checks the generated JSON Schemas against documents in tests.
+jsonschema = { version = "0.46", default-features = false }
+# Editor (worlds-editor). egui stack pinned to 0.36: egui_dock 0.21 is built on egui 0.36.
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+egui_dock = { version = "0.21", features = ["serde"] }
+wgpu = "30"
+bytemuck = { version = "1.25", features = ["derive"] }
+pollster = "0.4"
+# 9.0 is only out as a release candidate.
+notify = "9.0.0-rc.6"
+rfd = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# The editor leaves with _exit after its shutdown, skipping toolkit teardown (signals.rs).
+libc = "0.2"
+# Live API server (worlds-server): JSON-RPC over a localhost WebSocket.
+tokio = { version = "1.54", features = ["rt-multi-thread", "net", "sync", "time", "macros", "signal", "io-util"] }
+tokio-tungstenite = "0.30"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+base64 = "0.23"
+# Sync WebSocket client of worlds-mcp (same version tokio-tungstenite uses).
+tungstenite = "0.30"
+# MCP server (worlds-mcp): stdio transport, hand-written ServerHandler.
+rmcp = { version = "3.6", default-features = false, features = ["server", "transport-io", "macros", "base64"] }

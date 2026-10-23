@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "Flip": {
+      "description": "How a tile is turned. `t` (transpose: swap the tile's x and y, a mirror\nabout its top-left to bottom-right diagonal) applies first, then `x`\nmirrors left-right and `y` top-bottom, all inside the tile's own square.\nSo 90 degrees clockwise is `xt`, 180 is `xy`, 270 clockwise is `yt`.\nLeft out: not turned.",
+      "enum": [
+        "x",
+        "y",
+        "xy",
+        "t",
+        "xt",
+        "yt",
+        "xyt"
+      ],
+      "type": "string"
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "TilePlacement": {
+      "additionalProperties": false,
+      "description": "One placed tile.",
+      "properties": {
+        "alpha": {
+          "description": "Opacity, 0 to 1. Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "cell": {
+          "description": "`[x, y]` cell of the layer's grid. The tile's top-left corner sits on\nthe cell's top-left corner.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "flip": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Flip"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tile": {
+          "description": "`[column, row]` in the tileset atlas.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "tileset": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "cell",
+        "tileset",
+        "tile"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A Tiles layer's content in one level: `<layer>.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/tiles.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "layer": {
+      "$ref": "#/$defs/Slug",
+      "description": "Layer slug."
+    },
+    "tiles": {
+      "description": "Placements, kept sorted by row then column. Several placements in one\ncell stack in list order.",
+      "items": {
+        "$ref": "#/$defs/TilePlacement"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "layer",
+    "tiles"
+  ],
+  "title": "Worlds tiles file",
+  "type": "object"
+}

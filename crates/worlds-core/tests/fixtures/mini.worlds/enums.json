@@ -1,0 +1,7 @@
+{ "$schema": "schema/enums.json", "format": 1,
+  "enums": [
+    { "slug": "biome", "values": [ { "slug": "dry" }, { "slug": "flooded", "color": "#3060c0" } ] },
+    { "slug": "facing", "name": "Facing", "values": [
+      { "slug": "left", "name": "Left", "icon": { "tileset": "castle_main", "tile": [0, 9] } },
+      { "slug": "right", "name": "Right" } ] }
+  ] }

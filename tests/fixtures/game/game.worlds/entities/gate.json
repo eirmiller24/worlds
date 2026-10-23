@@ -1,0 +1,20 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "gate",
+  "name": "Gate",
+  "tags": ["object", "puzzle"],
+  "size": [1, 3],
+  "pivot": [0.5, 1.0],
+  "color": "#909090",
+  "fields": [
+    {
+      "slug": "channel",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 31,
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

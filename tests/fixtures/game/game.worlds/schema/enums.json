@@ -1,0 +1,131 @@
+{
+  "$defs": {
+    "Color": {
+      "description": "Hex color, #rrggbb or #rrggbbaa.",
+      "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "type": "string"
+    },
+    "EnumDef": {
+      "additionalProperties": false,
+      "description": "One entry of `enums.json`.",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/EnumValue"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "slug",
+        "values"
+      ],
+      "type": "object"
+    },
+    "EnumValue": {
+      "additionalProperties": false,
+      "description": "One value of an enum.",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TileRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "TileRef": {
+      "additionalProperties": false,
+      "description": "One tile of a tileset, addressed by atlas column and row.",
+      "properties": {
+        "tile": {
+          "description": "`[column, row]` in the tileset atlas.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "tileset": {
+          "$ref": "#/$defs/Slug",
+          "description": "Tileset slug."
+        }
+      },
+      "required": [
+        "tileset",
+        "tile"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `enums.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/enums.json.",
+      "type": "string"
+    },
+    "enums": {
+      "items": {
+        "$ref": "#/$defs/EnumDef"
+      },
+      "type": "array"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "enums"
+  ],
+  "title": "Worlds enums file",
+  "type": "object"
+}

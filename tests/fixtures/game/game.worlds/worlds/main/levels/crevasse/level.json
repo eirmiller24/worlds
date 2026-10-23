@@ -1,0 +1,11 @@
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "crevasse22",
+  "slug": "crevasse",
+  "name": "Crevasse",
+  "world_px": [0, -1920],
+  "size": [64, 28],
+  "depth": 0,
+  "fields": { "display_name": "The Crevasse", "music": "cave" }
+}

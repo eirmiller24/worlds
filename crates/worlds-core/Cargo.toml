@@ -1,0 +1,24 @@
+[package]
+name = "worlds-core"
+description = "Document model, file format, validation and JSON Schemas for Worlds projects."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+regex.workspace = true
+regex-syntax.workspace = true
+rand.workspace = true
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+jsonschema.workspace = true
+tempfile.workspace = true
+proptest = { version = "1.12", default-features = false, features = ["std"] }

@@ -1,0 +1,6 @@
+{
+  "$schema": "../../schema/world.json",
+  "format": 1,
+  "slug": "main",
+  "name": "Main"
+}

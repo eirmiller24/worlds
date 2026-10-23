@@ -1,0 +1,124 @@
+{
+  "$defs": {
+    "EntitiesLayer": {
+      "additionalProperties": false,
+      "description": "All entities of one entities layer in one level.",
+      "properties": {
+        "entities": {
+          "description": "Instances, in insertion order (the order they were placed in).",
+          "items": {
+            "$ref": "#/$defs/EntityInstance"
+          },
+          "type": "array"
+        },
+        "layer": {
+          "$ref": "#/$defs/Slug",
+          "description": "Layer slug (an `entities` layer)."
+        }
+      },
+      "required": [
+        "layer",
+        "entities"
+      ],
+      "type": "object"
+    },
+    "EntityInstance": {
+      "additionalProperties": false,
+      "description": "One placed entity.",
+      "properties": {
+        "cell": {
+          "description": "`[x, y]` cell (of the entities layer's grid) that holds the entity's\npivot. The pivot point sits at the same relative spot in this cell as\nin the entity box, so pixel position is\n`(cell + def.pivot) * layer grid + offset_px`.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "fields": {
+          "additionalProperties": false,
+          "description": "Field values by field slug. Missing fields take the definition's default.",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": true
+          },
+          "type": "object"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "offset_px": {
+          "description": "Extra pixel offset for off-grid placement. Default `[0, 0]`.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "size": {
+          "description": "`[width, height]` in cells of the project grid when resized; omitted\nmeans the definition's size.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/$defs/Slug",
+          "description": "Entity type slug."
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "cell"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "description": "Instance id: 10 characters from a-z and 2-7.",
+      "pattern": "^[a-z2-7]{10}$",
+      "type": "string"
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of a level's `entities.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/entities.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "layers": {
+      "description": "One entry per entities layer that has instances in this level.",
+      "items": {
+        "$ref": "#/$defs/EntitiesLayer"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "layers"
+  ],
+  "title": "Worlds entities file",
+  "type": "object"
+}

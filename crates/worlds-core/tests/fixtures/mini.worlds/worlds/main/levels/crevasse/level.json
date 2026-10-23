@@ -1,0 +1,7 @@
+{ "$schema": "../../../../schema/level.json", "format": 1,
+  "id": "crevasse22", "slug": "crevasse", "name": "Crevasse",
+  "world_px": [0, 0], "size": [20, 5], "depth": 0, "bg_color": "#202020",
+  "fields": { "biome": ["flooded"], "music": null },
+  "layers": {
+    "main_tiling": { "seed": 8123, "optional_groups": ["flooded_decor"] }
+  } }

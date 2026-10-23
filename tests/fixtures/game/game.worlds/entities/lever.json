@@ -1,0 +1,26 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "lever",
+  "name": "Lever",
+  "tags": ["object", "puzzle"],
+  "size": [1, 1],
+  "pivot": [0.5, 1.0],
+  "color": "#8080FF",
+  "fields": [
+    {
+      "slug": "channel",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 31,
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "on",
+      "type": "bool",
+      "default": false,
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

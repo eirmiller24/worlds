@@ -1,0 +1,33 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "room_exit",
+  "name": "RoomExit",
+  "tags": ["room"],
+  "size": [1, 3],
+  "resizable": [true, true],
+  "color": "#FFB347",
+  "fields": [
+    {
+      "slug": "target",
+      "type": "entity_ref",
+      "nullable": true,
+      "allowed_types": ["room_entry"],
+      "cross_level": true,
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "direction",
+      "type": "enum",
+      "default": "right",
+      "enum": "exit_direction",
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "locked_by",
+      "type": "string",
+      "nullable": true,
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

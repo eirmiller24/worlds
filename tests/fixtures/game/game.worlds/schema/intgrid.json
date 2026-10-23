@@ -1,0 +1,63 @@
+{
+  "$defs": {
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of a level's `<int_grid layer>.json`, as it is on disk. In memory\nthe grid is an [`IntGridLayer`] (dense value indices), or for a derived\nlayer its [`DerivedOverrides`]; this is only the text form.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/intgrid.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "layer": {
+      "$ref": "#/$defs/Slug",
+      "description": "Layer slug. Same as the file name."
+    },
+    "legend": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Slug"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "description": "Glyph to value slug, `null` for empty (`.`). Optional when reading:\nglyphs not listed mean what the layer definition says. Entries that\nare given must agree with the definition. Always written on save.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "overrides": {
+      "const": true,
+      "description": "`true`: this is a derived layer's file, holding only hand-painted\noverrides (`.` no override, a value glyph, `!` suppress). Required on\na derived layer's file, a load error on any other; never `false`.",
+      "type": "boolean"
+    },
+    "rows": {
+      "description": "One string per row, top first, one glyph per cell.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "layer",
+    "rows"
+  ],
+  "title": "Worlds intgrid file",
+  "type": "object"
+}

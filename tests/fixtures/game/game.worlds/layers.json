@@ -1,0 +1,25 @@
+{
+  "$schema": "schema/layers.json",
+  "format": 1,
+  "layers": [
+    { "slug": "decor_back", "name": "DecorBack", "kind": "tiles", "tileset": "tiles" },
+    {
+      "slug": "collision",
+      "name": "Collision",
+      "kind": "int_grid",
+      "values": [
+        { "slug": "solid", "name": "solid", "color": "#46464F", "glyph": "#" },
+        { "slug": "oneway", "name": "oneway", "color": "#A89C74", "glyph": "-" },
+        { "slug": "breakable", "name": "breakable", "color": "#8A8070", "glyph": "b" },
+        { "slug": "fortified", "name": "fortified", "color": "#7C7CB0", "glyph": "f" },
+        { "slug": "water", "name": "water", "color": "#3F7FD0", "glyph": "~" },
+        { "slug": "hazard", "name": "hazard", "color": "#B04040", "glyph": "x" },
+        { "slug": "ramp_r", "name": "ramp_r", "color": "#5F8F5F", "glyph": "/" },
+        { "slug": "ramp_l", "name": "ramp_l", "color": "#8F5F8F", "glyph": "L" }
+      ]
+    },
+    { "slug": "decor_front", "name": "DecorFront", "kind": "tiles", "tileset": "tiles" },
+    { "slug": "entities", "name": "Entities", "kind": "entities" },
+    { "slug": "main_tiling", "name": "MainTiling", "kind": "auto", "source": "collision" }
+  ]
+}

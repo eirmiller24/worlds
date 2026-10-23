@@ -1,0 +1,478 @@
+---
+source: crates/worlds-core/tests/roundtrip.rs
+expression: all
+---
+=== entities/floor_button.json
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "floor_button",
+  "name": "Floor Button",
+  "category": "Puzzle/Switches",
+  "tags": ["object", "puzzle"],
+  "size": [1, 1],
+  "pivot": [0.5, 1.0],
+  "color": "#c04040",
+  "fields": [
+    {
+      "slug": "channel",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 15,
+      "display": { "canvas": true }
+    },
+    { "slug": "latching", "type": "bool", "default": false },
+    {
+      "slug": "target",
+      "type": "entity_ref",
+      "nullable": true,
+      "allowed_types": ["locked_door"],
+      "display": { "arrow": true }
+    }
+  ]
+}
+=== entities/locked_door.json
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "locked_door",
+  "name": "Locked Door",
+  "category": "Puzzle/Doors",
+  "tags": ["object", "puzzle"],
+  "doc": "Opens when the player holds needs_item. Footprint is w x h tiles.",
+  "size": [1, 3],
+  "resizable": [false, true],
+  "pivot": [0.5, 1.0],
+  "icon": { "tileset": "castle_main", "tile": [3, 7] },
+  "color": "#c08040",
+  "limit": { "max": 4, "behavior": "discard_oldest" },
+  "fields": [
+    { "slug": "channel", "type": "int", "default": 0, "min": 0 },
+    { "slug": "needs_item", "type": "string", "default": "" },
+    { "slug": "consumes", "type": "bool", "default": false },
+    { "slug": "facing", "type": "enum", "default": "left", "enum": "facing" },
+    { "slug": "style", "type": "enum", "default": "wood", "values": ["wood", "iron"] },
+    { "slug": "tint", "type": "color", "default": "#ffffff" },
+    { "slug": "speed", "type": "float", "default": 1.5, "min": 0.5 },
+    { "slug": "label", "type": "text", "nullable": true },
+    { "slug": "anchor", "type": "point", "nullable": true },
+    { "slug": "waypoints", "type": "point", "array": true, "default": [] },
+    {
+      "slug": "exit_to",
+      "type": "entity_ref",
+      "nullable": true,
+      "allowed_tags": ["object"],
+      "cross_level": true
+    },
+    { "slug": "sprite", "type": "tile", "nullable": true, "tileset": "castle_main" },
+    { "slug": "script", "type": "path", "nullable": true, "extensions": ["gd"] },
+    { "slug": "extra", "type": "json", "default": { "a": 1 } }
+  ]
+}
+=== enums.json
+{
+  "$schema": "schema/enums.json",
+  "format": 1,
+  "enums": [
+    {
+      "slug": "biome",
+      "values": [
+        { "slug": "dry" },
+        { "slug": "flooded", "color": "#3060c0" }
+      ]
+    },
+    {
+      "slug": "facing",
+      "name": "Facing",
+      "values": [
+        { "slug": "left", "name": "Left", "icon": { "tileset": "castle_main", "tile": [0, 9] } },
+        { "slug": "right", "name": "Right" }
+      ]
+    }
+  ]
+}
+=== layers.json
+{
+  "$schema": "schema/layers.json",
+  "format": 1,
+  "layers": [
+    {
+      "slug": "collision",
+      "name": "Collision",
+      "kind": "int_grid",
+      "values": [
+        { "slug": "solid", "name": "Solid", "color": "#404040", "glyph": "#", "group": "walls" },
+        {
+          "slug": "fortified",
+          "name": "Fortified",
+          "color": "#606060",
+          "glyph": "f",
+          "group": "walls"
+        },
+        { "slug": "oneway", "name": "One-way", "color": "#a0a040", "glyph": "o" },
+        { "slug": "water", "name": "Water", "color": "#3060c0", "glyph": "~" },
+        { "slug": "ramp_l", "name": "Ramp left", "color": "#808080", "glyph": "L" }
+      ],
+      "groups": [
+        { "slug": "walls", "name": "Walls", "color": "#505050", "glyph": "w" }
+      ]
+    },
+    {
+      "slug": "main_tiling",
+      "name": "Main tiling",
+      "kind": "auto",
+      "source": "collision",
+      "tile_pivot": [0.5, 0.0]
+    },
+    {
+      "slug": "decor_back",
+      "name": "Decor (back)",
+      "kind": "tiles",
+      "opacity": 0.8,
+      "grid_size": 8,
+      "tileset": "castle_main"
+    },
+    {
+      "slug": "objects",
+      "name": "Objects",
+      "kind": "entities",
+      "doc": "Things the player touches"
+    }
+  ]
+}
+=== project.json
+{
+  "$schema": "schema/project.json",
+  "format": 1,
+  "name": "Mini",
+  "grid_size": 16,
+  "seed": 42,
+  "bg_color": "#1a1c2c",
+  "collision_layer": "collision",
+  "blocking_values": ["solid", "fortified", "ramp_l"],
+  "level_fields": [
+    { "slug": "biome", "type": "enum", "array": true, "default": [], "enum": "biome" },
+    { "slug": "music", "type": "string", "nullable": true }
+  ]
+}
+=== rules/macros.json
+{
+  "$schema": "../schema/macros.json",
+  "format": 1,
+  "patterns": { "edge_top": ["***", ".#.", "###"] },
+  "legends": { "walls": { "#": "walls", ".": "!walls" } }
+}
+=== rules/main_tiling.json
+{
+  "$schema": "../schema/rules.json",
+  "format": 1,
+  "layer": "main_tiling",
+  "stamps": [
+    {
+      "slug": "pillar",
+      "tileset": "ssw_set5",
+      "rect": [12, 4, 2, 3],
+      "pivot": [0.5, 1.0],
+      "occupies": true
+    }
+  ],
+  "groups": [
+    {
+      "slug": "walls",
+      "name": "Walls",
+      "color": "#ff8000",
+      "rules": [
+        {
+          "slug": "wall_top_edge",
+          "match": {
+            "grid": "collision",
+            "legend": { "#": "solid", ".": "!solid" },
+            "rows": [
+              "***",
+              ".#.",
+              "###"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": {
+            "tileset": "castle_main",
+            "tiles": [
+              [15, 0],
+              [16, 0],
+              [17, 0],
+              { "rect": [18, 0, 1, 1], "weight": 3 }
+            ]
+          },
+          "break": true,
+          "salt": 1101
+        },
+        {
+          "slug": "wall_fill",
+          "match": {
+            "rows": [
+              "+"
+            ]
+          },
+          "out": {
+            "tileset": "castle_main",
+            "tiles": [
+              [1, 1],
+              { "stack": [[5, 0], [4, 0], [4, 0]] }
+            ]
+          },
+          "out_of_bounds": "solid"
+        },
+        {
+          "slug": "any_wall_group",
+          "match": {
+            "legend": { "n": "!walls" },
+            "rows": [
+              "n",
+              "w",
+              "*"
+            ]
+          },
+          "out": {
+            "tileset": "castle_main",
+            "tiles": [[2, 0, 2, 1]],
+            "tile_mode": "stamp",
+            "pivot": [0.0, 1.0]
+          },
+          "out_of_bounds": ".",
+          "salt": -7
+        }
+      ]
+    },
+    {
+      "slug": "flooded_decor",
+      "mode": "optional",
+      "requires_level_field": { "field": "biome", "values": ["flooded"] },
+      "rules": [
+        {
+          "slug": "drips",
+          "active": false,
+          "match": {
+            "grid": "collision",
+            "rows": [
+              ".",
+              "~",
+              "*"
+            ]
+          },
+          "symmetry": ["mirror_x", "mirror_y", "rotate"],
+          "out": {
+            "tileset": "ssw_set5",
+            "tiles": [[0, 0], [1, 0]],
+            "alpha": 0.5,
+            "offset_px": [0, -4],
+            "random_offset_px": { "x": [-2, 2], "y": [0, 1] }
+          },
+          "chance": 0.25,
+          "modulo": { "x": 3, "y": 1, "x_offset": 1 },
+          "checker": "horizontal",
+          "perlin": { "active": true, "seed": 9, "scale": 0.2, "octaves": 2 },
+          "salt": 1201
+        }
+      ]
+    },
+    {
+      "slug": "pillars",
+      "mode": "optional",
+      "icon": { "tileset": "ssw_set5", "tile": [12, 4] },
+      "rules": [
+        {
+          "slug": "pillar_on_floor",
+          "match": {
+            "rows": [
+              "...",
+              "...",
+              "+++"
+            ]
+          },
+          "out": { "stamp": "pillar", "avoid_overlap": true }
+        }
+      ]
+    },
+    { "slug": "retired", "mode": "off", "rules": [] }
+  ]
+}
+=== tilesets.json
+{
+  "$schema": "schema/tilesets.json",
+  "format": 1,
+  "tilesets": [
+    { "slug": "castle_main", "image": "art/castle_main.png", "tile_size": [16, 16] },
+    {
+      "slug": "ssw_set5",
+      "image": "art/ssw_set5.png",
+      "tile_size": [32, 32],
+      "spacing": 1,
+      "padding": 2
+    }
+  ]
+}
+=== worlds/main/levels/crevasse/collision.json
+{
+  "$schema": "../../../../schema/intgrid.json",
+  "format": 1,
+  "layer": "collision",
+  "legend": {
+    "#": "solid",
+    ".": null,
+    "L": "ramp_l",
+    "f": "fortified",
+    "o": "oneway",
+    "~": "water"
+  },
+  "rows": [
+    "####################",
+    "#..................#",
+    "#.......oooo.......#",
+    "#L..~~~.......ff####",
+    "####################"
+  ]
+}
+=== worlds/main/levels/crevasse/decor_back.json
+{
+  "$schema": "../../../../schema/tiles.json",
+  "format": 1,
+  "layer": "decor_back",
+  "tiles": [
+    { "cell": [4, 1], "tileset": "ssw_set5", "tile": [0, 3], "alpha": 0.5 },
+    { "cell": [4, 2], "tileset": "castle_main", "tile": [5, 1] },
+    { "cell": [5, 2], "tileset": "castle_main", "tile": [6, 1], "flip": "x" }
+  ]
+}
+=== worlds/main/levels/crevasse/entities.json
+{
+  "$schema": "../../../../schema/entities.json",
+  "format": 1,
+  "layers": [
+    {
+      "layer": "objects",
+      "entities": [
+        {
+          "id": "doorcrev22",
+          "type": "locked_door",
+          "cell": [18, 3],
+          "size": [1, 2],
+          "fields": {
+            "exit_to": "doorshaft2",
+            "facing": "right",
+            "needs_item": "brass_key",
+            "script": "scripts/door.gd",
+            "speed": 2,
+            "sprite": { "tile": [4, 4], "tileset": "castle_main" },
+            "tint": "#ff8080",
+            "waypoints": [[1, 1], [2, 1]]
+          }
+        },
+        {
+          "id": "btncrev222",
+          "type": "floor_button",
+          "cell": [12, 3],
+          "offset_px": [0, -2],
+          "fields": { "channel": 3, "latching": true, "target": "doorcrev22" }
+        }
+      ]
+    }
+  ]
+}
+=== worlds/main/levels/crevasse/level.json
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "crevasse22",
+  "slug": "crevasse",
+  "name": "Crevasse",
+  "world_px": [0, 0],
+  "size": [20, 5],
+  "depth": 0,
+  "bg_color": "#202020",
+  "fields": { "biome": ["flooded"], "music": null },
+  "layers": { "main_tiling": { "seed": 8123, "optional_groups": ["flooded_decor"] } }
+}
+=== worlds/main/levels/crevasse/notes.json
+{
+  "$schema": "../../../../schema/notes.json",
+  "format": 1,
+  "notes": [
+    {
+      "id": "notecrev22",
+      "kind": "note",
+      "title": "Widen the gap",
+      "body": "Jump is **too easy**.\nTry 5 cells.",
+      "tags": ["todo"],
+      "links": ["entity:btncrev222", "note:pinstatue2", "https://example.com"],
+      "px": [160, 48]
+    },
+    { "id": "pathcrev22", "kind": "path", "status": "done", "points": [[16, 64], [300, 64]] }
+  ]
+}
+=== worlds/main/levels/shaft/entities.json
+{
+  "$schema": "../../../../schema/entities.json",
+  "format": 1,
+  "layers": [
+    {
+      "layer": "objects",
+      "entities": [
+        { "id": "doorshaft2", "type": "locked_door", "cell": [2, 7] }
+      ]
+    }
+  ]
+}
+=== worlds/main/levels/shaft/level.json
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "shaft22222",
+  "slug": "shaft",
+  "name": "Shaft",
+  "world_px": [320, 80],
+  "size": [6, 8],
+  "depth": 1,
+  "layers": {
+    "main_tiling": {
+      "seed": 4,
+      "optional_groups": ["pillars"],
+      "tilesets": { "castle_main": "ssw_set5" }
+    }
+  }
+}
+=== worlds/main/world.json
+{
+  "$schema": "../../schema/world.json",
+  "format": 1,
+  "slug": "main",
+  "name": "Main",
+  "notes": [
+    {
+      "id": "guidestem2",
+      "kind": "guide",
+      "title": "Wall line",
+      "tags": ["layout"],
+      "locked": true,
+      "points": [[0, 0], [0, 480], [320, 480]]
+    },
+    {
+      "id": "pinstatue2",
+      "kind": "pin",
+      "title": "Old statue",
+      "tags": ["landmark"],
+      "links": ["level:crevasse"],
+      "export": true,
+      "px": [96, 64],
+      "icon": "statue",
+      "label": "Statue"
+    },
+    {
+      "id": "regioneast",
+      "kind": "region",
+      "title": "Forest",
+      "color": "#40c04080",
+      "rect": [0, 0, 640, 480]
+    }
+  ]
+}

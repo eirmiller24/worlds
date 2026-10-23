@@ -1,0 +1,25 @@
+{
+  "$schema": "schema/project.json",
+  "format": 1,
+  "name": "game",
+  "grid_size": 32,
+  "seed": 20261023,
+  "bg_color": "#2A2B36",
+  "collision_layer": "collision",
+  "blocking_values": ["solid", "breakable", "fortified", "ramp_r", "ramp_l"],
+  "level_fields": [
+    {
+      "slug": "display_name",
+      "type": "string",
+      "nullable": true,
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "music",
+      "type": "enum",
+      "nullable": true,
+      "enum": "music",
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{ "$schema": "schema/layers.json", "format": 1,
+  "layers": [
+    { "slug": "collision", "name": "Collision", "kind": "int_grid",
+      "values": [
+        { "slug": "solid", "name": "Solid", "color": "#404040", "glyph": "#", "group": "walls" },
+        { "slug": "fortified", "name": "Fortified", "color": "#606060", "glyph": "f", "group": "walls" },
+        { "slug": "oneway", "name": "One-way", "color": "#a0a040", "glyph": "o" },
+        { "slug": "water", "name": "Water", "color": "#3060c0", "glyph": "~" },
+        { "slug": "ramp_l", "name": "Ramp left", "color": "#808080", "glyph": "L" }
+      ],
+      "groups": [ { "slug": "walls", "name": "Walls", "color": "#505050", "glyph": "w" } ] },
+    { "slug": "main_tiling", "name": "Main tiling", "kind": "auto", "source": "collision", "tile_pivot": [0.5, 0.0] },
+    { "slug": "decor_back", "name": "Decor (back)", "kind": "tiles", "tileset": "castle_main", "opacity": 0.8, "grid_size": 8 },
+    { "slug": "objects", "name": "Objects", "kind": "entities", "doc": "Things the player touches" }
+  ] }

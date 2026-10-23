@@ -1,0 +1,345 @@
+{
+  "$defs": {
+    "Color": {
+      "description": "Hex color, #rrggbb or #rrggbbaa.",
+      "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "type": "string"
+    },
+    "IntGridGroup": {
+      "additionalProperties": false,
+      "description": "A named group of IntGrid values (LDtk \"value groups\").",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "glyph": {
+          "description": "Stands for \"any value in this group\" in rule patterns, without a\nlegend entry. Same rules as value glyphs, unique among the layer's\nvalue and group glyphs. Never appears in grid rows.",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "slug",
+        "name"
+      ],
+      "type": "object"
+    },
+    "IntGridValue": {
+      "additionalProperties": false,
+      "description": "One value an IntGrid cell can hold.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Color"
+        },
+        "glyph": {
+          "description": "The character that stands for this value in rows and patterns.\nPrintable ASCII, not one of `. \\ \" * + ! @ [ ] |`.",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": "string"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Slug"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional group slug (from the layer's `groups`)."
+        },
+        "name": {
+          "type": "string"
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "slug",
+        "name",
+        "color",
+        "glyph"
+      ],
+      "type": "object"
+    },
+    "KindTag": {
+      "enum": [
+        "int_grid",
+        "tiles",
+        "entities",
+        "auto"
+      ],
+      "type": "string"
+    },
+    "LayerDef": {
+      "description": "A layer definition. Keys after `opacity`/`grid_size` depend on `kind`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "derived": {
+              "description": "int_grid: computed by rules' `write` outputs; level files hold only\noverrides. Default false.",
+              "type": "boolean"
+            },
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "grid_size": {
+              "description": "Cell size in pixels, if not the project's. Must divide or be a\nmultiple of the project grid; an auto layer uses its source's.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "groups": {
+              "description": "int_grid: named groups of values.",
+              "items": {
+                "$ref": "#/$defs/IntGridGroup"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "int_grid"
+            },
+            "name": {
+              "type": "string"
+            },
+            "opacity": {
+              "description": "Display opacity, 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "values": {
+              "description": "int_grid: the values cells can hold.",
+              "items": {
+                "$ref": "#/$defs/IntGridValue"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "slug",
+            "name",
+            "kind"
+          ],
+          "title": "int_grid",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "grid_size": {
+              "description": "Cell size in pixels, if not the project's. Must divide or be a\nmultiple of the project grid; an auto layer uses its source's.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "tiles"
+            },
+            "name": {
+              "type": "string"
+            },
+            "opacity": {
+              "description": "Display opacity, 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "tileset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Slug"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "tiles: default tileset for the palette."
+            }
+          },
+          "required": [
+            "slug",
+            "name",
+            "kind"
+          ],
+          "title": "tiles",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "grid_size": {
+              "description": "Cell size in pixels, if not the project's. Must divide or be a\nmultiple of the project grid; an auto layer uses its source's.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "entities"
+            },
+            "name": {
+              "type": "string"
+            },
+            "opacity": {
+              "description": "Display opacity, 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            }
+          },
+          "required": [
+            "slug",
+            "name",
+            "kind"
+          ],
+          "title": "entities",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "grid_size": {
+              "description": "Cell size in pixels, if not the project's. Must divide or be a\nmultiple of the project grid; an auto layer uses its source's.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "auto"
+            },
+            "name": {
+              "type": "string"
+            },
+            "opacity": {
+              "description": "Display opacity, 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Slug"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "auto (required): the int_grid layer the rules read by default."
+            },
+            "tile_pivot": {
+              "description": "auto: shifts stamp-mode output, in cells. Default `[0, 0]`.",
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "slug",
+            "name",
+            "kind",
+            "source"
+          ],
+          "title": "auto",
+          "type": "object"
+        }
+      ]
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Body of `layers.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/layers.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "layers": {
+      "description": "Layer definitions in draw order, bottom first.",
+      "items": {
+        "$ref": "#/$defs/LayerDef"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "layers"
+  ],
+  "title": "Worlds layers file",
+  "type": "object"
+}

@@ -1,0 +1,8 @@
+{ "$schema": "../schema/entity.json", "format": 1,
+  "slug": "floor_button", "name": "Floor Button", "category": "Puzzle/Switches", "tags": ["object", "puzzle"],
+  "size": [1, 1], "pivot": [0.5, 1.0], "color": "#c04040",
+  "fields": [
+    { "slug": "channel", "type": "int", "default": 0, "min": 0, "max": 15, "display": { "canvas": true } },
+    { "slug": "latching", "type": "bool", "default": false },
+    { "slug": "target", "type": "entity_ref", "allowed_types": ["locked_door"], "nullable": true, "display": { "arrow": true } }
+  ] }

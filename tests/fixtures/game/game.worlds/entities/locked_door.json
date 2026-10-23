@@ -1,0 +1,33 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "locked_door",
+  "name": "LockedDoor",
+  "tags": ["object", "puzzle"],
+  "size": [1, 3],
+  "resizable": [true, true],
+  "pivot": [0.5, 1.0],
+  "color": "#A0522D",
+  "fields": [
+    {
+      "slug": "channel",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 31,
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "needs_item",
+      "type": "string",
+      "default": "small_key",
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "consumes",
+      "type": "bool",
+      "default": true,
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "levelone22",
+  "slug": "level_1",
+  "name": "Level 1",
+  "world_px": [2048, -1280],
+  "size": [19, 13],
+  "depth": 0
+}

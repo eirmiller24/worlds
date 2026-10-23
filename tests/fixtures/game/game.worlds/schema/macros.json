@@ -1,0 +1,535 @@
+{
+  "$defs": {
+    "CellMatch": {
+      "description": "Cell test: * anything, + any value, . empty, slug = that value or group, !slug = not that value or group, [a|b] = any of the members, ![a|b] = none of them (members: ., + or slugs).",
+      "pattern": "^([*+.]|!?[a-z][a-z0-9_]*|!?\\[([+.]|[a-z][a-z0-9_]*)(\\|([+.]|[a-z][a-z0-9_]*))*\\])$",
+      "type": "string"
+    },
+    "Checker": {
+      "description": "Checkerboard spacing: skip every other cell along an axis, alternating per line.",
+      "enum": [
+        "none",
+        "horizontal",
+        "vertical"
+      ],
+      "type": "string"
+    },
+    "Legend": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/CellMatch"
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Slug"
+        }
+      ],
+      "description": "Glyph to cell test, or the name of a legend in rules/macros.json."
+    },
+    "Modulo": {
+      "additionalProperties": false,
+      "description": "Only cells where `(x - x_offset) % x == 0` and `(y - y_offset) % y == 0`,\ncounted from the level origin.",
+      "properties": {
+        "x": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x_offset": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y_offset": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "OutOfBounds": {
+      "description": "\".\" for empty, or an IntGrid value slug.",
+      "pattern": "^(\\.|[a-z][a-z0-9_]*)$",
+      "type": "string"
+    },
+    "Pattern": {
+      "additionalProperties": false,
+      "description": "A rectangular grid pattern, anchored at its `@` cell, else its center.",
+      "properties": {
+        "grid": {
+          "$ref": "#/$defs/Slug",
+          "description": "The int_grid layer to read. Default: the auto layer's `source`."
+        },
+        "legend": {
+          "$ref": "#/$defs/Legend",
+          "description": "Glyph to cell test, for glyphs that don't mean what they mean by\ndefault (see [`Pattern::resolve`]); or the name of a legend in\n`rules/macros.json`."
+        },
+        "rows": {
+          "$ref": "#/$defs/Rows",
+          "description": "Rows of glyphs, top first; or the name of a pattern in\n`rules/macros.json`. The anchor is the `@` cell, else the center\n(then width and height must be odd)."
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "type": "object"
+    },
+    "Perlin": {
+      "additionalProperties": false,
+      "description": "Perlin noise gate: the rule only fires where noise is positive.\nKept when inactive so an LDtk import is lossless.",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "octaves": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale": {
+          "format": "double",
+          "type": "number"
+        },
+        "seed": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "active",
+        "seed",
+        "scale",
+        "octaves"
+      ],
+      "type": "object"
+    },
+    "RandomOffset": {
+      "additionalProperties": false,
+      "description": "Random pixel offset ranges, inclusive.",
+      "properties": {
+        "x": {
+          "description": "`[min, max]`. Default `[0, 0]`.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "y": {
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Require": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Pattern"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/Pattern"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "Patterns that must also hold, anchored on the same cell: one pattern, or a non-empty array (all must hold)."
+    },
+    "Rows": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "$ref": "#/$defs/Slug"
+        }
+      ],
+      "description": "Rows of glyphs, top first, or the name of a pattern in rules/macros.json."
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "Symmetry": {
+      "oneOf": [
+        {
+          "const": "mirror_x",
+          "description": "Also try the pattern flipped left-right; output tiles are flipped to match.",
+          "type": "string"
+        },
+        {
+          "const": "mirror_y",
+          "description": "Also try the pattern flipped top-bottom.",
+          "type": "string"
+        },
+        {
+          "const": "rotate",
+          "description": "Also try the three 90-degree rotations; with a mirror, all eight\norientations. Needs square tiles.",
+          "type": "string"
+        }
+      ]
+    },
+    "Template": {
+      "additionalProperties": false,
+      "description": "A template in `rules/macros.json`: rules whose tiles are relative to a\nreference's `origin` and whose tileset comes from the reference.",
+      "properties": {
+        "doc": {
+          "description": "What it draws and how its tiles are laid out.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "legend": {
+          "$ref": "#/$defs/Legend",
+          "description": "Default legend for every rule (an object, or a name in `legends`);\na rule's own `match.legend` entries win."
+        },
+        "name": {
+          "description": "Display name, for the editor's template library.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rules": {
+          "description": "The rules, in evaluation order. Slugs are unique within the template.",
+          "items": {
+            "$ref": "#/$defs/TemplateRule"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "rules"
+      ],
+      "type": "object"
+    },
+    "TemplateOutput": {
+      "description": "What a template rule draws: tiles (tileset optional: the reference's), or stamp.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alpha": {
+              "description": "Opacity 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "avoid_overlap": {
+              "description": "Skip a placement whose footprint has an occupied cell. Default false.",
+              "type": "boolean"
+            },
+            "offset_px": {
+              "description": "Fixed pixel offset. Default `[0, 0]`.",
+              "items": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "pivot": {
+              "description": "With `tile_mode: stamp`: anchor inside the alternative's box. Default `[0, 0]`.",
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "random_offset_px": {
+              "$ref": "#/$defs/RandomOffset"
+            },
+            "tile_mode": {
+              "$ref": "#/$defs/TileMode",
+              "description": "With `tiles`: `stack` (default) or `stamp`."
+            },
+            "tiles": {
+              "description": "Alternatives; one is picked per cell by weight (with `tileset`).",
+              "items": {
+                "$ref": "#/$defs/TileAlt"
+              },
+              "type": "array"
+            },
+            "tileset": {
+              "$ref": "#/$defs/Slug",
+              "description": "Tileset to draw from (with `tiles`)."
+            }
+          },
+          "required": [
+            "tiles"
+          ],
+          "title": "tiles",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alpha": {
+              "description": "Opacity 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "avoid_overlap": {
+              "description": "Skip a placement whose footprint has an occupied cell. Default false.",
+              "type": "boolean"
+            },
+            "offset_px": {
+              "description": "Fixed pixel offset. Default `[0, 0]`.",
+              "items": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "random_offset_px": {
+              "$ref": "#/$defs/RandomOffset"
+            },
+            "stamp": {
+              "$ref": "#/$defs/Slug",
+              "description": "A stamp slug from this file's `stamps` (instead of `tileset` + `tiles`)."
+            }
+          },
+          "required": [
+            "stamp"
+          ],
+          "title": "stamp",
+          "type": "object"
+        }
+      ]
+    },
+    "TemplateRule": {
+      "additionalProperties": false,
+      "description": "A rule inside a template: a pattern [`Rule`] that draws, whose\n`out.tileset` may be left out (it comes from the reference). Tile\ncoordinates of a rule without its own `out.tileset` are relative to the\nreference's `origin`; a rule that names its own tileset is *fixed*:\nabsolute coordinates, its own tileset. Region rules and `write` outputs\ncan't be in a template (a load error).",
+      "properties": {
+        "active": {
+          "description": "Default true.",
+          "type": "boolean"
+        },
+        "break": {
+          "description": "After this rule draws a cell, later rules skip that cell.",
+          "type": "boolean"
+        },
+        "chance": {
+          "description": "Probability 0 to 1 that a matching cell is drawn. Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "checker": {
+          "$ref": "#/$defs/Checker"
+        },
+        "match": {
+          "$ref": "#/$defs/Pattern"
+        },
+        "modulo": {
+          "$ref": "#/$defs/Modulo"
+        },
+        "out": {
+          "$ref": "#/$defs/TemplateOutput"
+        },
+        "out_of_bounds": {
+          "$ref": "#/$defs/OutOfBounds",
+          "description": "What pattern cells outside the level read as."
+        },
+        "perlin": {
+          "$ref": "#/$defs/Perlin"
+        },
+        "require": {
+          "$ref": "#/$defs/Require",
+          "description": "Patterns that must also hold, anchored on the same cell (one, or a\nlist)."
+        },
+        "salt": {
+          "description": "Extra integer mixed into this rule's random choices. Default 0.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug",
+          "description": "Unique within the template. The expanded rule is `<reference slug>__<slug>`."
+        },
+        "symmetry": {
+          "description": "Extra mirrored or rotated variants of the pattern to try.",
+          "items": {
+            "$ref": "#/$defs/Symmetry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "slug",
+        "match",
+        "out"
+      ],
+      "type": "object"
+    },
+    "TileAlt": {
+      "description": "Tile alternative: [col, row], [col, row, w, h], { \"rect\": [col, row, w, h], \"weight\": n } or { \"stack\": [[col, row], ...], \"weight\": n }.",
+      "oneOf": [
+        {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "rect": {
+              "items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            },
+            "weight": {
+              "description": "Default 1.",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "rect"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stack": {
+              "items": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "weight": {
+              "description": "Default 1.",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "stack"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TileMode": {
+      "description": "How the chosen alternative's tiles are laid out.",
+      "oneOf": [
+        {
+          "const": "stack",
+          "description": "Every tile of the alternative is drawn at the matching cell, stacked\nin list order (normally an alternative is one tile).",
+          "type": "string"
+        },
+        {
+          "const": "stamp",
+          "description": "The alternative's tiles keep their atlas layout, scaled by the\ntileset's tile size and positioned by `pivot` (LDtk \"stamp\").",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Shared pattern pieces and templates: `rules/macros.json` (optional).\nRules refer to them by name: `match.rows` / `require.rows` to\n`patterns`, `match.legend` / `require.legend` to `legends`, and\n`{ \"use\": ... }` entries to `templates` (or a built-in, see\n[`Macros::builtin_templates`]).",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/macros.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "legends": {
+      "additionalProperties": false,
+      "description": "Named legends.",
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CellMatch"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "patterns": {
+      "additionalProperties": false,
+      "description": "Named pattern rows.",
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "templates": {
+      "additionalProperties": false,
+      "description": "Named templates: parameterized lists of rules that a group uses with\n`{ \"use\": \"<name>\", ... }`.",
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "$ref": "#/$defs/Template"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "$schema",
+    "format"
+  ],
+  "title": "Worlds macros file",
+  "type": "object"
+}

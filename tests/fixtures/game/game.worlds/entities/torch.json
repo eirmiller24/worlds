@@ -1,0 +1,26 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "torch",
+  "name": "Torch",
+  "tags": ["object", "puzzle"],
+  "size": [1, 1],
+  "pivot": [0.5, 0.5],
+  "color": "#FF7F27",
+  "fields": [
+    {
+      "slug": "channel",
+      "type": "int",
+      "default": 0,
+      "min": 0,
+      "max": 31,
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "lit",
+      "type": "bool",
+      "default": true,
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

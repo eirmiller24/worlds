@@ -1,0 +1,1221 @@
+{
+  "$defs": {
+    "Align": {
+      "description": "Where `even` spacing puts the leftover.",
+      "oneOf": [
+        {
+          "enum": [
+            "end"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "start",
+          "description": "Left (floor, ceiling) or top (walls).",
+          "type": "string"
+        },
+        {
+          "const": "center",
+          "description": "Half the leftover each side; an odd leftover leans to the start.",
+          "type": "string"
+        }
+      ]
+    },
+    "CellMatch": {
+      "description": "Cell test: * anything, + any value, . empty, slug = that value or group, !slug = not that value or group, [a|b] = any of the members, ![a|b] = none of them (members: ., + or slugs).",
+      "pattern": "^([*+.]|!?[a-z][a-z0-9_]*|!?\\[([+.]|[a-z][a-z0-9_]*)(\\|([+.]|[a-z][a-z0-9_]*))*\\])$",
+      "type": "string"
+    },
+    "Checker": {
+      "description": "Checkerboard spacing: skip every other cell along an axis, alternating per line.",
+      "enum": [
+        "none",
+        "horizontal",
+        "vertical"
+      ],
+      "type": "string"
+    },
+    "Color": {
+      "description": "Hex color, #rrggbb or #rrggbbaa.",
+      "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+      "type": "string"
+    },
+    "Edge": {
+      "description": "A region edge. A region cell is on an edge when its neighbour on that\nside is inside the level and not a region cell.",
+      "oneOf": [
+        {
+          "const": "floor",
+          "description": "The neighbour below.",
+          "type": "string"
+        },
+        {
+          "const": "ceiling",
+          "description": "The neighbour above.",
+          "type": "string"
+        },
+        {
+          "const": "wall_left",
+          "description": "The neighbour to the left.",
+          "type": "string"
+        },
+        {
+          "const": "wall_right",
+          "description": "The neighbour to the right.",
+          "type": "string"
+        }
+      ]
+    },
+    "GroupMode": {
+      "description": "Whether a rule group runs.",
+      "oneOf": [
+        {
+          "const": "always",
+          "description": "Runs in every level (subject to `requires_level_field`).",
+          "type": "string"
+        },
+        {
+          "const": "optional",
+          "description": "Runs only in levels that list it in `layers.<layer>.optional_groups`\n(a matching `requires_level_field` also switches it on).",
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "Never runs. Kept so it can be switched back on.",
+          "type": "string"
+        }
+      ]
+    },
+    "Interior": {
+      "description": "The value `across` takes.",
+      "enum": [
+        "interior"
+      ],
+      "type": "string"
+    },
+    "Legend": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/CellMatch"
+          },
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Slug"
+        }
+      ],
+      "description": "Glyph to cell test, or the name of a legend in rules/macros.json."
+    },
+    "LevelFieldRequirement": {
+      "additionalProperties": false,
+      "description": "Gate a group on a level field value.",
+      "properties": {
+        "field": {
+          "$ref": "#/$defs/Slug",
+          "description": "Level field slug (an enum field, possibly an array)."
+        },
+        "mode": {
+          "$ref": "#/$defs/RequirementMode",
+          "description": "`any`: the field holds at least one of `values`. `all`: it holds every one."
+        },
+        "values": {
+          "description": "Enum value slugs.",
+          "items": {
+            "$ref": "#/$defs/Slug"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "field",
+        "values"
+      ],
+      "type": "object"
+    },
+    "LevelTagRequirement": {
+      "additionalProperties": false,
+      "description": "Gate a group on level tags.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/RequirementMode",
+          "description": "`any`: the level has at least one of `tags`. `all`: it has every one."
+        },
+        "tags": {
+          "description": "Level tags: a non-empty list of non-empty strings, no repeats\n(validation).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tags"
+      ],
+      "type": "object"
+    },
+    "Modulo": {
+      "additionalProperties": false,
+      "description": "Only cells where `(x - x_offset) % x == 0` and `(y - y_offset) % y == 0`,\ncounted from the level origin.",
+      "properties": {
+        "x": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x_offset": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "y_offset": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "OutOfBounds": {
+      "description": "\".\" for empty, or an IntGrid value slug.",
+      "pattern": "^(\\.|[a-z][a-z0-9_]*)$",
+      "type": "string"
+    },
+    "Pattern": {
+      "additionalProperties": false,
+      "description": "A rectangular grid pattern, anchored at its `@` cell, else its center.",
+      "properties": {
+        "grid": {
+          "$ref": "#/$defs/Slug",
+          "description": "The int_grid layer to read. Default: the auto layer's `source`."
+        },
+        "legend": {
+          "$ref": "#/$defs/Legend",
+          "description": "Glyph to cell test, for glyphs that don't mean what they mean by\ndefault (see [`Pattern::resolve`]); or the name of a legend in\n`rules/macros.json`."
+        },
+        "rows": {
+          "$ref": "#/$defs/Rows",
+          "description": "Rows of glyphs, top first; or the name of a pattern in\n`rules/macros.json`. The anchor is the `@` cell, else the center\n(then width and height must be odd)."
+        }
+      },
+      "required": [
+        "rows"
+      ],
+      "type": "object"
+    },
+    "PerAxis_NonZeroU32": {
+      "anyOf": [
+        {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      ],
+      "description": "One number for both axes, or [x, y] (only with \"across\")."
+    },
+    "PerAxis_uint32": {
+      "anyOf": [
+        {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      ],
+      "description": "One number for both axes, or [x, y] (only with \"across\")."
+    },
+    "Perlin": {
+      "additionalProperties": false,
+      "description": "Perlin noise gate: the rule only fires where noise is positive.\nKept when inactive so an LDtk import is lossless.",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "octaves": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scale": {
+          "format": "double",
+          "type": "number"
+        },
+        "seed": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "active",
+        "seed",
+        "scale",
+        "octaves"
+      ],
+      "type": "object"
+    },
+    "Place": {
+      "description": "Where in each selected region a region rule fires: along an edge or across the interior.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "against": {
+              "$ref": "#/$defs/CellMatch",
+              "description": "`along` only: the neighbour across the edge must pass this cell test."
+            },
+            "align": {
+              "$ref": "#/$defs/Align",
+              "description": "`even` only: `start`, `center` (default) or `end`."
+            },
+            "along": {
+              "$ref": "#/$defs/Edge",
+              "description": "Place on each run of this edge: `floor`, `ceiling`, `wall_left` or\n`wall_right`. Give this or `across`."
+            },
+            "every": {
+              "$ref": "#/$defs/PerAxis_NonZeroU32",
+              "description": "Pitch or minimum distance in cells, at least 1. Default 1."
+            },
+            "jitter": {
+              "description": "`random` only: extra random distance per step. Default 0.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "margin": {
+              "$ref": "#/$defs/PerAxis_uint32",
+              "description": "Cells kept clear at each end. Default 0."
+            },
+            "min_length": {
+              "description": "`along` only: skip runs shorter than this. Default 1.",
+              "format": "uint32",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "spacing": {
+              "$ref": "#/$defs/Spacing",
+              "description": "`even` (default), `spread` or `random`."
+            }
+          },
+          "required": [
+            "along"
+          ],
+          "title": "along",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "across": {
+              "$ref": "#/$defs/Interior",
+              "description": "`\"interior\"`: a lattice over the region's bounding box, kept where\nthe cell is a region cell. Give this or `along`."
+            },
+            "align": {
+              "$ref": "#/$defs/Align",
+              "description": "`even` only: `start`, `center` (default) or `end`."
+            },
+            "every": {
+              "$ref": "#/$defs/PerAxis_NonZeroU32",
+              "description": "Pitch or minimum distance in cells, at least 1. Default 1."
+            },
+            "jitter": {
+              "description": "`random` only: extra random distance per step. Default 0.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "margin": {
+              "$ref": "#/$defs/PerAxis_uint32",
+              "description": "Cells kept clear at each end. Default 0."
+            },
+            "spacing": {
+              "$ref": "#/$defs/Spacing",
+              "description": "`even` (default), `spread` or `random`."
+            }
+          },
+          "required": [
+            "across"
+          ],
+          "title": "across",
+          "type": "object"
+        }
+      ]
+    },
+    "RandomOffset": {
+      "additionalProperties": false,
+      "description": "Random pixel offset ranges, inclusive.",
+      "properties": {
+        "x": {
+          "description": "`[min, max]`. Default `[0, 0]`.",
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "y": {
+          "items": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "description": "`region`: which cells form regions (4-connected components of cells\npassing `cells`), and which regions are selected (every given bound holds).",
+      "properties": {
+        "cells": {
+          "$ref": "#/$defs/CellMatch",
+          "description": "Which cells belong to regions: a cell test (`\".\"`, `\"!solid\"`,\n`\"[.|oneway]\"`, ...)."
+        },
+        "grid": {
+          "$ref": "#/$defs/Slug",
+          "description": "The int_grid layer read (a derived one by its effective values).\nDefault: the auto layer's `source`."
+        },
+        "max_area": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_height": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "max_width": {
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_area": {
+          "description": "Number of cells, inclusive.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_height": {
+          "description": "Bounding-box height in cells, inclusive.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "min_width": {
+          "description": "Bounding-box width in cells, inclusive.",
+          "format": "uint32",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cells"
+      ],
+      "type": "object"
+    },
+    "Require": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Pattern"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/Pattern"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "Patterns that must also hold, anchored on the same cell: one pattern, or a non-empty array (all must hold)."
+    },
+    "RequirementMode": {
+      "enum": [
+        "any",
+        "all"
+      ],
+      "type": "string"
+    },
+    "Rows": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "$ref": "#/$defs/Slug"
+        }
+      ],
+      "description": "Rows of glyphs, top first, or the name of a pattern in rules/macros.json."
+    },
+    "Rule": {
+      "description": "A rule: a pattern rule (match) or a region rule (region + place), that draws (out) or writes a derived grid (write).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "description": "Default true.",
+              "type": "boolean"
+            },
+            "break": {
+              "description": "After this rule fires at an anchor, later rules of the pass skip it.",
+              "type": "boolean"
+            },
+            "chance": {
+              "description": "Pattern rule: probability 0 to 1 that a matching cell fires. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "checker": {
+              "$ref": "#/$defs/Checker",
+              "description": "Pattern rule."
+            },
+            "match": {
+              "$ref": "#/$defs/Pattern",
+              "description": "Pattern rule: what must surround the anchor cell."
+            },
+            "modulo": {
+              "$ref": "#/$defs/Modulo",
+              "description": "Pattern rule."
+            },
+            "out": {
+              "$ref": "#/$defs/RuleOutput",
+              "description": "What to draw. Give this or `write`."
+            },
+            "out_of_bounds": {
+              "$ref": "#/$defs/OutOfBounds",
+              "description": "Pattern rule: what pattern cells outside the level read as."
+            },
+            "perlin": {
+              "$ref": "#/$defs/Perlin",
+              "description": "Pattern rule."
+            },
+            "require": {
+              "$ref": "#/$defs/Require",
+              "description": "Pattern rule: patterns that must also hold at the anchor."
+            },
+            "salt": {
+              "description": "Extra integer mixed into this rule's random choices. Default 0.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug",
+              "description": "Unique within the rules file; part of the hash behind the rule's\nrandom choices."
+            },
+            "symmetry": {
+              "description": "Pattern rule: extra mirrored or rotated variants to try.",
+              "items": {
+                "$ref": "#/$defs/Symmetry"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "slug",
+            "match",
+            "out"
+          ],
+          "title": "pattern rule drawing",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "description": "Default true.",
+              "type": "boolean"
+            },
+            "break": {
+              "description": "After this rule fires at an anchor, later rules of the pass skip it.",
+              "type": "boolean"
+            },
+            "chance": {
+              "description": "Pattern rule: probability 0 to 1 that a matching cell fires. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "checker": {
+              "$ref": "#/$defs/Checker",
+              "description": "Pattern rule."
+            },
+            "match": {
+              "$ref": "#/$defs/Pattern",
+              "description": "Pattern rule: what must surround the anchor cell."
+            },
+            "modulo": {
+              "$ref": "#/$defs/Modulo",
+              "description": "Pattern rule."
+            },
+            "out_of_bounds": {
+              "$ref": "#/$defs/OutOfBounds",
+              "description": "Pattern rule: what pattern cells outside the level read as."
+            },
+            "perlin": {
+              "$ref": "#/$defs/Perlin",
+              "description": "Pattern rule."
+            },
+            "require": {
+              "$ref": "#/$defs/Require",
+              "description": "Pattern rule: patterns that must also hold at the anchor."
+            },
+            "salt": {
+              "description": "Extra integer mixed into this rule's random choices. Default 0.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug",
+              "description": "Unique within the rules file; part of the hash behind the rule's\nrandom choices."
+            },
+            "symmetry": {
+              "description": "Pattern rule: extra mirrored or rotated variants to try.",
+              "items": {
+                "$ref": "#/$defs/Symmetry"
+              },
+              "type": "array"
+            },
+            "write": {
+              "$ref": "#/$defs/Write",
+              "description": "What to write into a derived grid. Give this or `out`."
+            }
+          },
+          "required": [
+            "slug",
+            "match",
+            "write"
+          ],
+          "title": "pattern rule writing",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "description": "Default true.",
+              "type": "boolean"
+            },
+            "break": {
+              "description": "After this rule fires at an anchor, later rules of the pass skip it.",
+              "type": "boolean"
+            },
+            "out": {
+              "$ref": "#/$defs/RuleOutput",
+              "description": "What to draw. Give this or `write`."
+            },
+            "place": {
+              "$ref": "#/$defs/Place",
+              "description": "Region rule: where in each selected region it fires."
+            },
+            "region": {
+              "$ref": "#/$defs/Region",
+              "description": "Region rule: which cells form regions and which regions are selected."
+            },
+            "salt": {
+              "description": "Extra integer mixed into this rule's random choices. Default 0.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug",
+              "description": "Unique within the rules file; part of the hash behind the rule's\nrandom choices."
+            }
+          },
+          "required": [
+            "slug",
+            "region",
+            "place",
+            "out"
+          ],
+          "title": "region rule drawing",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "active": {
+              "description": "Default true.",
+              "type": "boolean"
+            },
+            "break": {
+              "description": "After this rule fires at an anchor, later rules of the pass skip it.",
+              "type": "boolean"
+            },
+            "place": {
+              "$ref": "#/$defs/Place",
+              "description": "Region rule: where in each selected region it fires."
+            },
+            "region": {
+              "$ref": "#/$defs/Region",
+              "description": "Region rule: which cells form regions and which regions are selected."
+            },
+            "salt": {
+              "description": "Extra integer mixed into this rule's random choices. Default 0.",
+              "format": "int64",
+              "type": "integer"
+            },
+            "slug": {
+              "$ref": "#/$defs/Slug",
+              "description": "Unique within the rules file; part of the hash behind the rule's\nrandom choices."
+            },
+            "write": {
+              "$ref": "#/$defs/Write",
+              "description": "What to write into a derived grid. Give this or `out`."
+            }
+          },
+          "required": [
+            "slug",
+            "region",
+            "place",
+            "write"
+          ],
+          "title": "region rule writing",
+          "type": "object"
+        }
+      ]
+    },
+    "RuleEntry": {
+      "description": "A rule, or a template reference (an object with \"use\").",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Rule"
+        },
+        {
+          "$ref": "#/$defs/TemplateRef"
+        }
+      ]
+    },
+    "RuleGroup": {
+      "additionalProperties": false,
+      "description": "An ordered list of rules that are switched on and off together.",
+      "properties": {
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TileRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/GroupMode",
+          "description": "When the group runs. Default `always`."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pass": {
+          "description": "The pass this group runs in. Default 0. Groups run sorted by pass\n(stably), and the file should list them in pass order.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requires_level_field": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LevelFieldRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only runs in levels whose enum field matches (LDtk \"biomes\")."
+        },
+        "requires_level_tag": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LevelTagRequirement"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only runs in levels with these tags (`level.json` `tags`)."
+        },
+        "rules": {
+          "description": "Rules and template references, in evaluation order.",
+          "items": {
+            "$ref": "#/$defs/RuleEntry"
+          },
+          "type": "array"
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "slug",
+        "rules"
+      ],
+      "type": "object"
+    },
+    "RuleOutput": {
+      "description": "What a rule draws: tileset + tiles, or stamp.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alpha": {
+              "description": "Opacity 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "avoid_overlap": {
+              "description": "Skip a placement whose footprint has an occupied cell. Default false.",
+              "type": "boolean"
+            },
+            "offset_px": {
+              "description": "Fixed pixel offset. Default `[0, 0]`.",
+              "items": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "pivot": {
+              "description": "With `tile_mode: stamp`: anchor inside the alternative's box. Default `[0, 0]`.",
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "random_offset_px": {
+              "$ref": "#/$defs/RandomOffset"
+            },
+            "tile_mode": {
+              "$ref": "#/$defs/TileMode",
+              "description": "With `tiles`: `stack` (default) or `stamp`."
+            },
+            "tiles": {
+              "description": "Alternatives; one is picked per cell by weight (with `tileset`).",
+              "items": {
+                "$ref": "#/$defs/TileAlt"
+              },
+              "type": "array"
+            },
+            "tileset": {
+              "$ref": "#/$defs/Slug",
+              "description": "Tileset to draw from (with `tiles`)."
+            }
+          },
+          "required": [
+            "tileset",
+            "tiles"
+          ],
+          "title": "tiles",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "alpha": {
+              "description": "Opacity 0 to 1. Default 1.",
+              "format": "double",
+              "type": "number"
+            },
+            "avoid_overlap": {
+              "description": "Skip a placement whose footprint has an occupied cell. Default false.",
+              "type": "boolean"
+            },
+            "offset_px": {
+              "description": "Fixed pixel offset. Default `[0, 0]`.",
+              "items": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "random_offset_px": {
+              "$ref": "#/$defs/RandomOffset"
+            },
+            "stamp": {
+              "$ref": "#/$defs/Slug",
+              "description": "A stamp slug from this file's `stamps` (instead of `tileset` + `tiles`)."
+            }
+          },
+          "required": [
+            "stamp"
+          ],
+          "title": "stamp",
+          "type": "object"
+        }
+      ]
+    },
+    "Slug": {
+      "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "Spacing": {
+      "description": "A region rule's 1D spacing strategy.",
+      "oneOf": [
+        {
+          "const": "even",
+          "description": "Fixed pitch `every`, the leftover placed by `align`.",
+          "type": "string"
+        },
+        {
+          "const": "spread",
+          "description": "As many as fit at least `every` apart, spread end to end.",
+          "type": "string"
+        },
+        {
+          "const": "random",
+          "description": "Seeded: steps of `every` plus `0..=jitter`.",
+          "type": "string"
+        }
+      ]
+    },
+    "Stamp": {
+      "additionalProperties": false,
+      "description": "A named rectangle of tiles that rule outputs can place.",
+      "properties": {
+        "occupies": {
+          "description": "After each placement of this stamp, mark its footprint occupied in\nthe layer's occupancy grid, so `avoid_overlap` outputs skip it.",
+          "type": "boolean"
+        },
+        "pivot": {
+          "description": "Which point of the stamp's pixel bounding box sits on the same point\nof the matching cell, 0 to 1. Default `[0, 0]`.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "rect": {
+          "description": "`[col, row, w, h]` in tiles.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug",
+          "description": "Referenced by `out.stamp`."
+        },
+        "tileset": {
+          "$ref": "#/$defs/Slug"
+        }
+      },
+      "required": [
+        "slug",
+        "tileset",
+        "rect"
+      ],
+      "type": "object"
+    },
+    "Symmetry": {
+      "oneOf": [
+        {
+          "const": "mirror_x",
+          "description": "Also try the pattern flipped left-right; output tiles are flipped to match.",
+          "type": "string"
+        },
+        {
+          "const": "mirror_y",
+          "description": "Also try the pattern flipped top-bottom.",
+          "type": "string"
+        },
+        {
+          "const": "rotate",
+          "description": "Also try the three 90-degree rotations; with a mirror, all eight\norientations. Needs square tiles.",
+          "type": "string"
+        }
+      ]
+    },
+    "TemplateRef": {
+      "additionalProperties": false,
+      "description": "A `{ \"use\": ... }` entry in a group: the rules of a template, expanded\nin place (see [`crate::Project::expanded_rules`]).",
+      "properties": {
+        "active": {
+          "description": "Default true. Off: every expanded rule is inactive.",
+          "type": "boolean"
+        },
+        "legend": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CellMatch"
+          },
+          "description": "Merged over every expanded rule's legend (wins over the template's\nand the rule's).",
+          "type": "object"
+        },
+        "origin": {
+          "description": "`[col, row]` added to every relative tile coordinate. Default `[0, 0]`.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "skip": {
+          "description": "Template rule slugs to leave out.",
+          "items": {
+            "$ref": "#/$defs/Slug"
+          },
+          "type": "array"
+        },
+        "slug": {
+          "$ref": "#/$defs/Slug",
+          "description": "Names the reference; default the template name. Expanded rules are\n`<slug>__<template rule slug>`."
+        },
+        "tiles": {
+          "additionalProperties": false,
+          "description": "Per template rule slug: replacement alternatives (relative to\n`origin`, absolute for a rule with its own tileset).",
+          "patternProperties": {
+            "^[a-z][a-z0-9_]*$": {
+              "items": {
+                "$ref": "#/$defs/TileAlt"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
+        "tileset": {
+          "$ref": "#/$defs/Slug",
+          "description": "Tileset for the template's rules that don't name their own."
+        },
+        "use": {
+          "$ref": "#/$defs/Slug",
+          "description": "Template name: one of `rules/macros.json` `templates`, or a built-in."
+        }
+      },
+      "required": [
+        "use"
+      ],
+      "type": "object"
+    },
+    "TileAlt": {
+      "description": "Tile alternative: [col, row], [col, row, w, h], { \"rect\": [col, row, w, h], \"weight\": n } or { \"stack\": [[col, row], ...], \"weight\": n }.",
+      "oneOf": [
+        {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "rect": {
+              "items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            },
+            "weight": {
+              "description": "Default 1.",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "rect"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "stack": {
+              "items": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "weight": {
+              "description": "Default 1.",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "stack"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TileMode": {
+      "description": "How the chosen alternative's tiles are laid out.",
+      "oneOf": [
+        {
+          "const": "stack",
+          "description": "Every tile of the alternative is drawn at the matching cell, stacked\nin list order (normally an alternative is one tile).",
+          "type": "string"
+        },
+        {
+          "const": "stamp",
+          "description": "The alternative's tiles keep their atlas layout, scaled by the\ntileset's tile size and positioned by `pivot` (LDtk \"stamp\").",
+          "type": "string"
+        }
+      ]
+    },
+    "TileRef": {
+      "additionalProperties": false,
+      "description": "One tile of a tileset, addressed by atlas column and row.",
+      "properties": {
+        "tile": {
+          "description": "`[column, row]` in the tileset atlas.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "tileset": {
+          "$ref": "#/$defs/Slug",
+          "description": "Tileset slug."
+        }
+      },
+      "required": [
+        "tileset",
+        "tile"
+      ],
+      "type": "object"
+    },
+    "Write": {
+      "additionalProperties": false,
+      "description": "`write`: what a rule writes into a derived grid where it fires.",
+      "properties": {
+        "grid": {
+          "$ref": "#/$defs/Slug",
+          "description": "A derived `int_grid` layer, on the auto layer's grid."
+        },
+        "value": {
+          "$ref": "#/$defs/Slug",
+          "description": "A value (not a group) of that layer."
+        }
+      },
+      "required": [
+        "grid",
+        "value"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "All rule groups of one `auto` layer: `rules/<layer>.json`.",
+  "properties": {
+    "$schema": {
+      "description": "Relative path to schema/rules.json.",
+      "type": "string"
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version."
+    },
+    "groups": {
+      "description": "Groups in evaluation order.",
+      "items": {
+        "$ref": "#/$defs/RuleGroup"
+      },
+      "type": "array"
+    },
+    "layer": {
+      "$ref": "#/$defs/Slug",
+      "description": "The `auto` layer these rules draw into. Same as the file name."
+    },
+    "stamps": {
+      "description": "Named multi-tile stamps that rule outputs can reference.",
+      "items": {
+        "$ref": "#/$defs/Stamp"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "$schema",
+    "format",
+    "layer",
+    "groups"
+  ],
+  "title": "Worlds rules file",
+  "type": "object"
+}

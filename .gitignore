@@ -1,0 +1,4 @@
+target/
+.worlds/
+*.snap.new
+crates/*/screenshots/

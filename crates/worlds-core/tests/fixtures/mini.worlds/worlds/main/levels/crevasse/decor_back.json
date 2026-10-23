@@ -1,0 +1,7 @@
+{ "$schema": "../../../../schema/tiles.json", "format": 1,
+  "layer": "decor_back",
+  "tiles": [
+    { "cell": [5, 2], "tileset": "castle_main", "tile": [6, 1], "flip": "x" },
+    { "cell": [4, 2], "tileset": "castle_main", "tile": [5, 1] },
+    { "cell": [4, 1], "tileset": "ssw_set5", "tile": [0, 3], "alpha": 0.5 }
+  ] }

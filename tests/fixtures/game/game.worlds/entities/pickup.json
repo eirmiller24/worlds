@@ -1,0 +1,18 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "pickup",
+  "name": "Pickup",
+  "tags": ["object"],
+  "size": [1, 1],
+  "pivot": [0.5, 1.0],
+  "color": "#60D060",
+  "fields": [
+    {
+      "slug": "item",
+      "type": "string",
+      "default": "coin",
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "../../../../schema/entities.json",
+  "format": 1,
+  "layers": [
+    {
+      "layer": "entities",
+      "entities": [
+        { "id": "entrymain2", "type": "room_entry", "cell": [3, 24], "fields": { "id": "main" } },
+        { "id": "torchaaaa2", "type": "torch", "cell": [12, 18] },
+        { "id": "pickupaaa2", "type": "pickup", "cell": [40, 24] }
+      ]
+    }
+  ]
+}

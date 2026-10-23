@@ -1,0 +1,4 @@
+{ "$schema": "../../../../schema/level.json", "format": 1,
+  "id": "shaft22222", "slug": "shaft", "name": "Shaft",
+  "world_px": [320, 80], "size": [6, 8], "depth": 1,
+  "layers": { "main_tiling": { "seed": 4, "optional_groups": ["pillars"], "tilesets": { "castle_main": "ssw_set5" } } } }

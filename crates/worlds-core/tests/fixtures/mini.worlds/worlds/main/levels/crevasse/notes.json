@@ -1,0 +1,6 @@
+{ "$schema": "../../../../schema/notes.json", "format": 1,
+  "notes": [
+    { "id": "notecrev22", "kind": "note", "title": "Widen the gap", "body": "Jump is **too easy**.\nTry 5 cells.",
+      "px": [160, 48], "tags": ["todo"], "links": ["entity:btncrev222", "note:pinstatue2", "https://example.com"] },
+    { "id": "pathcrev22", "kind": "path", "status": "done", "points": [[16, 64], [300, 64]] }
+  ] }

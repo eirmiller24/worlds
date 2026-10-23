@@ -1,0 +1,25 @@
+{
+  "$schema": "../schema/entity.json",
+  "format": 1,
+  "slug": "room_entry",
+  "name": "RoomEntry",
+  "tags": ["room"],
+  "size": [1, 1],
+  "pivot": [0.5, 1.0],
+  "color": "#B3E6FF",
+  "fields": [
+    {
+      "slug": "id",
+      "type": "string",
+      "default": "main",
+      "display": { "canvas": true, "world": true }
+    },
+    {
+      "slug": "facing",
+      "type": "enum",
+      "default": "right",
+      "enum": "facing",
+      "display": { "canvas": true, "world": true }
+    }
+  ]
+}

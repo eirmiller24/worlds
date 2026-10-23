@@ -1,0 +1,25 @@
+[package]
+name = "worlds-rules"
+description = "Autotile rule engine for Worlds."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+worlds-core.workspace = true
+image.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Not in the workspace list (only this crate uses them): `benches/bake.rs`
+# and the property tests in `tests/`.
+criterion = { version = "0.8", default-features = false }
+proptest = { version = "1.12", default-features = false, features = ["std"] }
+
+[[bench]]
+name = "bake"
+harness = false

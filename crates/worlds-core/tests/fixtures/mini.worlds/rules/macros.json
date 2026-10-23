@@ -1,0 +1,3 @@
+{ "$schema": "../schema/macros.json", "format": 1,
+  "patterns": { "edge_top": [ "***", ".#.", "###" ] },
+  "legends": { "walls": { "#": "walls", ".": "!walls" } } }

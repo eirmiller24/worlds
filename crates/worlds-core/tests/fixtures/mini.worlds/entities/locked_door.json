@@ -1,0 +1,23 @@
+{ "$schema": "../schema/entity.json", "format": 1,
+  "slug": "locked_door", "name": "Locked Door",
+  "category": "Puzzle/Doors", "tags": ["object", "puzzle"],
+  "doc": "Opens when the player holds needs_item. Footprint is w x h tiles.",
+  "size": [1, 3], "resizable": [false, true], "pivot": [0.5, 1.0],
+  "icon": { "tileset": "castle_main", "tile": [3, 7] }, "color": "#c08040",
+  "limit": { "max": 4, "scope": "level", "behavior": "discard_oldest" },
+  "fields": [
+    { "slug": "channel", "type": "int", "default": 0, "min": 0 },
+    { "slug": "needs_item", "type": "string", "default": "" },
+    { "slug": "consumes", "type": "bool", "default": false },
+    { "slug": "facing", "type": "enum", "enum": "facing", "default": "left" },
+    { "slug": "style", "type": "enum", "values": ["wood", "iron"], "default": "wood" },
+    { "slug": "tint", "type": "color", "default": "#ffffff" },
+    { "slug": "speed", "type": "float", "default": 1.5, "min": 0.5 },
+    { "slug": "label", "type": "text", "nullable": true },
+    { "slug": "anchor", "type": "point", "nullable": true },
+    { "slug": "waypoints", "type": "point", "array": true, "default": [] },
+    { "slug": "exit_to", "type": "entity_ref", "cross_level": true, "allowed_tags": ["object"], "nullable": true },
+    { "slug": "sprite", "type": "tile", "tileset": "castle_main", "nullable": true },
+    { "slug": "script", "type": "path", "extensions": ["gd"], "nullable": true },
+    { "slug": "extra", "type": "json", "default": { "a": 1 } }
+  ] }

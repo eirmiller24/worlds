@@ -1,0 +1,138 @@
+{
+  "$schema": "../schema/rules.json",
+  "format": 1,
+  "layer": "main_tiling",
+  "groups": [
+    {
+      "slug": "base_tile",
+      "name": "Base tile",
+      "rules": [
+        {
+          "slug": "wall_top",
+          "match": {
+            "rows": [
+              "*.*",
+              "*#*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[0, 0], [1, 0], [2, 0], [3, 0]] },
+          "break": true
+        },
+        {
+          "slug": "wall_bottom",
+          "match": {
+            "rows": [
+              "***",
+              "*#*",
+              "*.*"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[0, 3], [1, 3], [2, 3], [3, 3]] },
+          "break": true
+        },
+        {
+          "slug": "wall_side",
+          "match": {
+            "rows": [
+              "***",
+              ".#*",
+              "***"
+            ]
+          },
+          "symmetry": ["mirror_x"],
+          "out": { "tileset": "tiles", "tiles": [[0, 1], [1, 1], [2, 1], [3, 1]] },
+          "break": true
+        },
+        {
+          "slug": "wall_fill",
+          "match": {
+            "rows": [
+              "#"
+            ]
+          },
+          "out": {
+            "tileset": "tiles",
+            "tiles": [[0, 2], [1, 2], [2, 2], [3, 2], [4, 2], [5, 2], [6, 2], [7, 2]]
+          },
+          "out_of_bounds": "solid"
+        },
+        {
+          "slug": "oneway",
+          "match": {
+            "rows": [
+              "-"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[0, 5], [1, 5], [2, 5], [3, 5]] }
+        },
+        {
+          "slug": "water_surface",
+          "match": {
+            "rows": [
+              "*.*",
+              "*~*",
+              "***"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[0, 4], [1, 4]] },
+          "break": true
+        },
+        {
+          "slug": "water_body",
+          "match": {
+            "rows": [
+              "~"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[2, 4], [3, 4], [4, 4], [5, 4]] }
+        },
+        {
+          "slug": "hazard",
+          "match": {
+            "rows": [
+              "x"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[0, 6], [1, 6]] }
+        },
+        {
+          "slug": "breakable",
+          "match": {
+            "rows": [
+              "b"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[2, 6], [3, 6]] }
+        },
+        {
+          "slug": "fortified",
+          "match": {
+            "rows": [
+              "f"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[4, 6], [5, 6]] }
+        },
+        {
+          "slug": "ramp_right",
+          "match": {
+            "rows": [
+              "/"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[6, 6]] }
+        },
+        {
+          "slug": "ramp_left",
+          "match": {
+            "rows": [
+              "L"
+            ]
+          },
+          "out": { "tileset": "tiles", "tiles": [[7, 6]] }
+        }
+      ]
+    }
+  ]
+}

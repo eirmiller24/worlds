@@ -1,0 +1,11 @@
+{ "$schema": "../../../../schema/entities.json", "format": 1,
+  "layers": [
+    { "layer": "objects", "entities": [
+      { "id": "doorcrev22", "type": "locked_door", "cell": [18, 3], "size": [1, 2],
+        "fields": { "needs_item": "brass_key", "facing": "right", "waypoints": [[1, 1], [2, 1]],
+                    "exit_to": "doorshaft2", "sprite": { "tileset": "castle_main", "tile": [4, 4] },
+                    "script": "scripts/door.gd", "tint": "#ff8080", "speed": 2 } },
+      { "id": "btncrev222", "type": "floor_button", "cell": [12, 3], "offset_px": [0, -2],
+        "fields": { "channel": 3, "latching": true, "target": "doorcrev22" } }
+    ] }
+  ] }
