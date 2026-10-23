@@ -833,6 +833,7 @@ The rules are named `m<mask>`, where the mask adds up the filled neighbours: N 1
 | `name` | string | no | Display name |
 | `guide_groups` | array | no | Named sets of guides, each with an offset, in the order they were added (below) |
 | `notes` | array | no | World-scope annotations, coordinates in world pixels, in the order they were added. See [Annotations](#notesjson-and-annotations) |
+| `references` | array | no | World-scope reference images, world pixels, bottom first. See [Reference images](#reference-images) |
 
 A guide group (`guide_groups[]`) lets a set of guides be shown where it is built rather than where it was designed, such as a ruined wing built one position low. A guide joins it with its `group` key.
 
@@ -882,6 +883,7 @@ A project can hold several worlds (`worlds/main/`, `worlds/underdark/`, ...). Ea
 | `tags` | array of strings | no | Free tags, the same vocabulary as annotation tags (`forest`, `ruined`). Non-empty, no repeats. A level tagged `T` must have its center inside a world region tagged `T` when the world has any (see [Validation](#validation-reference)). Exported on both export files |
 | `fields` | object | no | Values for `project.json` `level_fields`, by field slug |
 | `layers` | object | no | Per-layer rule state, by `auto` layer slug (below). An entry for any other layer is a validation problem |
+| `references` | array | no | Reference images drawn under the level's layers, level pixels, bottom first (below) |
 
 Per-layer rule state (`layers.<auto layer slug>`), all optional:
 
@@ -890,6 +892,38 @@ Per-layer rule state (`layers.<auto layer slug>`), all optional:
 | `seed` | integer | `0` | Extra seed for this layer's rules in this level. The randomness already differs per level and layer; set this only to re-roll this layer here. |
 | `optional_groups` | array of slugs | `[]` | Rule groups with `"mode": "optional"` to switch on in this level. Naming an `always` or `off` group is a validation problem |
 | `tilesets` | object | `{}` | Tileset substitutions in this level: `{ "<from tileset>": "<to tileset>" }`. Every rule output drawing from the first draws from the second instead, same `[col, row]`. Rules drawing from other tilesets are unaffected |
+
+### Reference images
+
+A sketch, a concept painting or a screenshot of the old game, put behind the grid to build a level against. `level.json` `references` holds a level's (coordinates in pixels from the level's top-left corner), `world.json` `references` the world's (world pixels). The editor draws them under every layer, the first one lowest; they are never exported (a game background is a different thing). Files written before references existed load as they are: no `references` key means none.
+
+```json
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "crevasse22",
+  "slug": "crevasse",
+  "name": "Crevasse",
+  "world_px": [0, 0],
+  "size": [20, 5],
+  "depth": 0,
+  "references": [
+    { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "scale": 2, "opacity": 0.5, "locked": true }
+  ]
+}
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `id` | id | required | Unique across the project's reference images |
+| `image` | string | required | Path to a PNG, relative to the project directory, `/`-separated, like a tileset's `image`. The editor puts images it is given from outside the project in `art/` |
+| `px` | `[x, y]` | required | Where the image's top-left corner goes, in pixels (level or world, as above) |
+| `scale` | number | `1` | Drawn size over the image's size in pixels; above 0 |
+| `opacity` | number | `1` | 0 (invisible) to 1 |
+| `locked` | bool | `false` | The editor doesn't move or scale it on the canvas (the Inspector still edits it) |
+| `visible` | bool | `true` | Drawn at all |
+
+Keys at their default are left out when written.
 
 ## &lt;int_grid layer&gt;.json
 
@@ -1265,6 +1299,7 @@ Line by line:
 - duplicate slugs and ids (layers, values and groups, tilesets, enums and their values, entity types, fields, rule groups, stamps, worlds, levels, entity ids, note ids; in a rules file, rule slugs, reference slugs and expanded slugs together; template rule slugs within a template);
 - field values and defaults against their field type, `min`/`max`, `regex` (the whole value must match), enum values, path extensions, nullability (per element for arrays); `point` and `entity_ref` defaults again in each level or entity that inherits them; a `regex` that doesn't compile;
 - annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); a connector end (`notes[<id>].from`, `notes[<id>].to`) naming no level or entity ("level "x" does not exist: the connector's end dangles"), or one in another world than the connector's; an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;
+- reference images (`references[<id>]`, in `world.json` or `level.json`): `image` is not empty, is a `/`-separated path inside the project (no `..`, not absolute), and the file exists (`image`: "image file "art/sketch.png" doesn't exist"; checked when the project was loaded from a directory); `scale` above 0; `opacity` in 0..1; ids unique across the project's references;
 - entity types: a `category` is a path of non-empty segments separated by `/`, with no `/` at either end and no whitespace around a segment (`Puzzle/Doors`, not `/Puzzle`, `Puzzle//Doors` or `Puzzle / Doors`); no tag appears twice in one type's `tags`;
 - layer slugs that collide with file names (`level`, `entities`, `notes`, `macros` for `int_grid`/`tiles` layers, `macros` for `auto` layers);
 - shape rules: at most one `@` per pattern, odd pattern sizes unless the pattern has `@`, rows of one length, at least one tile alternative with weights of 1 or more, `pivot` only in stamp mode, `rotate` only with square tiles (the output's tileset and every level substitute for it), annotation point counts, guides only at world scope, entity `limit`s, numbers that must be in 0..1;

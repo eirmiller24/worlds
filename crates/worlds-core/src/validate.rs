@@ -60,6 +60,7 @@ pub fn validate(project: &Project) -> Vec<Problem> {
     v.entity_defs();
     v.rules();
     v.worlds();
+    v.references();
     v.out
 }
 
@@ -2417,5 +2418,69 @@ fn region_contains(shape: &Shape, p: [i64; 2]) -> bool {
             inside
         }
         _ => false,
+    }
+}
+
+// ---- reference images ----
+
+impl<'a> Validator<'a> {
+    /// `references` of every `world.json` and `level.json`: the image is a
+    /// path inside the project that exists (when the project was loaded
+    /// from a directory), scale above 0, opacity in 0..1, ids unique across
+    /// the project.
+    fn references(&mut self) {
+        let p = self.p;
+        let mut all = Vec::new();
+        for w in &p.worlds {
+            let f = format!("worlds/{}/world.json", w.slug);
+            all.extend(w.references.iter().map(|r| (f.clone(), r)));
+            for l in &w.levels {
+                let f = format!("worlds/{}/levels/{}/level.json", w.slug, l.slug);
+                all.extend(l.references.iter().map(|r| (f.clone(), r)));
+            }
+        }
+        let root = p.files.root();
+        for (f, r) in &all {
+            let at = format!("references[{}]", r.id);
+            let path = std::path::Path::new(&r.image);
+            if r.image.is_empty() {
+                self.push(f, format!("{at}.image"), "must not be empty");
+            } else if path.is_absolute()
+                || r.image.contains('\\')
+                || path
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                self.push(
+                    f,
+                    format!("{at}.image"),
+                    format!(
+                        "{:?} must be a /-separated path inside the project, like a tileset's image",
+                        r.image
+                    ),
+                );
+            } else if let Some(root) = root
+                && !root.join(path).is_file()
+            {
+                self.push(
+                    f,
+                    format!("{at}.image"),
+                    format!("image file {:?} doesn't exist", r.image),
+                );
+            }
+            if !(r.scale.is_finite() && r.scale > 0.0) {
+                self.push(
+                    f,
+                    format!("{at}.scale"),
+                    format!("{} must be above 0", r.scale),
+                );
+            }
+            self.unit_range(f, &format!("{at}.opacity"), r.opacity);
+        }
+        self.dups_in(
+            "reference image id",
+            all.iter()
+                .map(|(f, r)| (f.clone(), format!("references[{}].id", r.id), r.id.as_str())),
+        );
     }
 }

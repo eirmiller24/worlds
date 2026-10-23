@@ -100,6 +100,21 @@ impl Project {
                 &mut problems,
             );
         }
+        // Reference images (in `level.json`) get new ids too: they are
+        // unique across the project.
+        let mut taken: HashSet<Id> = self
+            .worlds
+            .iter()
+            .flat_map(|w| {
+                w.references
+                    .iter()
+                    .chain(w.levels.iter().flat_map(|l| &l.references))
+            })
+            .map(|r| r.id.clone())
+            .collect();
+        for r in &mut meta.references {
+            r.id = derived_free(&format!("{new_level_id}:{}", r.id), &mut taken);
+        }
         let level_fields = self.level_fields.clone();
         remap_fields(
             None,

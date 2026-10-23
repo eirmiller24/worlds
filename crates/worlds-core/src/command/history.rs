@@ -5,6 +5,13 @@
 //! made it. A gesture (a brush stroke, a drag) collects the inverses of every
 //! command pushed during it and becomes one entry, a `Batch` of those
 //! inverses in reverse order. Depth is unlimited.
+//!
+//! Each entry also remembers when it was recorded, the project files it
+//! touched and the labels of the commands it is made of, for the editor's
+//! History pane.
+
+use std::path::PathBuf;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +25,9 @@ pub enum Origin {
     User,
     /// An agent over the API; the string names it ("claude-code").
     Agent(String),
+    /// Files changed on disk that the editor applied (entity definitions
+    /// an agent or git wrote while the editor was open).
+    Disk,
 }
 
 /// One undoable (or redoable) step.
@@ -28,6 +38,15 @@ pub struct Entry {
     /// Applying this moves the entry to the other stack: on the undo stack
     /// it is the inverse of what was done, on the redo stack the redo.
     pub command: Command,
+    /// When it was recorded.
+    pub time: SystemTime,
+    /// The project-relative files (or level directories) it touched, in
+    /// the order first touched.
+    pub files: Vec<PathBuf>,
+    /// The labels of the commands it was made of, in the order applied:
+    /// one for a single command, each write of an agent's batch, empty
+    /// for a gesture.
+    pub parts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -36,6 +55,18 @@ struct Gesture {
     origin: Option<Origin>,
     /// Inverses in the order their commands were applied.
     inverses: Vec<Command>,
+    files: Vec<PathBuf>,
+}
+
+/// Add the files `changes` dirty to `files`, keeping each once.
+fn add_files(files: &mut Vec<PathBuf>, changes: &[Change]) {
+    for c in changes {
+        for f in c.files() {
+            if !files.contains(&f) {
+                files.push(f);
+            }
+        }
+    }
 }
 
 /// Undo and redo stacks of labelled entries.
@@ -60,6 +91,7 @@ impl History {
             label: label.into(),
             origin: Some(origin),
             inverses: Vec::new(),
+            files: Vec::new(),
         });
     }
 
@@ -93,12 +125,22 @@ impl History {
             return Ok(applied.changes);
         }
         match &mut self.gesture {
-            Some(g) => g.inverses.push(applied.inverse),
-            None => self.push_entry(Entry {
-                label,
-                origin,
-                command: applied.inverse,
-            }),
+            Some(g) => {
+                g.inverses.push(applied.inverse);
+                add_files(&mut g.files, &applied.changes);
+            }
+            None => {
+                let mut files = Vec::new();
+                add_files(&mut files, &applied.changes);
+                self.push_entry(Entry {
+                    parts: vec![label.clone()],
+                    label,
+                    origin,
+                    command: applied.inverse,
+                    time: SystemTime::now(),
+                    files,
+                })
+            }
         }
         Ok(applied.changes)
     }
@@ -117,6 +159,9 @@ impl History {
             label: g.label,
             origin: g.origin.unwrap_or(Origin::User),
             command,
+            time: SystemTime::now(),
+            files: g.files,
+            parts: Vec::new(),
         });
         true
     }
@@ -140,16 +185,35 @@ impl History {
         origin: Origin,
         inverses: Vec<Command>,
     ) -> bool {
+        self.record_with(label, origin, inverses, Vec::new(), &[])
+    }
+
+    /// [`Self::record`], also saying what the entry is made of for the
+    /// History pane: `parts` the labels of the commands applied, in order,
+    /// and `changes` what they changed (the entry's files).
+    pub fn record_with(
+        &mut self,
+        label: impl Into<String>,
+        origin: Origin,
+        inverses: Vec<Command>,
+        parts: Vec<String>,
+        changes: &[Change],
+    ) -> bool {
         let inverses: Vec<Command> = inverses.into_iter().filter(|c| !c.is_noop()).collect();
         if inverses.is_empty() {
             return false;
         }
         let label = label.into();
         let command = undo_command(&label, inverses);
+        let mut files = Vec::new();
+        add_files(&mut files, changes);
         self.push_entry(Entry {
             label,
             origin,
             command,
+            time: SystemTime::now(),
+            files,
+            parts,
         });
         true
     }
@@ -197,7 +261,9 @@ impl History {
             return Ok(None);
         };
         let applied = project.apply(entry.command.clone())?;
-        let entry = from.pop().unwrap();
+        let mut entry = from.pop().unwrap();
+        // An entry recorded without its changes learns its files now.
+        add_files(&mut entry.files, &applied.changes);
         to.push(Entry {
             command: applied.inverse,
             ..entry

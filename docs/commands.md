@@ -827,14 +827,69 @@ Set the display order: `order` lists every world once. `[]` drops the list (worl
 
 ### remove_world
 
-Remove a world with everything in it. Refused unless the world is empty (no levels, world notes or guide groups) or `confirm` is `true`, and refused for the last world: a project keeps at least one.
+Remove a world with everything in it. Refused unless the world is empty (no levels, world notes, guide groups or reference images) or `confirm` is `true`, and refused for the last world: a project keeps at least one.
 
 ```json
 { "op": "remove_world", "world": "caves", "confirm": true }
 ```
 
-- **Inverse:** a `batch` that creates the world again, puts back its guide groups and world notes in order, each level with `create_level` and `restore: true`, and the old list with `reorder_worlds`.
-- **Changes:** `level_deleted` per level, `note` per world note, `world_removed` (saving deletes the directory), and `project` key `worlds` when the list changed.
+- **Inverse:** a `batch` that creates the world again, puts back its guide groups, world notes and reference images in order, each level with `create_level` and `restore: true`, and the old list with `reorder_worlds`.
+- **Changes:** `level_deleted` per level, `note` per world note, `reference` per world reference image, `world_removed` (saving deletes the directory), and `project` key `worlds` when the list changed.
+
+## Layer operations
+
+Copying a layer is a command of its own; merging a tiles layer down and moving tiles or entities to another layer are `batch`es of the commands above, built by `worlds_core::command::layer_ops` so the editor, the [live API](api.md#layer-operations) and the MCP server build the same ones.
+
+### duplicate_layer
+
+Copies a layer under the new `slug`: its definition (right above it in draw order), its content in every level (grid or derived overrides, tiles, the `entities.json` entry), its rule state in each `level.json` and, for an `auto` layer, its `rules/<layer>.json` as `rules/<slug>.json`. A derived `int_grid` stays derived. Copied entities get new ids, derived from the original id and `slug` (the same every time), and keep their fields, so an `entity_ref` still points at the original. Refused when `slug` is taken (`duplicate_def`) or a layer of that kind can't have it. The editor suggests `<layer>_copy`.
+
+Copying an `auto` layer whose rules `write` a derived grid gives that grid a second writer, which validation reports: change the copy's rules, or remove them.
+
+```json
+{ "op": "duplicate_layer", "layer": "decor_back", "slug": "decor_back_copy" }
+```
+
+- **Inverse:** `remove_layer_def` of the copy.
+- **Changes:** what `set_layer_def` of a new layer with that content reports: `def` kind `layer`, `def` kind `rules` for an `auto` layer, then per level a `grid` or `tiles` (whole layer), an `entity_layer` and an `entity` per copied instance, and a `layer_state`.
+
+**Merge down** (`layer_ops::merge_down(project, layer)`): a tiles layer into the layer right below it in draw order, which must be a tiles layer on the same grid (otherwise refused as `wrong_layer_kind` or `invalid`, with the reason). One `batch` labelled "Merge \<layer\> down into \<lower\>": per level where the layer has tiles, a `set_tiles` on the lower layer whose stack at each of those cells is the lower layer's stack with the upper's on top, then `remove_layer_def` of the upper layer. Undo puts the upper layer and every lower stack back.
+
+**Move to layer** (`layer_ops::move_tiles(project, level, from, to, cells)` and `layer_ops::move_entities(project, ids, to)`): tile stacks to another tiles layer on the same grid, on top of what it holds at those cells (a `set_tiles` on `to`, then a `set_tiles` clearing the cells of `from`), or entities to another entities layer of their level on the same grid (per entity a `remove_entity` and an `add_entity` with the same id, cell and fields, at the end of the new layer's list). Cells without tiles, and entities already on `to`, are skipped; when nothing is left the result is an empty `batch`.
+
+## Reference image commands
+
+Reference images (`references` in `world.json`, world pixels, or `level.json`, level pixels; see [format.md](format.md#reference-images)) are drawn under the layer stack and never exported. `scope` is `{ "world": "<slug>" }` or `{ "level": "<slug>" }`, as for notes. Ids are unique across the project's references. Moving, scaling, hiding or locking one is an `update_reference`. Commands ignore `locked` (the editor's tools honour it).
+
+### add_reference
+
+`reference` is the entry exactly as in the file. `index` is its position in the list, bottom first (default: the end, drawn over the others).
+
+```json
+{ "op": "add_reference", "scope": { "level": "crevasse" },
+  "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "opacity": 0.5 } }
+```
+
+- **Inverse:** `remove_reference`. **Changes:** `reference`.
+
+### update_reference
+
+Replace a reference wholesale; `reference.id` must equal `id`.
+
+```json
+{ "op": "update_reference", "id": "refsketch2",
+  "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [8, -16], "scale": 2, "opacity": 0.5, "locked": true } }
+```
+
+- **Inverse:** `update_reference` with the old entry. **Changes:** `reference`.
+
+### remove_reference
+
+```json
+{ "op": "remove_reference", "id": "refsketch2" }
+```
+
+- **Inverse:** `add_reference` at the old scope and index. **Changes:** `reference`.
 
 ## batch
 
@@ -877,6 +932,7 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | `world_removed` | `world` | the directory (saving deletes its files) |
 | `world_renamed` | `from`, `to` | both world directories (saving moves the files) |
 | `world_meta` | `world` | `worlds/<world>/world.json`; the world's name changed |
+| `reference` | `world`, `level` (`null` at world scope), `id` | `worlds/<world>/world.json` or `.../<level>/level.json`; a reference image was added, replaced or removed |
 
 Rects are in cells of the layer's grid and cover the cells whose value or tile stack changed. A tile drawn from a cell can overhang it; the renderer knows tile sizes.
 
@@ -904,15 +960,20 @@ Rects are in cells of the layer's grid and cover the cells whose value or tile s
 { "change": "world_renamed", "from": "underdark", "to": "caves" }
 ```
 
+```json
+{ "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" }
+```
+
 ## Undo and redo
 
-`worlds_core::command::History` keeps two stacks of entries. An entry is a label for the UI, an origin (`user`, or `{ "agent": "<name>" }`) and one command: on the undo stack, the inverse of what was done; on the redo stack, the command that redoes it. Undoing applies the entry's command and moves its inverse to the other stack, so undo and redo are the same operation. Depth is unlimited.
+`worlds_core::command::History` keeps two stacks of entries. An entry is a label for the UI, an origin (`user`, `{ "agent": "<name>" }`, or `disk` for files changed on disk that the editor applied) and one command: on the undo stack, the inverse of what was done; on the redo stack, the command that redoes it. Undoing applies the entry's command and moves its inverse to the other stack, so undo and redo are the same operation. Depth is unlimited.
 
 - `push(project, cmd)` applies and records one entry labelled by the command. `push_as(project, cmd, origin)` sets the origin (an agent's batch).
 - `begin_gesture(label, origin)`, then any number of `push`, then `end_gesture()`: one entry whose command is a `batch` of the collected inverses in reverse. A brush stroke is one gesture. `cancel_gesture(project)` reverts it instead (Escape during a drag).
 - `undo(project)` and `redo(project)` return the changes (or `None` when the stack is empty). Undo first closes an open gesture. If an entry fails to apply, nothing changes and the entry stays.
 - A command that changes nothing records nothing. A new entry clears the redo stack.
-- `record(label, origin, inverses) -> bool` records one entry for commands the caller applied itself with `Project::apply`, without touching the open gesture: `inverses` in the order the commands were applied (the entry undoes them last first), no-ops dropped, `false` and nothing recorded when none are left.
+- `record(label, origin, inverses) -> bool` records one entry for commands the caller applied itself with `Project::apply`, without touching the open gesture: `inverses` in the order the commands were applied (the entry undoes them last first), no-ops dropped, `false` and nothing recorded when none are left. `record_with(label, origin, inverses, parts, changes)` also gives the labels of the commands applied (`parts`) and what they changed.
+- Every entry also keeps, for the editor's History pane, the time it was recorded (`time`), the project files it touched (`files`, from its changes; an entry recorded without them learns them the first time it is undone) and `parts`: the label of its one command, each write of an agent's batch, or nothing for a gesture.
 
 An agent's batch on the [live API](api.md#history) uses `record`, not a gesture, because the one gesture slot belongs to the user: if the agent shared it, the user's pushes would join the agent's entry, the user's next `begin_gesture` would end the agent's batch, and cancelling the batch would revert the user's edits. So the server collects the inverses of the batch's writes itself and records them as one entry when the batch ends. When the user records an entry while an agent batch is open, the server first records the agent's part so far, so the batch becomes two entries (the undo stack stays in the order things happened, and each entry undoes only its own edits). When the agent's connection drops, the server reverts only the part it hasn't recorded yet.
 

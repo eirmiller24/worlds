@@ -663,6 +663,53 @@
       ],
       "type": "string"
     },
+    "Reference": {
+      "additionalProperties": false,
+      "description": "One entry of `references` in `level.json` or `world.json`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "image": {
+          "description": "Path to the PNG, relative to the project directory,\n`/`-separated, like a tileset's `image`.",
+          "type": "string"
+        },
+        "locked": {
+          "description": "The editor's tools don't move or scale it. Default false.",
+          "type": "boolean"
+        },
+        "opacity": {
+          "description": "0 (invisible) to 1 (opaque). Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "px": {
+          "description": "Top-left corner in pixels: level pixels in `level.json`, world\npixels in `world.json`.",
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "scale": {
+          "description": "Drawn size over the image's own size in pixels. Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "visible": {
+          "description": "Drawn at all. Default true.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "image",
+        "px"
+      ],
+      "type": "object"
+    },
     "Slug": {
       "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
       "pattern": "^[a-z][a-z0-9_]*$",
@@ -698,6 +745,13 @@
       "description": "World-scope annotations (world pixel coordinates), in insertion order.",
       "items": {
         "$ref": "#/$defs/Annotation"
+      },
+      "type": "array"
+    },
+    "references": {
+      "description": "World-scope reference images (world pixels), bottom first. Never\nexported.",
+      "items": {
+        "$ref": "#/$defs/Reference"
       },
       "type": "array"
     },

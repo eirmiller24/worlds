@@ -44,6 +44,7 @@
 mod apply;
 mod error_serde;
 mod history;
+pub mod layer_ops;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -56,7 +57,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::format::IntGridFile;
 use crate::id::{Id, Slug};
 use crate::model::{
-    Annotation, Color, EntitiesLayer, EntityInstance, GuideGroup, Level, TilePlacement,
+    Annotation, Color, EntitiesLayer, EntityInstance, GuideGroup, Level, Reference, TilePlacement,
 };
 use crate::model::{CellMatch, RuleEntry, Stamp, Template};
 use crate::model::{EntityDef, EnumDef, FieldDef, LayerDef, RuleGroup, RuleSet, TilesetDef};
@@ -628,6 +629,35 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         world_px: Option<[i64; 2]>,
     },
+
+    // ---- layer operations ----
+    /// Copy a layer: its definition (placed right above it in draw order),
+    /// its content in every level, its per-level rule state and, for an
+    /// `auto` layer, its rule set, all under the new slug. Copied entities
+    /// get ids derived from the original id and `slug`. The inverse is
+    /// `remove_layer_def` of the copy.
+    DuplicateLayer {
+        layer: Slug,
+        slug: Slug,
+    },
+
+    // ---- reference images ----
+    /// Add a reference image at world or level scope. `index`: position in
+    /// the list, bottom first (default: the end, drawn on top).
+    AddReference {
+        scope: NoteScope,
+        reference: Reference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Replace a reference image wholesale; `reference.id` must be `id`.
+    UpdateReference {
+        id: Id,
+        reference: Reference,
+    },
+    RemoveReference {
+        id: Id,
+    },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -761,6 +791,10 @@ impl Command {
             MoveLevelToWorld { level, world, .. } => {
                 format!("Move level {level} to world {world}")
             }
+            DuplicateLayer { layer, slug } => format!("Duplicate layer {layer} as {slug}"),
+            AddReference { .. } => "Add reference image".into(),
+            UpdateReference { id, .. } => format!("Edit reference image {id}"),
+            RemoveReference { id } => format!("Remove reference image {id}"),
         }
     }
 }
@@ -1468,6 +1502,13 @@ pub enum Change {
     WorldMeta {
         world: Slug,
     },
+    /// A reference image was added, replaced or removed. `level: None` is
+    /// world scope.
+    Reference {
+        world: Slug,
+        level: Option<Slug>,
+        id: Id,
+    },
 }
 
 fn world_dir(world: &Slug) -> PathBuf {
@@ -1533,6 +1574,16 @@ impl Change {
             WorldCreated { world } | WorldRemoved { world } => world_dir(world),
             WorldRenamed { to, .. } => world_dir(to),
             WorldMeta { world } => world_dir(world).join("world.json"),
+            Reference {
+                world, level: None, ..
+            } => PathBuf::from("worlds")
+                .join(world.as_str())
+                .join("world.json"),
+            Reference {
+                world,
+                level: Some(level),
+                ..
+            } => level_dir(world, level).join("level.json"),
         }
     }
 
@@ -1580,7 +1631,7 @@ impl Change {
             | LayerState { level, .. }
             | LayerFileRenamed { level, .. } => Some(level),
             LevelRenamed { to, .. } => Some(to),
-            Note { level, .. } => level.as_ref(),
+            Note { level, .. } | Reference { level, .. } => level.as_ref(),
             GuideGroup { .. }
             | Project { .. }
             | Def { .. }
@@ -1800,6 +1851,8 @@ pub enum CommandError {
     },
     #[error("a world {0:?} already exists")]
     DuplicateWorld(Slug),
+    #[error("no reference image {0:?}")]
+    UnknownReference(Id),
 }
 
 impl fmt::Display for NoteScope {
