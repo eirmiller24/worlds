@@ -1,4 +1,4 @@
-//! M6 over the live API, in-process and headless: derived layers (effective
+//! Derived layers and region rules over the live API, in-process and headless: derived layers (effective
 //! reads, `stored`, `"!"` writes and their refusal elsewhere), region rules
 //! in `rules.preview`, `rules.regions`, `rules.list`, `level.get`,
 //! `project.describe`, `project.bake` warnings, and the headless bake cache
@@ -432,7 +432,7 @@ fn region_preview_lists_are_truncated() {
 }
 
 #[test]
-fn list_describe_and_level_get_show_m6() {
+fn list_describe_and_level_get_show_passes_and_derived_layers() {
     let (_t, mut s) = session();
     hall(&mut s);
     let l = s
@@ -569,8 +569,9 @@ fn level_get_falls_back_to_the_overrides_when_the_writer_cant_bake() {
 }
 
 /// `project.bake` and `project.export` keep their `warnings` field. Two
-/// auto layers with tiles in one level were a warning until M7 (the old
-/// Godot importer read one); the M7 importer reads both, so it is empty.
+/// auto layers with tiles in one level used to be a warning (an older
+/// Godot importer read only one); the Godot addon reads both, so it is
+/// empty.
 #[test]
 fn bake_warnings() {
     let (_t, mut s) = session();

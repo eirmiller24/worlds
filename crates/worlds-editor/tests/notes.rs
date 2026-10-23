@@ -786,9 +786,9 @@ fn notes_drawing_shows_and_hides_by_tag_kind_and_status() {
     assert!(annot::shown(&v, &r.note("guidestem2"), true));
 }
 
-// ---- fix pass ----
+// ---- nudging, duplicating and selecting across kinds ----
 
-/// D10: Shift+arrows nudge every movable kind: entities, notes and levels
+/// Shift+arrows nudge every movable kind: entities, notes and levels
 /// by a pixel, tile stacks by a cell of their layer (a stack has nothing
 /// finer). One entry; undo restores it exactly.
 #[test]
@@ -913,7 +913,7 @@ fn duplicating_many_notes_gives_distinct_new_ids() {
     assert!(new.iter().all(|i| !used.contains(i)));
 }
 
-/// D12: in the active level, a press on no item is a marquee even when the
+/// In the active level, a press on no item is a marquee even when the
 /// level is selected (as in the level itself); the level moves by its tab,
 /// which drags the whole selection when the level is selected with others;
 /// another selected level's body still drags the selection.

@@ -1,4 +1,4 @@
-//! The M6 tools in-process, headless, on a temp copy of `mini.worlds`:
+//! The derived-layer and region-rule tools in-process, headless, on a temp copy of `mini.worlds`:
 //! `edit_definitions` creating and removing a layer, `edit_rules` with a
 //! region rule writing a derived layer, `find_regions`, `preview_rule` on
 //! region and derived-grid rules, `paint` with `"!"`, `read_level` showing
@@ -230,8 +230,8 @@ fn regions_previews_and_derived_paint() {
     let file = std::fs::read_to_string(dir.join("worlds/main/levels/hall/marks.json")).unwrap();
     assert!(file.contains("\"overrides\": true"), "{file}");
 
-    // Two auto layers with tiles in hall: no warning since M7 (the Godot
-    // importer reads both), but the field stays.
+    // Two auto layers with tiles in hall: no warning (the Godot addon
+    // reads both), but the field stays.
     let b = ok(&mut e, "bake_and_validate", json!({ "levels": ["hall"] }));
     assert_eq!(b["warnings"], json!([]), "{b}");
 }

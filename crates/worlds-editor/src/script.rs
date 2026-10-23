@@ -811,7 +811,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn m6_ui_steps_and_the_suppress_brush() {
+    fn derived_layer_ui_steps_and_the_suppress_brush() {
         let s = parse(
             r#"[
               { "ui": "rules", "layer": "pillars", "rule": "big_room_pillars",

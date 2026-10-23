@@ -1,4 +1,4 @@
-//! M6 format additions: passes, region rules, `write` outputs, stamps with
+//! Rule-file format for passes, region rules, `write` outputs, stamps with
 //! occupancy, derived grids with their overrides, `requires_level_tag` and
 //! `require` as a list. Loading, saving, validation, commands, export and
 //! the text view; the engine is `worlds-rules`'.
@@ -100,7 +100,7 @@ fn problems(p: &Project) -> Vec<String> {
     validate(p).iter().map(|x| x.to_string()).collect()
 }
 
-/// Problems `edit` adds to the M6 project, which itself validates clean.
+/// Problems `edit` adds to the test project, which itself validates clean.
 fn new_problems(edit: impl FnOnce(&mut Project)) -> Vec<String> {
     let mut p = project();
     assert_eq!(problems(&p), Vec::<String>::new());
@@ -144,7 +144,7 @@ fn tree(dir: &Path) -> BTreeMap<String, String> {
 // ---- rules files: load and save ----
 
 #[test]
-fn m6_rules_file_saves_in_table_order_and_round_trips() {
+fn rules_file_saves_in_table_order_and_round_trips() {
     let p = project();
     let text = rendered(&p, "rules/pillars.json");
     let expected = r#"{
@@ -552,7 +552,7 @@ fn avoid_overlap_works_on_any_output_and_occupies_on_stamps() {
 
 // ---- derived layers: files ----
 
-/// The M6 project saved to a temp dir.
+/// The test project saved to a temp dir.
 fn saved() -> (tempfile::TempDir, PathBuf, Project) {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("p.worlds");
@@ -1848,7 +1848,7 @@ overrides: 2 cells (1 set, 1 suppressed; . = from the rules)"
 // ---- schemas ----
 
 #[test]
-fn schemas_take_the_m6_keys() {
+fn schemas_take_the_pass_region_and_derived_keys() {
     let rules = jsonschema::validator_for(&schema::for_kind(format::FileKind::Rules)).unwrap();
     let p = project();
     let file: Value = serde_json::from_str(&rendered(&p, "rules/pillars.json")).unwrap();

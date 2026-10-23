@@ -1206,11 +1206,12 @@ fn a_level_field_value_rebakes_nothing_without_a_requirement() {
     assert!(out.is_empty(), "{out:?}");
 }
 
-// ---- M6: passes, region rules, writes, occupancy, derived grids ----
+// ---- passes, region rules, writes, occupancy, derived grids ----
 
 use worlds_core::command::GridValue;
 
-/// Two auto layers using every M6 feature. `reader` (listed first) reads
+/// Two auto layers using passes, region rules, writes, occupancy and
+/// derived grids. `reader` (listed first) reads
 /// the derived grid `marks` that `writer` writes:
 ///
 /// - writer pass 0: walls with two alternatives (one opaque, so locks),
@@ -1223,7 +1224,7 @@ use worlds_core::command::GridValue;
 ///   overwrites);
 /// - reader: tiles on `p`, a region rule over the marks, a stamp avoiding
 ///   overlap.
-fn m6_project() -> (Project, TilesetImages) {
+fn derived_project() -> (Project, TilesetImages) {
     let mut p = common::project();
     p.seed = 99;
     let marks: worlds_core::LayerDef = serde_json::from_value(serde_json::json!({
@@ -1308,7 +1309,7 @@ fn m6_project() -> (Project, TilesetImages) {
 }
 
 /// A level of rooms: solid border, a few platforms, water and fortified.
-fn m6_level(p: &Project, rng: &mut Rng, name: &str, w: usize, h: usize) -> worlds_core::Level {
+fn derived_level(p: &Project, rng: &mut Rng, name: &str, w: usize, h: usize) -> worlds_core::Level {
     let mut rows: Vec<Vec<char>> = (0..h)
         .map(|y| {
             (0..w)
@@ -1342,10 +1343,10 @@ fn m6_level(p: &Project, rng: &mut Rng, name: &str, w: usize, h: usize) -> world
     l
 }
 
-/// One random edit of the M6 kinds: collision strokes and fills, override
+/// One random edit of the kinds those features read: collision strokes and fills, override
 /// paints (values, `!`, `null`), level tags, rule edits on the writer (no
 /// stroke after), a tileset and a derived layer definition, layer seeds.
-fn m6_edit(rng: &mut Rng, p: &Project, level: &str, writer: &str, marks: &str) -> Command {
+fn derived_edit(rng: &mut Rng, p: &Project, level: &str, writer: &str, marks: &str) -> Command {
     let l = p.level(level).unwrap();
     let lv = Slug::new(level).unwrap();
     let col = p.layer("collision").unwrap();
@@ -1517,11 +1518,11 @@ fn grid_diff(
         .collect()
 }
 
-/// Random M6 edits on every level: after each batch the cache equals a
+/// Random edits of those kinds on every level: after each batch the cache equals a
 /// fresh bake (every auto layer's `LayerBake`, placements, `fired`, the
 /// computed grids and occupancy; every derived layer's effective grid),
 /// and every changed tile and derived cell is inside the reported rect.
-fn run_m6(
+fn run_derived(
     name: &str,
     p: &mut Project,
     images: &TilesetImages,
@@ -1550,7 +1551,7 @@ fn run_m6(
         while step < steps {
             let mut changes: Vec<Change> = Vec::new();
             for _ in 0..1 + rng.below(2) {
-                let cmd = m6_edit(&mut rng, p, level, writer, marks);
+                let cmd = derived_edit(&mut rng, p, level, writer, marks);
                 if let Ok(a) = p.apply(cmd) {
                     changes.extend(a.changes);
                 }
@@ -1632,11 +1633,11 @@ fn run_m6(
 }
 
 #[test]
-fn incremental_matches_full_with_every_m6_feature_across_two_layers() {
-    let (mut p, images) = m6_project();
+fn incremental_matches_full_with_derived_grids_across_two_layers() {
+    let (mut p, images) = derived_project();
     let mut rng = Rng(5);
     for (i, (w, h)) in [(40, 18), (24, 12), (64, 28)].into_iter().enumerate() {
-        let l = m6_level(&p, &mut rng, &format!("room{i}"), w, h);
+        let l = derived_level(&p, &mut rng, &format!("room{i}"), w, h);
         p.worlds[0].levels.push(l);
     }
     // Sanity: the project exercises what it should.
@@ -1653,14 +1654,14 @@ fn incremental_matches_full_with_every_m6_feature_across_two_layers() {
             .flatten()
             .any(|r| r == "on_p")
     );
-    run_m6("m6", &mut p, &images, 160, 0x5eed, "writer", "marks");
+    run_derived("derived", &mut p, &images, 160, 0x5eed, "writer", "marks");
 }
 
 #[test]
 fn a_rule_edit_on_the_writer_rebakes_its_readers_with_no_stroke() {
-    let (mut p, images) = m6_project();
+    let (mut p, images) = derived_project();
     let mut rng = Rng(11);
-    let l = m6_level(&p, &mut rng, "room", 40, 18);
+    let l = derived_level(&p, &mut rng, "room", 40, 18);
     p.worlds[0].levels.push(l);
     let mut cache = BakeCache::new();
     cache.bake_level(&p, "room", &images).unwrap();
@@ -1720,9 +1721,9 @@ fn assert_cache_fresh(p: &Project, cache: &BakeCache, images: &TilesetImages, wh
 /// definitions nothing depends on that writer any more.
 #[test]
 fn a_writer_that_stops_writing_leaves_no_stale_grid_or_reader() {
-    let (mut p, images) = m6_project();
+    let (mut p, images) = derived_project();
     let mut rng = Rng(5);
-    let l = m6_level(&p, &mut rng, "room", 40, 18);
+    let l = derived_level(&p, &mut rng, "room", 40, 18);
     p.worlds[0].levels.push(l);
     // An override, so the grid isn't simply empty afterwards.
     p.apply(Command::PaintCells {
@@ -1782,9 +1783,9 @@ fn a_writer_that_stops_writing_leaves_no_stale_grid_or_reader() {
 /// one does, the seed is refused (its bakes are older than the grid).
 #[test]
 fn a_level_seed_never_hides_a_later_override() {
-    let (mut p, images) = m6_project();
+    let (mut p, images) = derived_project();
     let mut rng = Rng(9);
-    let l = m6_level(&p, &mut rng, "room", 30, 14);
+    let l = derived_level(&p, &mut rng, "room", 30, 14);
     p.worlds[0].levels.push(l);
     let paint = |p: &mut Project| {
         p.apply(Command::PaintCells {
@@ -1845,10 +1846,10 @@ fn a_level_seed_never_hides_a_later_override() {
 }
 
 #[test]
-fn m6_layers_seed_from_a_level_seed_or_layer_by_layer() {
-    let (mut p, images) = m6_project();
+fn derived_layers_seed_from_a_level_seed_or_layer_by_layer() {
+    let (mut p, images) = derived_project();
     let mut rng = Rng(3);
-    let l = m6_level(&p, &mut rng, "room", 30, 14);
+    let l = derived_level(&p, &mut rng, "room", 30, 14);
     p.worlds[0].levels.push(l);
     let level_seed = BakeCache::bake_detached(&p, "room", &images).unwrap();
     assert_eq!(level_seed.bakes().count(), 2);
@@ -1887,7 +1888,7 @@ fn m6_layers_seed_from_a_level_seed_or_layer_by_layer() {
     // Then edits update both like a baked cache.
     let mut rng = Rng(77);
     for step in 0..40 {
-        let cmd = m6_edit(&mut rng, &p, "room", "writer", "marks");
+        let cmd = derived_edit(&mut rng, &p, "room", "writer", "marks");
         let Ok(applied) = p.apply(cmd) else { continue };
         for c in [&mut a, &mut b] {
             c.apply_changes(&p, "room", &images, &applied.changes)

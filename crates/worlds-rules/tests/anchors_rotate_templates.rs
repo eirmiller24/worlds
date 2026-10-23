@@ -1,4 +1,4 @@
-//! M3 engine features: `@` anchors, `require`, `rotate` (8 orientations),
+//! Rule engine features: `@` anchors, `require`, `rotate` (8 orientations),
 //! templates and named macros, `rule_matches_many`, the built-in `blob47`.
 
 mod common;

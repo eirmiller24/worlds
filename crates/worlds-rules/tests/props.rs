@@ -1,4 +1,5 @@
-//! Property tests for the M3 engine features: each new construct bakes
+//! Property tests for the newer rule features (anchors, `require`,
+//! `rotate`, templates): each new construct bakes
 //! exactly like an equivalent written the old way, and `rotate` commutes
 //! with turning the level.
 

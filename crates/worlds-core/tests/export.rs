@@ -310,9 +310,10 @@ fn level_tags_export_on_both_files() {
     assert!(w["worlds"][0]["levels"][1].get("tags").is_none());
 }
 
-/// A project without level tags exports exactly what it did before M5:
-/// guide groups, grouped guides (even flagged `export`) and level tags set
-/// back to none change no byte, and the index keys are the M4 ones.
+/// A project without level tags exports exactly what it did before level
+/// tags and guide groups existed: guide groups, grouped guides (even
+/// flagged `export`) and level tags set back to none change no byte, and
+/// the index keys are the original ones.
 #[test]
 fn a_project_without_tags_exports_as_before() {
     let p = common::fixture();

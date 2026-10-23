@@ -1,4 +1,4 @@
-//! M6 engine: region rules and the spacing strategies, passes, `write`
+//! Rule engine: region rules and the spacing strategies, passes, `write`
 //! outputs into derived grids (effective = overrides over computed), stamps
 //! with occupancy and `avoid_overlap`, `requires_level_tag`, `require` as a
 //! list, the cross-layer bake order, previews and export warnings.
@@ -1032,8 +1032,8 @@ fn export_warnings_and_derived_export() {
     all.insert(slug("room"), baked.clone());
     // Only `reader` has tiles: no warning.
     assert!(worlds_rules::export_warnings(&p2, &all).is_empty());
-    // Two auto layers with tiles, one off grid and one transposed: the M7
-    // importer reads all three, so still no warning.
+    // Two auto layers with tiles, one off grid and one transposed: the
+    // Godot addon reads all three, so still no warning.
     let tile = |px: [i32; 2], flip| BakedTile {
         px,
         tileset: slug("main"),

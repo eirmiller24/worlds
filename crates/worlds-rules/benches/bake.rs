@@ -8,7 +8,7 @@
 //! - `rebake_500_levels`: full bake of 500 synthetic 64x28 levels with the
 //!   50 rules, sequentially on one thread (DESIGN: under 1 s for all of them
 //!   on the worker pool).
-//! - `stroke_64x28_50_rules_m6`: `stroke_64x28_50_rules` with 46 of the 50
+//! - `stroke_64x28_50_rules_regions`: `stroke_64x28_50_rules` with 46 of the 50
 //!   rules in pass 0, two region rules (floor, interior) writing a derived
 //!   grid, and two pass-1 stamp rules with `occupies`/`avoid_overlap`
 //!   reading it (target: under 2 ms).
@@ -213,10 +213,10 @@ fn rebake_500(c: &mut Criterion) {
     g.finish();
 }
 
-/// The synthetic project of `stroke` with M6 features: 46 of the 50 rules
+/// The synthetic project of `stroke` with passes and region rules: 46 of the 50 rules
 /// in pass 0, two region rules writing derived grid `marks`, two pass-1
 /// stamps reading it.
-fn synthetic_m6() -> Project {
+fn synthetic_regions() -> Project {
     let mut rules = fifty_rules();
     rules.as_array_mut().unwrap().truncate(46);
     let mut p = synthetic(rules);
@@ -255,8 +255,8 @@ fn synthetic_m6() -> Project {
     p
 }
 
-fn stroke_m6(c: &mut Criterion) {
-    let mut p = synthetic_m6();
+fn stroke_regions(c: &mut Criterion) {
+    let mut p = synthetic_regions();
     let mut rng = Rng(1);
     let l = room(&p, "room", &mut rng, 64, 28);
     p.worlds[0].levels.push(l);
@@ -264,7 +264,7 @@ fn stroke_m6(c: &mut Criterion) {
     let mut cache = BakeCache::new();
     cache.bake_level(&p, "room", &images).unwrap();
     let mut on = false;
-    c.bench_function("stroke_64x28_50_rules_m6", |b| {
+    c.bench_function("stroke_64x28_50_rules_regions", |b| {
         b.iter(|| {
             on = !on;
             let v = on.then(|| slug("solid"));
@@ -288,5 +288,5 @@ fn stroke_m6(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, stroke, blob47, rebake_500, stroke_m6);
+criterion_group!(benches, stroke, blob47, rebake_500, stroke_regions);
 criterion_main!(benches);
