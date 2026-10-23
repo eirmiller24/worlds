@@ -1,0 +1,55 @@
+{
+  "format": 1,
+  "enums": [
+    {
+      "slug": "facing",
+      "name": "facing",
+      "values": [
+        {
+          "slug": "right",
+          "name": "right"
+        },
+        {
+          "slug": "left",
+          "name": "left"
+        }
+      ]
+    },
+    {
+      "slug": "material",
+      "name": "material",
+      "values": [
+        {
+          "slug": "stone",
+          "name": "stone"
+        },
+        {
+          "slug": "wood",
+          "name": "wood"
+        },
+        {
+          "slug": "metal",
+          "name": "metal"
+        }
+      ]
+    },
+    {
+      "slug": "music",
+      "name": "music",
+      "values": [
+        {
+          "slug": "silence",
+          "name": "silence"
+        },
+        {
+          "slug": "calm",
+          "name": "calm"
+        },
+        {
+          "slug": "tense",
+          "name": "tense"
+        }
+      ]
+    }
+  ]
+}

@@ -45,10 +45,9 @@ Baking:
 - `export_warnings(&project, &baked) -> Vec<String>`: what a game
   importer can't read faithfully, the `warnings` of `worlds-cli bake`,
   `project.bake` and MCP `bake_and_validate`. Currently always empty: the
-  Godot importer reads transposed tiles, tiles off their layer's grid and
-  several auto layers per level. A particular game importer's own rules are
-  `worlds-cli check-export`'s job (`docs/format.md`, "Checking an
-  export").
+  Godot addon reads transposed tiles, tiles off their layer's grid and
+  several auto layers per level. `worlds-cli check-export` checks an export
+  against the format (`docs/format.md`, "Checking an export").
 - `BakeCache`: incremental baking (below), with `derived(level, layer) ->
   Option<Arc<IntGridLayer>>` (effective), `bake_derived(&project, level,
   layer, &images) -> Result<Option<Arc<IntGridLayer>>>` (the same, baking
@@ -616,7 +615,7 @@ Measured on the development machine, 2026-10-22:
 | `stroke_64x28_50_rules` | a 20-cell paint: `Project::apply` + `BakeCache::apply_changes`, 64x28 room, 50 rules (mirrors, some `rotate`, chance, two alternatives) | 305 µs |
 | `blob47_64x28` | full bake of one `blob47` reference (47 rules) on a 64x28 mask | 1.12 ms |
 | `rebake_500_levels` | full bake of 500 synthetic 64x28 levels, the 50 rules, sequential | 1.011 s |
-| `stroke_64x28_50_rules_m6` | the same stroke with 46 of the rules in pass 0, two region rules (floor, interior) writing a derived grid, two pass-1 stamps with `occupies`/`avoid_overlap` reading it | 1.02 ms |
+| `stroke_64x28_50_rules_regions` | the same stroke with 46 of the rules in pass 0, two region rules (floor, interior) writing a derived grid, two pass-1 stamps with `occupies`/`avoid_overlap` reading it | 1.02 ms |
 
 Against DESIGN's targets: a stroke is 0.31 ms of the 2 ms budget, 1.0 ms
 with a region pass and an occupancy pass (the occupancy pass re-sweeps

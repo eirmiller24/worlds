@@ -1,6 +1,6 @@
 //! `worlds-cli validate --enum-source <enum>=<file.json>[#<json-pointer>]`:
 //! compare a Worlds enum with the game data file it mirrors (a
-//! `skin` enum and `data/skins.json`, say) and report drift either way.
+//! `theme` enum and `data/themes.json`, say) and report drift either way.
 //! Game-agnostic: the caller names the enum, the file and where in it the
 //! values are.
 
@@ -81,8 +81,8 @@ impl EnumSource {
 }
 
 /// One `--enum-extra <enum>=<v1,v2,...>` argument: values the Worlds enum
-/// may have that its source doesn't (a `skin` enum may have `none`, which
-/// `data/skins.json` doesn't list because it means "no skin").
+/// may have that its source doesn't (a `theme` enum may have `none`, which
+/// `data/themes.json` doesn't list because it means "no theme").
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumExtra {
     pub spec: String,

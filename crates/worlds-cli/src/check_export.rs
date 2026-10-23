@@ -1,13 +1,11 @@
 //! `worlds-cli check-export`: checks an export directory against the export
-//! format (`docs/format.md`, "export/"), and with a profile against what a
-//! game's importer accepts (`importer_contract`), without the game.
+//! format (`docs/format.md`, "export/"), without the game.
 //!
 //! Everything is read as plain JSON, never through `worlds_core`'s writer:
 //! the point is an independent reading of the files the game gets. Problems
 //! carry a kind: `format` (shape, types, geometry that doesn't add up),
 //! `reference` (a file, image, atlas tile or entity type that isn't there),
-//! `importer` (the profile refuses it), `stale` (`--fresh`: differs from a
-//! fresh bake). Annotation links that name nothing exported are warnings
+//! `stale` (`--fresh`: differs from a fresh bake). Annotation links that name nothing exported are warnings
 //! (kind `annotation`), never problems.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -17,15 +15,12 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::importer_contract;
-
 /// What a finding is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Format,
     Reference,
-    Importer,
     Stale,
     Annotation,
 }
@@ -48,16 +43,6 @@ impl fmt::Display for Finding {
             write!(f, "{}: {}: {}", self.file, self.path, self.message)
         }
     }
-}
-
-/// Which importer contract to check on top of the format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    /// The format only.
-    None,
-    /// A Godot importer that turns each level into a room scene
-    /// (`importer_contract`).
-    GodotRooms,
 }
 
 /// Every finding of one check.
@@ -87,21 +72,11 @@ impl Report {
 
     /// An annotation warning (link or tag).
     pub fn warn(&mut self, file: &str, path: impl Into<String>, msg: impl Into<String>) {
-        self.warn_kind(Kind::Annotation, file, path, msg);
-    }
-
-    pub fn warn_kind(
-        &mut self,
-        kind: Kind,
-        file: &str,
-        path: impl Into<String>,
-        msg: impl Into<String>,
-    ) {
         self.warnings.push(Finding {
             file: file.to_string(),
             path: path.into(),
             message: msg.into(),
-            kind,
+            kind: Kind::Annotation,
         });
     }
 
@@ -113,31 +88,6 @@ impl Report {
             "warnings": self.warnings,
         })
     }
-}
-
-/// One tileset run of a tile layer, as read.
-#[derive(Debug)]
-pub struct Run {
-    pub tile_size: [i64; 2],
-    /// `[x, y, col, row, flip]`, with the index of the tile in the run.
-    pub tiles: Vec<[i64; 5]>,
-}
-
-/// One `tile_layers` entry, as read.
-#[derive(Debug)]
-pub struct TileLayer {
-    pub slug: String,
-    pub name: String,
-    pub kind: String,
-    pub runs: Vec<Run>,
-}
-
-/// What the importer contract needs of a level file.
-#[derive(Debug)]
-pub struct LevelData {
-    pub file: String,
-    pub slug: String,
-    pub tile_layers: Vec<TileLayer>,
 }
 
 /// A note as read from the export, with where it was found.
@@ -278,7 +228,7 @@ fn read_json(dir: &Path, rel: &str, report: &mut Report) -> anyhow::Result<Optio
 
 /// Check the export in `dir`. `Err` only for I/O errors (the directory or a
 /// file can't be read); everything else is a finding.
-pub fn check(dir: &Path, profile: Profile) -> anyhow::Result<Report> {
+pub fn check(dir: &Path) -> anyhow::Result<Report> {
     if !dir.is_dir() {
         anyhow::bail!("{}: not a directory", dir.display());
     }
@@ -477,7 +427,6 @@ pub fn check(dir: &Path, profile: Profile) -> anyhow::Result<Report> {
             );
         }
     }
-    let mut level_data = Vec::new();
     let mut entity_ids = HashSet::new();
     let mut entity_refs = Vec::new();
     for l in &listed {
@@ -500,7 +449,7 @@ pub fn check(dir: &Path, profile: Profile) -> anyhow::Result<Report> {
             blocking: &blocking,
             entity_types: &entity_types,
         };
-        let data = check_level(&ctx, &l.file, &v, &mut report);
+        check_level(&ctx, &l.file, &v, &mut report);
         // open_edges in the index, recomputed from the collision rows.
         check_open_edges(&ctx, &l.path, &l.index, &v, &mut report);
         if let Some(ns) = v.get("notes").and_then(Value::as_array) {
@@ -523,7 +472,6 @@ pub fn check(dir: &Path, profile: Profile) -> anyhow::Result<Report> {
             }
         }
         collect_entity_refs(&l.file, &v, &mut entity_refs);
-        level_data.push(data);
     }
     for (file, path) in entity_refs {
         report.problem(
@@ -569,16 +517,6 @@ pub fn check(dir: &Path, profile: Profile) -> anyhow::Result<Report> {
             }
         }
     }
-    if profile == Profile::GodotRooms {
-        importer_contract::check_project(&world, &mut report);
-        let mut order = Vec::new();
-        for l in &level_data {
-            importer_contract::check_level(l, &mut report, &mut order);
-        }
-        for (file, msg) in order {
-            report.warn_kind(Kind::Importer, &file, "tile_layers", msg);
-        }
-    }
     Ok(report)
 }
 
@@ -597,7 +535,7 @@ struct LevelCtx<'a> {
     entity_types: &'a HashSet<String>,
 }
 
-fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) -> LevelData {
+fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) {
     let mut r = Reader {
         report,
         file: file.to_string(),
@@ -722,13 +660,12 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) -> Lev
         }
     }
     // Tile layers.
-    let mut tile_layers = Vec::new();
     if let Some(layers) = r.arr(v, "", "tile_layers") {
         for (li, lv) in layers.iter().enumerate() {
             let p = item("tile_layers", lv, "layer", li);
-            let slug = r.str(lv, &p, "layer").unwrap_or("").to_string();
-            let name = r.str(lv, &p, "name").unwrap_or("").to_string();
-            let kind = r.str(lv, &p, "kind").unwrap_or("").to_string();
+            r.str(lv, &p, "layer");
+            r.str(lv, &p, "name");
+            let kind = r.str(lv, &p, "kind").unwrap_or("");
             if !kind.is_empty() && kind != "tiles" && kind != "auto" {
                 r.bad(
                     &join(&p, "kind"),
@@ -739,7 +676,6 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) -> Lev
             if grid_size <= 0 && lv.get("grid_size").and_then(Value::as_i64).is_some() {
                 r.bad(&join(&p, "grid_size"), "must be greater than 0");
             }
-            let mut runs = Vec::new();
             for (ri, run) in r.arr(lv, &p, "tilesets").into_iter().flatten().enumerate() {
                 let rp = format!("{p}.tilesets[{ri}]");
                 r.str(run, &rp, "tileset");
@@ -752,7 +688,6 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) -> Lev
                 let dims = r
                     .str(run, &rp, "image")
                     .and_then(|img| image_dims(cx.dir, img, &mut r, &join(&rp, "image")));
-                let mut tiles = Vec::new();
                 for (ti, t) in r.arr(run, &rp, "tiles").into_iter().flatten().enumerate() {
                     let tp = format!("{rp}.tiles[{ti}]");
                     let Some(t) = ints_of::<5>(t) else {
@@ -792,19 +727,8 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) -> Lev
                             ),
                         );
                     }
-                    tiles.push(t);
                 }
-                runs.push(Run {
-                    tile_size: ts,
-                    tiles,
-                });
             }
-            tile_layers.push(TileLayer {
-                slug,
-                name,
-                kind,
-                runs,
-            });
         }
     }
     // Entities.
@@ -823,11 +747,6 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) -> Lev
         }
         r.ints::<2>(e, &p, "px");
         r.obj(e, &p, "fields");
-    }
-    LevelData {
-        file: file.to_string(),
-        slug: cx.slug.to_string(),
-        tile_layers,
     }
 }
 

@@ -14,9 +14,9 @@ use worlds_core::{Project, Slug};
 /// Empty today, for every export. It used to list things an older Godot
 /// importer couldn't read (transposed tiles, tiles off their layer's grid,
 /// several auto layers with tiles in one level). The mechanism stays so a future limitation of the
-/// export's readers has one place to go. Game-specific rules (a game's
-/// skin layer, layer names, reserved nodes) are not checked here: that is
-/// `worlds-cli check-export --profile godot-rooms`.
+/// export's readers has one place to go. Game-specific rules (layer names,
+/// grid sizes, required layers) are not checked here: they belong to that
+/// game's own import step.
 pub fn export_warnings(_project: &Project, _baked: &BTreeMap<Slug, BakedLevel>) -> Vec<String> {
     Vec::new()
 }

@@ -135,14 +135,14 @@ fn validate_enum_source() {
     std::fs::write(
         dir.join("enums.json"),
         r#"{ "$schema": "schema/enums.json", "format": 1, "enums": [
-             { "slug": "skin", "values": [ { "slug": "none" }, { "slug": "cave" }, { "slug": "mine" } ] },
+             { "slug": "theme", "values": [ { "slug": "none" }, { "slug": "cave" }, { "slug": "mine" } ] },
              { "slug": "music", "values": [ { "slug": "quiet" }, { "slug": "boss" } ] } ] }"#,
     )
     .unwrap();
     std::fs::create_dir(tmp.path().join("data")).unwrap();
     std::fs::write(
-        tmp.path().join("data/skins.json"),
-        r#"{ "_comment": "not a skin", "cave": {}, "mine": {}, "jungle": {} }"#,
+        tmp.path().join("data/themes.json"),
+        r#"{ "_comment": "not a theme", "cave": {}, "mine": {}, "jungle": {} }"#,
     )
     .unwrap();
     std::fs::write(
@@ -153,13 +153,13 @@ fn validate_enum_source() {
     std::fs::write(tmp.path().join("data/bad.json"), "[1, 2]").unwrap();
     let cwd = tmp.path();
     // Drift both ways, relative to the current directory.
-    let (code, out) = validate_in(cwd, &dir, &["--enum-source", "skin=data/skins.json"]);
+    let (code, out) = validate_in(cwd, &dir, &["--enum-source", "theme=data/themes.json"]);
     assert_eq!(code, Some(1), "{out}");
     assert_eq!(
         out,
-        "enums.json: enums[0].values[0]: enum skin has \"none\", which data/skins.json doesn't \
+        "enums.json: enums[0].values[0]: enum theme has \"none\", which data/themes.json doesn't \
          (enum source drift)\n\
-         enums.json: enums[0]: enum skin lacks \"jungle\", which data/skins.json has (enum source \
+         enums.json: enums[0]: enum theme lacks \"jungle\", which data/themes.json has (enum source \
          drift)\n2 problem(s)\n"
     );
     // --enum-extra allows "none" on the Worlds side only.
@@ -168,9 +168,9 @@ fn validate_enum_source() {
         &dir,
         &[
             "--enum-source",
-            "skin=data/skins.json",
+            "theme=data/themes.json",
             "--enum-extra",
-            "skin=none,other",
+            "theme=none,other",
         ],
     );
     assert_eq!(code, Some(1), "{out}");
@@ -182,13 +182,13 @@ fn validate_enum_source() {
     assert_eq!(code, Some(0), "{out}");
     // Usage errors: exit 2.
     for args in [
-        &["--enum-source", "nope=data/skins.json"][..],
-        &["--enum-source", "skin=data/missing.json"],
-        &["--enum-source", "skin=data/skins.json#/cave/x"],
+        &["--enum-source", "nope=data/themes.json"][..],
+        &["--enum-source", "theme=data/missing.json"],
+        &["--enum-source", "theme=data/themes.json#/cave/x"],
         &["--enum-source", "music=data/bad.json"],
-        &["--enum-source", "skin"],
-        &["--enum-source", "skin=data/skins.json#cave"],
-        &["--enum-source", &music, "--enum-extra", "skin=none"],
+        &["--enum-source", "theme"],
+        &["--enum-source", "theme=data/themes.json#cave"],
+        &["--enum-source", &music, "--enum-extra", "theme=none"],
         &["--enum-source", &music, "--enum-extra", "music="],
     ] {
         let (code, out) = validate_in(cwd, &dir, args);

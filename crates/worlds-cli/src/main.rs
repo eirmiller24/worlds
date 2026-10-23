@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 mod check_export;
 mod enum_source;
-mod importer_contract;
 
 #[derive(Parser)]
 #[command(
@@ -36,12 +35,12 @@ enum Command {
         #[arg(long = "enum-source", value_name = "ENUM=FILE[#POINTER]", value_parser = enum_source::EnumSource::parse)]
         enum_sources: Vec<enum_source::EnumSource>,
         /// Values the Worlds enum may have that its --enum-source doesn't:
-        /// <enum>=<value>[,<value>...] (e.g. skin=none). Repeatable.
+        /// <enum>=<value>[,<value>...] (e.g. theme=none). Repeatable.
         #[arg(long = "enum-extra", value_name = "ENUM=VALUES", value_parser = enum_source::EnumExtra::parse)]
         enum_extras: Vec<enum_source::EnumExtra>,
     },
-    /// Check an export directory against the export format and a game's
-    /// importer contract, without the game. Exits 0 when clean (warnings
+    /// Check an export directory against the export format, without the
+    /// game. Exits 0 when clean (warnings
     /// allowed), 1 on problems, 2 on a usage or I/O error.
     CheckExport {
         /// Export directory (the one holding world.json). Default:
@@ -55,11 +54,6 @@ enum Command {
         /// and report every file that differs (a stale export).
         #[arg(long)]
         fresh: bool,
-        /// Importer contract: none (the export format only, the default) or
-        /// godot-rooms (a Godot importer that turns each level into a room
-        /// scene; docs/format.md).
-        #[arg(long, value_enum, default_value_t = ProfileArg::None)]
-        profile: ProfileArg,
         /// Print { ok, levels, problems, warnings } as JSON.
         #[arg(long)]
         json: bool,
@@ -127,9 +121,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             export,
             project,
             fresh,
-            profile,
             json,
-        } => check_export(export, project, fresh, profile, json),
+        } => check_export(export, project, fresh, json),
         Command::Schema { dir } => {
             worlds_core::schema::write_all(&dir)?;
             println!("wrote {}", dir.join("schema").display());
@@ -141,18 +134,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
     }
 }
 
-/// `check-export --profile`.
-#[derive(Clone, Copy, ValueEnum)]
-enum ProfileArg {
-    None,
-    GodotRooms,
-}
-
 fn check_export(
     export: Option<PathBuf>,
     project: Option<PathBuf>,
     fresh: bool,
-    profile: ProfileArg,
     json: bool,
 ) -> Result<ExitCode> {
     let export = match (export, &project) {
@@ -163,11 +148,7 @@ fn check_export(
     if project.is_some() && !fresh {
         bail!("--project is only used with --fresh");
     }
-    let profile = match profile {
-        ProfileArg::GodotRooms => check_export::Profile::GodotRooms,
-        ProfileArg::None => check_export::Profile::None,
-    };
-    let mut report = check_export::check(&export, profile)?;
+    let mut report = check_export::check(&export)?;
     if fresh {
         let project = match project {
             Some(p) => p,
@@ -287,8 +268,7 @@ fn bake(dir: &Path, only: Option<&str>, out: Option<&Path>) -> Result<ExitCode> 
         written.files.len(),
         export.display()
     );
-    // What a game importer can't read faithfully (currently none; an
-    // importer's own rules are `check-export`'s profiles).
+    // What a game importer can't read faithfully (currently none).
     for w in worlds_rules::export_warnings(&project, &baked) {
         eprintln!("warning: {w}");
     }

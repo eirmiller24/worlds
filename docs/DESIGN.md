@@ -62,7 +62,7 @@ my_game.worlds/
   project.json            name, grid size, world layout, seed, settings
   layers.json             layer definitions in draw order
   tilesets.json           image path, tile size, spacing
-  enums.json              shared enums (Facing, Skin, Music ...)
+  enums.json              shared enums (Facing, Theme, Music ...)
   entities/
     floor_button.json     one entity definition per file
     gate.json
@@ -331,7 +331,7 @@ Tileset PNGs are watched and hot-reloaded. Undo is a command log with inverse co
 
 ## Game integration
 
-The expected game-side model: one level is one room, a collision layer is the playable truth, and the game's importer reconciles room scenes rather than replacing them. The importer reads `export/`, never the project files.
+The expected game-side model: a collision layer is the playable truth, and the game's importer reads `export/`, never the project files. It can build scenes from scratch (as the [Godot addon](../godot/addons/worlds/README.md) does) or reconcile hand-made ones, matching entities by id.
 
 `export/levels/{slug}.json` contains:
 
@@ -343,7 +343,7 @@ The expected game-side model: one level is one room, a collision layer is the pl
 
 `export/world.json` indexes the levels with their world rects and carries exported world-scope annotations. The data seam inference needs (touching levels, open edges) is precomputed into the index.
 
-A game import step typically runs `worlds-cli validate` and `worlds-cli bake` first, then reads the export. `worlds-cli validate --enum-source` compares project enums with the game's own data files and reports drift before export. `worlds-cli check-export` checks an export without the game, against the format and optionally an importer profile (see [format.md](format.md#checking-an-export)).
+A game import step typically runs `worlds-cli validate` and `worlds-cli bake` first, then reads the export. `worlds-cli validate --enum-source` compares project enums with the game's own data files and reports drift before export. `worlds-cli check-export` checks an export against the format without the game (see [format.md](format.md#checking-an-export)).
 
 ## Tech stack
 
@@ -392,6 +392,6 @@ Not in v1: no scripting language inside the editor, no plugin system, no web bui
 - [x] **Region rules.** A region is a 4-connected component of cells passing one cell test; width and height are its bounding box's, bounds are inclusive (so "wider than 14" is `min_width: 15`). Placement runs per straight edge run (`floor`, `ceiling`, `wall_left`, `wall_right`) or on a lattice `across` the interior, with `even` (fixed pitch, `align`), `spread` (min gap, end to end) or `random` (seeded, `jitter`) spacing. Region rules fire like a pattern rule's variant 0 at each candidate.
 - [x] **Derived grids have one writer and hand overrides.** A derived `int_grid` is written by exactly one auto layer; layers bake in dependency order and a cycle is a validation error. Its file holds only overrides (`"overrides": true`; `.` = rules decide, a value glyph forces, `!` suppresses), in a separate type from value grids; a suppressed cell reads as empty. The export carries the effective grid with `derived: true`.
 - [x] **Occupancy is per auto layer, by cell centres.** A placement occupies the cells whose centre lies inside one of its tiles' pixel boxes; `occupies` stamps mark them, `avoid_overlap` on any output skips a variant whose footprint is taken, in sweep order; occupancy persists across a layer's passes, never across layers, and never locks. A game importer should give each auto layer its own TileMapLayer, place off-grid tiles exactly (never snap), and may ignore `derived: true` int_grids.
-- [x] **Importer contracts live in worlds-cli.** Worlds stays game-agnostic: a game's own conventions (which auto layer is the room skin, tile size, reserved names, required layers) are an importer profile of `worlds-cli check-export`, and the game's importer refuses the same exports; shared fixtures in `crates/worlds-cli/tests/fixtures/importer_contract/` keep the two in step, warnings included. `worlds-cli validate --enum-source`/`--enum-extra` reports enum drift against the game's data files.
+- [x] **Export checks live in worlds-cli.** Worlds stays game-agnostic: `worlds-cli check-export` checks only the export format, and a game's own conventions (tile size, reserved names, required layers) belong to that game's import step; the fixtures in `crates/worlds-cli/tests/fixtures/exports/` are shared by the Rust tests and the Godot addon's tests. `worlds-cli validate --enum-source`/`--enum-extra` reports enum drift against the game's data files.
 - [x] **Autosave is the dirty set, recovery is an overlay.** `.worlds/editor.lock` is held for the session and never renamed or deleted; `editor.json` says who holds it; a second editor quits. Autosave writes exactly what Ctrl+S would (same render path) as a generation plus a manifest committed last, every 30 s, on focus loss and on SIGTERM/SIGINT, never mid-gesture, retried on failure. On open, an unlocked manifest is a crashed session: Recover overlays it on disk with conflicts re-checked, Discard keeps one copy aside, Later asks again; undo history starts empty. Headless `--recover keep|apply|discard`.
 - [x] **Linux-only v1.**
