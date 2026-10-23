@@ -327,6 +327,10 @@ impl Engine {
             "create_world" => self.create_world(a),
             "edit_worlds" => self.edit_worlds(a),
             "move_level" => self.move_level(a),
+            "add_reference" => self.add_reference(a),
+            "update_reference" => self.update_reference(a),
+            "remove_reference" => self.remove_reference(a),
+            "layer_operation" => self.layer_operation(a),
             other => Err(format!(
                 "there is no tool {other:?}; the tools are {}",
                 crate::catalog::TOOLS
