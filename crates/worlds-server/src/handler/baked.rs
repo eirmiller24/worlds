@@ -94,10 +94,12 @@ pub(crate) fn follow_changes(
     changes: &[worlds_core::command::Change],
 ) {
     use worlds_core::command::Change;
-    if changes
-        .iter()
-        .any(|c| matches!(c, Change::DefRenamed { .. } | Change::Project { .. }))
-    {
+    if changes.iter().any(|c| match c {
+        Change::DefRenamed { .. } => true,
+        // The world order doesn't change a bake.
+        Change::Project { key } => *key != worlds_core::command::ProjectKey::Worlds,
+        _ => false,
+    }) {
         bakes.clear();
         return;
     }

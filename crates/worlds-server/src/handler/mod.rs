@@ -25,6 +25,7 @@ mod project;
 mod rules;
 mod tiles;
 mod view;
+mod world;
 mod write;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -205,6 +206,11 @@ pub fn is_write(method: &str) -> bool {
             | "history.begin_batch"
             | "edit.paste"
             | "level.duplicate"
+            | "world.create"
+            | "world.rename"
+            | "world.remove"
+            | "world.reorder"
+            | "level.move_to_world"
     )
 }
 
@@ -450,6 +456,11 @@ fn write_builder(method: &str) -> Option<Builder> {
         "history.begin_batch" => history::begin_builder,
         "edit.paste" => edit::paste,
         "level.duplicate" => level::duplicate,
+        "world.create" => world::create,
+        "world.rename" => world::rename,
+        "world.remove" => world::remove,
+        "world.reorder" => world::reorder,
+        "level.move_to_world" => world::move_level,
         _ => return None,
     })
 }

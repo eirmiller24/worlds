@@ -122,12 +122,36 @@ fn worlds(project: &Project) -> Value {
                 "slug": w.slug,
                 "name": w.name.clone().unwrap_or_else(|| title_case(w.slug.as_str())),
                 "levels": w.levels.iter().map(|l| &l.slug).collect::<Vec<_>>(),
+                "level_count": w.levels.len(),
+                "bbox": world_bbox(project, w),
                 "notes": w.notes.iter().filter(|n| !is_guide(n)).count(),
                 "guides": w.notes.iter().filter(|n| is_guide(n)).count(),
                 "guide_groups": groups,
             })
         })
         .collect()
+}
+
+/// `[x, y, w, h]` in world pixels around every level of a world, `null`
+/// when it has none.
+pub fn world_bbox(project: &Project, w: &worlds_core::World) -> Value {
+    let g = project.grid_size as i64;
+    let mut it = w.levels.iter().map(|l| {
+        let [x, y] = l.world_px;
+        [x, y, x + l.size[0] as i64 * g, y + l.size[1] as i64 * g]
+    });
+    let Some(first) = it.next() else {
+        return Value::Null;
+    };
+    let [x0, y0, x1, y1] = it.fold(first, |a, b| {
+        [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[2].max(b[2]),
+            a[3].max(b[3]),
+        ]
+    });
+    json!([x0, y0, x1 - x0, y1 - y0])
 }
 
 /// `main` -> `Main`, `west_wing` -> `West wing`: the display name of a

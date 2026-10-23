@@ -6,7 +6,7 @@
 //! it again after the page changes.
 
 /// The `instructions` `initialize` returns.
-pub const INSTRUCTIONS: &str = r#"Worlds is a 2D tile level editor. A project is a set of levels (rooms) laid out in a world. Each level has the same layers, defined once for the project:
+pub const INSTRUCTIONS: &str = r#"Worlds is a 2D tile level editor. A project is a set of levels (rooms) laid out in a world; a project can hold several worlds (separate maps, such as an overworld and a dungeon), each with its own levels, but most have one. Each level has the same layers, defined once for the project:
 - int_grid layers: a grid where each cell holds a named value or is empty. The collision layer (values like solid, oneway, water) is the playable truth. You paint these with `paint`. A derived int_grid layer (marks such as where pillars go) is computed by an auto layer's rules instead; painting it sets hand overrides on top of what the rules compute.
 - auto layers: tiles generated from an int_grid layer by rules. Never painted directly: change the source grid, or the rules with `edit_rules`.
 - tiles layers: hand-placed decoration tiles taken from a tileset image by atlas column and row (`place_tiles`).
@@ -30,7 +30,7 @@ pub struct ToolDef {
 pub const TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "describe_project",
-        description: r#"Get the map of the open Worlds project: the project grid size; every level with its world position, size in cells and pixels, tags, and how much content each layer holds; every layer with its kind and cell size, and for int_grid layers each value's slug and glyph (the character that stands for it in read_level and paint), for a derived int_grid layer (one the rules compute) "derived": true and its writer (the auto layer whose rules compute it), for an auto layer the passes its rule groups use; entity types with their fields, defaults and how many exist; enums; tilesets with tile size and atlas size in tiles; note counts (guides are counted apart) and each world's guide groups. Call this first: the slugs, glyphs and sizes you need for every other tool are here. Returns JSON."#,
+        description: r#"Get the map of the open Worlds project: the project grid size; every level with its world position, size in cells and pixels, tags, and how much content each layer holds; every layer with its kind and cell size, and for int_grid layers each value's slug and glyph (the character that stands for it in read_level and paint), for a derived int_grid layer (one the rules compute) "derived": true and its writer (the auto layer whose rules compute it), for an auto layer the passes its rule groups use; entity types with their fields, defaults and how many exist; enums; tilesets with tile size and atlas size in tiles; note counts (guides are counted apart); and the worlds, in order, each with its levels, level count, bounding box in world pixels ([x, y, width, height] around its levels, null when it has none) and guide groups. Call this first: the slugs, glyphs and sizes you need for every other tool are here. Returns JSON."#,
         schema: r#"{ "type": "object", "properties": {}, "additionalProperties": false }"#,
     },
     ToolDef {
@@ -489,5 +489,40 @@ patch holds any of these, applied in this order: set_macros ([{ kind: "pattern",
     "world_px": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "Top-left corner in world pixels. Default: just right of the original." },
     "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
   "required": ["level", "slug"], "additionalProperties": false }"#,
+    },
+    ToolDef {
+        name: "create_world",
+        description: r#"Create a new, empty world: a separate map with its own levels, world notes and guides, such as a dungeon set apart from the overworld or a later chapter. Everything else (layers, tilesets, entity types, enums, rules, the grid) is shared by every world, and level slugs are unique across all of them. slug names it (lowercase snake_case, unused by any other world); name is its display name. It goes last in the project's world order. Then create_level with world set to it, or move_level an existing level there. Most projects have one world; describe_project lists them."#,
+        schema: r#"{ "type": "object",
+  "properties": {
+    "slug": { "type": "string", "description": "World slug, e.g. \"underdark\"." },
+    "name": { "type": "string", "description": "Display name, e.g. \"The Underdark\"." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["slug"], "additionalProperties": false }"#,
+    },
+    ToolDef {
+        name: "edit_worlds",
+        description: r#"Rename, reorder or remove worlds, all in one undo entry, applied in this order: rename ([{ world, slug?, name? }]: a new slug moves the world's directory and every reference follows; a new display name, "" to remove it), order (every world's slug once, in the order the editor and describe_project list them), remove (world slugs). Removing a world removes its levels, world notes and guide groups with it, so it needs "confirm": true unless the world is empty; the last world can't be removed. To keep a level, move_level it to another world first."#,
+        schema: r#"{ "type": "object",
+  "properties": {
+    "rename": { "type": "array", "items": { "type": "object",
+      "properties": { "world": { "type": "string" }, "slug": { "type": "string" }, "name": { "type": "string" } },
+      "required": ["world"], "additionalProperties": false } },
+    "order": { "type": "array", "items": { "type": "string" }, "description": "Every world's slug, once each." },
+    "remove": { "type": "array", "items": { "type": "string" } },
+    "confirm": { "type": "boolean", "default": false, "description": "Needed to remove a world that has levels, notes or guide groups." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "additionalProperties": false }"#,
+    },
+    ToolDef {
+        name: "move_level",
+        description: r#"Move a level, as one undo entry. world_px is its new top-left corner in world pixels (levels should not overlap; describe_project gives every level's position and size). world moves it into another world, keeping its slug, id and all its content; with world, world_px is where it goes there (default: the same coordinates). Give world_px, world, or both."#,
+        schema: r#"{ "type": "object",
+  "properties": {
+    "level": { "type": "string" },
+    "world_px": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "[x, y] top-left corner in world pixels." },
+    "world": { "type": "string", "description": "World slug to move the level into." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level"], "additionalProperties": false }"#,
     },
 ];

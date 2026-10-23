@@ -189,6 +189,7 @@ The JSON-RPC `message` is always a sentence meant for an agent to read. For `com
 | `unknown_guide_group` | `world`, `group` |
 | `duplicate_id` | `id` |
 | `duplicate_level` | `level` |
+| `duplicate_world` | `world` |
 | `unknown_enum` | `enum` |
 | `unknown_enum_value` | `enum`, `value` |
 | `unknown_rule_group` | `layer`, `group` |
@@ -221,7 +222,7 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 | `name`, `dir`, `grid_size`, `bg_color`, `collision_layer`, `seed`, `blocking_values`, `default_level_size`, `export_on_save`, `rev` | project settings (`dir` absolute; `blocking_values` is the effective list, see [format.md](format.md#projectjson); `default_level_size` is `null` when left out) |
 | `mode` | `{ headless, approval, pending }`: `pending` counts approval batches waiting for the user |
 | `level_fields` | field definitions as in `project.json`, without `name` and `display` (`doc` is kept: it tells an agent what the field is for) |
-| `worlds[]` | `{ slug, name, levels: [slug], notes, guides, guide_groups }`: `notes` counts the world-scope annotations that aren't guides, `guides` the world's guides, `guide_groups` is `[{ slug, name?, offset, color?, guides }]` (`guides`: how many guides name the group), `[]` when there are none |
+| `worlds[]` | In display order (`project.json` `worlds`): `{ slug, name, levels: [slug], level_count, bbox, notes, guides, guide_groups }`: `bbox` is `[x, y, w, h]` in world pixels around the world's levels (`null` when it has none), `notes` counts the world-scope annotations that aren't guides, `guides` the world's guides, `guide_groups` is `[{ slug, name?, offset, color?, guides }]` (`guides`: how many guides name the group), `[]` when there are none |
 | `levels[]` | `{ slug, name, id, world, world_px, size, size_px, depth, tags, content, notes }`. `tags` is the level's tags (`[]` when it has none). `size` in cells of the project grid, `size_px` in pixels. `content` per layer with content: `{ "cells": n }` (non-empty int_grid cells), `{ "overrides": n }` (a derived layer's hand-painted overrides, suppressed cells included), `{ "tiles": n }`, `{ "entities": n }`. `notes`: `{ open, done }` |
 | `layers[]` | `{ slug, name, kind, grid_size }`, plus `values: [{ slug, glyph, color, group? }]` and `groups: [{ slug, glyph? }]` for `int_grid` (and, for a [derived](format.md#derived-layers-overrides) one, `derived: true` and `writer`: the auto layer whose rules write it, `null` when none does), `tileset` for `tiles`, `source`, `rule_groups` (count) and `passes` (the distinct `pass` numbers its groups use, ascending) for `auto`. `grid_size` is the effective one (an `auto` layer's is its source's) |
 | `entity_types[]` | `{ slug, name, doc?, category?, tags, size, pivot, resizable, color, icon?, limit?, fields, count }`. `pivot` is the point of the entity that sits on its cell, as fractions of its size (`[0.5, 1.0]` is bottom center). `color` is the type's `#rrggbb`, `icon` its `{ tileset, tile: [col, row] }` atlas tile, `limit` `{ max, scope, behavior }` with the defaults spelled out (`scope` `level`, `behavior` `prevent_adding`). `fields` as in the entity file without `name` and `display` (with `doc` when set); `count` across the project |
@@ -243,7 +244,8 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
   "level_fields": [
     { "slug": "biome", "type": "enum", "enum": "biome", "array": true, "default": [] },
     { "slug": "music", "type": "string", "nullable": true } ],
-  "worlds": [ { "slug": "main", "name": "Main", "levels": ["crevasse", "shaft"], "notes": 2, "guides": 1, "guide_groups": [] } ],
+  "worlds": [ { "slug": "main", "name": "Main", "levels": ["crevasse", "shaft"], "level_count": 2, "bbox": [0, 0, 416, 208],
+    "notes": 2, "guides": 1, "guide_groups": [] } ],
   "levels": [
     { "slug": "crevasse", "name": "Crevasse", "id": "crevasse22", "world": "main", "world_px": [0, 0],
       "size": [20, 5], "size_px": [320, 80], "depth": 0, "tags": [],
@@ -1387,7 +1389,7 @@ How it is recorded: the editor's undo history has one gesture slot, and it belon
 
 Editor only: in headless mode every `view.*` method is `unsupported` (`-32005`). They change what the editor shows, never the project, so they need no `expect_rev` and don't bump `rev`.
 
-- **`view.focus { level }`**, **`{ world_rect: [x, y, w, h], world? }`** (world pixels) or **`{ note: id }`**: makes the level active and frames it, frames the rect, or frames an annotation: its bounding box as built (a grouped guide moved by its group's offset, a level note in world pixels), grown by 15 % of its size on each side and to at least 8 project cells each way (a pin is a point); a level-scope note's level becomes active. → `{ rev }`. An unknown note is `command_error` `unknown_note`.
+- **`view.focus { level }`**, **`{ world_rect: [x, y, w, h], world? }`** (world pixels), **`{ note: id }`** or **`{ world }`**: makes the level active and frames it, frames the rect, frames an annotation: its bounding box as built (a grouped guide moved by its group's offset, a level note in world pixels), grown by 15 % of its size on each side and to at least 8 project cells each way (a pin is a point), or fits a whole world. The editor shows one world at a time: focusing a world makes it the active world, a level or note switches to the world it is in, and a `world_rect` with `world` switches to that world (without `world`, the active one). A level-scope note's level becomes active. → `{ rev }`. An unknown note is `command_error` `unknown_note`, an unknown world `unknown_world`.
 - **`view.select { entities?, notes?, levels? }`** or **`{ level }`**: replaces the selection. The lists add up: give any of them, in any combination (empty lists are fine, and all of them empty clears the selection), and the selection holds every listed entity (by id), annotation (by id) and level (by slug); the editor's inspector edits a set of entities together. The active level becomes the first entity's level, else the first level-scope note's level, else the first of `levels`, else it stays. `{ level }` alone makes that level active and clears the selection; `level` with any list is `invalid params`. Every id and slug must exist, or nothing changes and the error is `command_error` (`unknown_entity`, `unknown_note`, `unknown_level`). → `{ rev }`. Sends `selection`.
 - **`view.snapshot { level }`** or **`{ world_rect, world? }`**, plus `size?: [w, h]` (the largest image allowed, default `[1024, 1024]`), `layers?` (default all visible), `overlays?` (entity boxes and annotations: open notes, pins, paths and regions, and every guide, default `true`; a snapshot shows the data, so the editor's hidden tags don't apply) → `{ rev, png, width, height, scale }`. `png` is base64 (no `data:` prefix). The map is drawn alone, without the UI, at the largest scale that fits `size` (an integer scale when it is 1 or more). Rendered by the editor's offscreen renderer on the UI thread.
 
@@ -1934,6 +1936,93 @@ The new ids are derived from the destination level, the origin and the fragment'
 { "jsonrpc": "2.0", "id": 130, "result": { "rev": 61, "status": "applied", "label": "claude-code: Duplicate level shaft as shaft_b",
   "id": "s64pc4niie", "world_px": [416, 80],
   "changes": [ { "change": "level_created", "world": "main", "level": "shaft_b" } ] } }
+```
+
+### worlds
+
+A project holds one or more worlds: separate maps, each with its own levels, world-scope annotations and guide groups ([commands.md](commands.md#world-commands)). Layers, tilesets, entity types, enums, rules and the grid are shared, and level slugs are unique across worlds, so every method that takes a `level` finds it in whichever world it is. `project.describe` lists the worlds in display order (`project.json` `worlds`) with their levels, `level_count` and `bbox`.
+
+| Write | Params | Command |
+| --- | --- | --- |
+| `world.create` | `{ slug, name? }` | `create_world`: an empty world, last in the order |
+| `world.rename` | `{ world, slug?, name? }` (at least one; `name: ""` removes the name) | `rename_world`: a new slug moves the world's directory on save and keeps its place in the order |
+| `world.reorder` | `{ order }`: every world's slug once (`[]` drops the list: slug order) | `reorder_worlds` |
+| `world.remove` | `{ world, confirm? }` | `remove_world`, with its levels, world notes and guide groups; needs `confirm` unless the world is empty ([Confirmation](#confirmation), reason `deletes world <w> with <what it holds>`). The last world can't be removed (`invalid`) |
+| `level.move_to_world` | `{ level, world, world_px? }` | `move_level_to_world`: the level keeps its slug, id and content; `world_px` is its corner in the new world (default: unchanged). Into its own world it is a `level.move` |
+
+The changes are `world_created`, `world_renamed` (`from`, `to`), `world_meta` (the name), `world_removed` (after a `level_deleted` per level and a `note` per world note), and `project` key `worlds` when the order in `project.json` changes; moving a level reports `level_deleted` in the old world and `level_created` in the new one. A slug that is taken is `command_error` `duplicate_world`.
+
+```json
+{ "jsonrpc": "2.0", "id": 131, "method": "world.create", "params": { "slug": "underdark", "name": "Underdark" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 131, "result": { "rev": 62, "status": "applied", "label": "claude-code: Create world underdark",
+  "changes": [
+    { "change": "world_created", "world": "underdark" },
+    { "change": "project", "key": "worlds" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 132, "method": "level.move_to_world", "params": { "level": "hall", "world": "underdark", "world_px": [0, 0] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 132, "result": { "rev": 63, "status": "applied", "label": "claude-code: Move level hall to world underdark",
+  "changes": [
+    { "change": "level_deleted", "world": "main", "level": "hall" },
+    { "change": "level_created", "world": "underdark", "level": "hall" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 133, "method": "world.rename", "params": { "world": "underdark", "slug": "caves", "name": "The Caves" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 133, "result": { "rev": 64, "status": "applied", "label": "claude-code: Rename world underdark to caves",
+  "changes": [
+    { "change": "world_renamed", "from": "underdark", "to": "caves" },
+    { "change": "project", "key": "worlds" },
+    { "change": "world_meta", "world": "caves" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 134, "method": "world.reorder", "params": { "order": ["caves", "main"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 134, "result": { "rev": 65, "status": "applied", "label": "claude-code: Reorder worlds",
+  "changes": [ { "change": "project", "key": "worlds" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 135, "method": "world.create", "params": { "slug": "main" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 135, "error": { "code": -32004, "message": "a world \"main\" already exists",
+  "data": { "kind": "duplicate_world", "world": "main", "message": "a world \"main\" already exists" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 136, "method": "world.remove", "params": { "world": "caves" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 136, "error": { "code": -32002, "message": "deleting world caves needs confirm: true: it holds 1 level",
+  "data": { "reason": "deletes world caves with 1 level" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 137, "method": "world.remove", "params": { "world": "caves", "confirm": true } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 137, "result": { "rev": 66, "status": "applied", "label": "claude-code: Delete world caves",
+  "changes": [
+    { "change": "level_deleted", "world": "caves", "level": "hall" },
+    { "change": "world_removed", "world": "caves" },
+    { "change": "project", "key": "worlds" } ] } }
 ```
 
 ## Headless mode

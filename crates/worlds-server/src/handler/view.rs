@@ -52,6 +52,14 @@ pub(crate) fn call(
                 note: Option<Id>,
             }
             let p: P = params::parse(method, p)?;
+            if let (Some(w), None, None, None) = (&p.world, &p.level, &p.world_rect, &p.note) {
+                // A world alone: switch to it and fit it.
+                if host.doc().project.world(w.as_str()).is_none() {
+                    return Err(RpcError::command(&CommandError::UnknownWorld(w.clone())));
+                }
+                host.focus(&ViewTarget::World(w.clone()))?;
+                return Ok(json!({ "rev": h.rev }));
+            }
             let Some(id) = p.note else {
                 let t = Target {
                     level: p.level,

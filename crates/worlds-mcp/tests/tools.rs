@@ -901,3 +901,64 @@ fn preview_rule_unknown_slugs_with_underscores_list_the_rules() {
         );
     }
 }
+
+#[test]
+fn worlds_create_move_edit_and_remove() {
+    let (_t, dir) = mini();
+    let mut e = engine(&dir, true);
+    let r = ok(
+        &mut e,
+        "create_world",
+        json!({ "slug": "dungeon", "name": "Dungeon" }),
+    );
+    assert_eq!(r["undo_label"], "Agent: create_world dungeon");
+    assert!(dir.join("worlds/dungeon/world.json").is_file());
+
+    // move_level into the new world, then within it.
+    let r = ok(
+        &mut e,
+        "move_level",
+        json!({ "level": "shaft", "world": "dungeon", "world_px": [0, 0] }),
+    );
+    assert_eq!(r["undo_label"], "Agent: move_level shaft");
+    assert!(dir.join("worlds/dungeon/levels/shaft/level.json").is_file());
+    assert!(!dir.join("worlds/main/levels/shaft").exists());
+    ok(
+        &mut e,
+        "move_level",
+        json!({ "level": "shaft", "world_px": [16, 0] }),
+    );
+    let (is_err, msg) = call(&mut e, "move_level", json!({ "level": "shaft" }));
+    assert!(is_err, "{msg}");
+
+    let d = ok(&mut e, "describe_project", json!({}));
+    assert_eq!(d["worlds"][1]["slug"], "dungeon");
+    assert_eq!(d["worlds"][1]["level_count"], 1);
+    assert_eq!(d["worlds"][1]["bbox"], json!([16, 0, 96, 128]));
+
+    // Rename and reorder in one undo entry.
+    let r = ok(
+        &mut e,
+        "edit_worlds",
+        json!({ "rename": [{ "world": "dungeon", "slug": "caves", "name": "Caves" }],
+            "order": ["caves", "main"] }),
+    );
+    assert_eq!(r["undo_label"], "Agent: edit_worlds dungeon");
+    assert!(dir.join("worlds/caves/levels/shaft/level.json").is_file());
+    assert!(!dir.join("worlds/dungeon").exists());
+    let d = ok(&mut e, "describe_project", json!({}));
+    assert_eq!(d["worlds"][0]["slug"], "caves");
+
+    // Removing a world with a level needs confirm.
+    let (is_err, msg) = call(&mut e, "edit_worlds", json!({ "remove": ["caves"] }));
+    assert!(is_err && msg.contains("confirm"), "{msg}");
+    ok(
+        &mut e,
+        "edit_worlds",
+        json!({ "remove": ["caves"], "confirm": true }),
+    );
+    assert!(!dir.join("worlds/caves").exists());
+    let r = ok(&mut e, "undo", json!({}));
+    assert_eq!(r["undone"][0], "Agent: edit_worlds caves");
+    assert!(dir.join("worlds/caves/levels/shaft/level.json").is_file());
+}
