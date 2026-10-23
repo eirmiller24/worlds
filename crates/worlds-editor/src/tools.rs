@@ -873,6 +873,70 @@ pub fn resize_level(
     (px, sz)
 }
 
+/// The `resize_level` the editor sends (a drag, the Inspector), or why it
+/// refuses: like moving an entity out of its level, a resize that would
+/// leave an entity outside is refused (entities already outside don't
+/// count).
+pub fn resize_command(
+    project: &worlds_core::Project,
+    world: &Slug,
+    level: &Slug,
+    size: [u32; 2],
+    anchor: [i8; 2],
+) -> Result<Command, String> {
+    let l = project
+        .level(level.as_str())
+        .ok_or_else(|| format!("no level {level}"))?;
+    let before = project
+        .resize_leaves_outside(world, level, l.size, [-1, -1])
+        .map_err(|e| e.to_string())?;
+    let after = project
+        .resize_leaves_outside(world, level, size, anchor)
+        .map_err(|e| e.to_string())?;
+    let stranded: Vec<String> = after
+        .iter()
+        .filter(|id| !before.contains(id))
+        .map(|id| id.to_string())
+        .collect();
+    if !stranded.is_empty() {
+        let n = stranded.len();
+        let mut names = stranded.into_iter().take(3).collect::<Vec<_>>().join(", ");
+        if n > 3 {
+            names += &format!(" and {} more", n - 3);
+        }
+        return Err(format!(
+            "Not resized: {} would be outside level {level} (move {} first, or pick another anchor)",
+            if n == 1 {
+                format!("entity {names}")
+            } else {
+                format!("entities {names}")
+            },
+            if n == 1 { "it" } else { "them" },
+        ));
+    }
+    Ok(Command::ResizeLevel {
+        world: world.clone(),
+        level: level.clone(),
+        size,
+        anchor,
+    })
+}
+
+/// Crop to content for the editor (command palette, the level's right
+/// click menu, the Inspector): the `Crop level <slug>` batch, or the
+/// status message saying why there is nothing to do.
+pub fn crop_command(
+    project: &worlds_core::Project,
+    world: &Slug,
+    level: &Slug,
+) -> Result<Command, String> {
+    match project.crop_level(world, level) {
+        Ok(Some(cmd)) => Ok(cmd),
+        Ok(None) => Err(format!("Level {level} already fits its content")),
+        Err(e) => Err(format!("Not cropped: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1061,12 +1061,24 @@ impl Editing {
                     [at.world_px[0] - start[0], at.world_px[1] - start[1]],
                     cx.doc.project.grid_size,
                 );
-                (new != *size).then(|| Command::ResizeLevel {
-                    world: g.world.clone(),
-                    level: g.level.clone(),
-                    size: new,
-                    anchor: [-edges[0], -edges[1]],
-                })
+                if new == *size {
+                    None
+                } else {
+                    let anchor = [-edges[0], -edges[1]];
+                    match crate::tools::resize_command(
+                        &cx.doc.project,
+                        &g.world,
+                        &g.level,
+                        new,
+                        anchor,
+                    ) {
+                        Ok(cmd) => Some(cmd),
+                        Err(e) => {
+                            cx.view.set_status(e, true);
+                            None
+                        }
+                    }
+                }
             }
             Kind::Place { start } => {
                 self.place(cx, &g, start, &at, modifiers);

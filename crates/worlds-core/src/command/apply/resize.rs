@@ -130,7 +130,12 @@ impl Project {
         let y0 = (b[1] / g) / step * step;
         let x1 = (b[2] + g - 1) / g;
         let y1 = (b[3] + g - 1) / g;
-        Ok(Some([x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32]))
+        Ok(Some([
+            x0 as u32,
+            y0 as u32,
+            (x1 - x0) as u32,
+            (y1 - y0) as u32,
+        ]))
     }
 
     /// The edit that crops a level to [`Self::content_bounds`]: a `batch`

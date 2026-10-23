@@ -433,6 +433,122 @@ pub(crate) fn atlas_texture(
         .clone()
 }
 
+/// The Inspector's Resize section: a new size in project cells, a 3x3
+/// anchor picker (the dot stays put in the world; the default is the
+/// center, as for `resize_level`), Resize, and Crop to content. A resize
+/// that would leave an entity outside is refused in the status bar.
+fn level_resize(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    view: &mut crate::view::ViewState,
+    pending: &mut Vec<Command>,
+    bufs: &mut std::collections::HashMap<String, String>,
+    ix: crate::doc::LevelIx,
+) {
+    let l = doc.level(ix);
+    let world = &doc.project.worlds[doc.levels[ix].world].slug;
+    let key_size = format!("{}:resize", l.id);
+    let key_anchor = format!("{}:anchor", l.id);
+    let pair = |k: &str| -> Option<[i64; 2]> {
+        let (a, b) = bufs.get(k)?.split_once(',')?;
+        Some([a.parse().ok()?, b.parse().ok()?])
+    };
+    let mut size = pair(&key_size).map_or(l.size, |p| p.map(|n| n.clamp(1, 100_000) as u32));
+    let mut anchor = pair(&key_anchor).map_or([0, 0], |p| p.map(|n| n.clamp(-1, 1) as i8));
+    ui.add_space(8.0);
+    ui.strong("Resize");
+    ui.horizontal(|ui| {
+        anchor_picker(ui, &mut anchor);
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut size[0]).range(1..=100_000));
+                ui.label("x");
+                ui.add(egui::DragValue::new(&mut size[1]).range(1..=100_000));
+                ui.weak("cells");
+            });
+            ui.horizontal(|ui| {
+                let b = ui
+                    .add_enabled(size != l.size, egui::Button::new("Resize"))
+                    .on_hover_text(
+                        "The anchor (the dot) stays put in the world; content keeps its place",
+                    );
+                super::fields::mark(ui, "level:resize", b.rect);
+                if b.clicked() {
+                    match crate::tools::resize_command(&doc.project, world, &l.slug, size, anchor) {
+                        Ok(cmd) => {
+                            pending.push(cmd);
+                            size = l.size;
+                        }
+                        Err(e) => view.set_status(e, true),
+                    }
+                }
+                let b = ui
+                    .button("Crop to content")
+                    .on_hover_text("Shrink to the bounding box of the cells, tiles and entities");
+                super::fields::mark(ui, "level:crop", b.rect);
+                if b.clicked() {
+                    match crate::tools::crop_command(&doc.project, world, &l.slug) {
+                        Ok(cmd) => pending.push(cmd),
+                        Err(e) => view.set_status(e, true),
+                    }
+                }
+            });
+        });
+    });
+    if size == l.size {
+        bufs.remove(&key_size);
+    } else {
+        bufs.insert(key_size, format!("{},{}", size[0], size[1]));
+    }
+    bufs.insert(key_anchor, format!("{},{}", anchor[0], anchor[1]));
+}
+
+/// A 3x3 grid of buttons as in image editors' canvas size dialogs: the
+/// dot marks the anchor, what stays put; arrows point where the level
+/// grows.
+pub fn anchor_picker(ui: &mut egui::Ui, anchor: &mut [i8; 2]) {
+    const ARROWS: [[&str; 3]; 3] = [
+        ["\u{2196}", "\u{2191}", "\u{2197}"],
+        ["\u{2190}", "", "\u{2192}"],
+        ["\u{2199}", "\u{2193}", "\u{2198}"],
+    ];
+    let names = |a: [i8; 2]| -> String {
+        let x = ["left", "center", "right"][(a[0] + 1) as usize];
+        let y = ["top", "middle", "bottom"][(a[1] + 1) as usize];
+        match (a[0], a[1]) {
+            (0, 0) => "the center".to_string(),
+            (_, 0) => format!("the {x} edge"),
+            (0, _) => format!("the {y} edge"),
+            _ => format!("the {y}-{x} corner"),
+        }
+    };
+    egui::Grid::new(ui.id().with("anchor_picker"))
+        .spacing([2.0, 2.0])
+        .show(ui, |ui| {
+            for ay in -1i8..=1 {
+                for ax in -1i8..=1 {
+                    let d = [ax - anchor[0], ay - anchor[1]];
+                    let glyph = if d == [0, 0] {
+                        "\u{25cf}"
+                    } else if d[0].abs() <= 1 && d[1].abs() <= 1 {
+                        ARROWS[(d[1] + 1) as usize][(d[0] + 1) as usize]
+                    } else {
+                        ""
+                    };
+                    let on = d == [0, 0];
+                    let b = ui
+                        .add_sized([20.0, 20.0], egui::Button::selectable(on, glyph))
+                        .on_hover_text(format!("Keep {} in place", names([ax, ay])));
+                    super::fields::mark(ui, &format!("level:anchor:{ax},{ay}"), b.rect);
+                    if b.clicked() {
+                        *anchor = [ax, ay];
+                    }
+                }
+                ui.end_row();
+            }
+        });
+}
+
 /// The active level's part of the Inspector (or the project's when no
 /// level is active): rename, delete, and the level fields, every type
 /// editable through [`super::fields`] (`×` removes the stored value, `null`
@@ -578,6 +694,7 @@ pub fn level_inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             actions.push(Action::DeleteLevel);
         }
     });
+    level_resize(ui, doc, view, pending, bufs, ix);
 
     if !doc.project.level_fields.is_empty() {
         ui.add_space(8.0);
@@ -838,6 +955,51 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    /// The Inspector's level Resize section: the anchor picker and the size
+    /// make one `resize_level`; Crop to content queues the crop batch; a
+    /// size that would strand the door is refused in the status bar.
+    #[test]
+    fn level_resize_with_an_anchor_and_crop() {
+        use super::super::testkit::{Driver, batches, state};
+        let (_tmp, mut st) = state();
+        let ix = st.doc.as_ref().unwrap().level_ix("shaft").unwrap();
+        st.view.active_level = Some(ix);
+        let id = st.doc.as_ref().unwrap().level(ix).id.clone();
+        let mut d = Driver::new(super::super::inspector::inspector);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        // Bottom-right anchor, then a bigger size.
+        d.click(&mut st, d.rect("level:anchor:1,1").center());
+        st.edit_bufs.insert(format!("{id}:resize"), "8,9".into());
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("level:resize").center());
+        let b = batches(&mut st);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(
+            b[0].1,
+            [Command::ResizeLevel {
+                world: worlds_core::Slug::new("main").unwrap(),
+                level: worlds_core::Slug::new("shaft").unwrap(),
+                size: [8, 9],
+                anchor: [1, 1],
+            }]
+        );
+        // The size field goes back to the level's own size.
+        assert!(!st.edit_bufs.contains_key(&format!("{id}:resize")));
+        // Too small from the top-left: the door would be outside.
+        d.click(&mut st, d.rect("level:anchor:-1,-1").center());
+        st.edit_bufs.insert(format!("{id}:resize"), "2,2".into());
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("level:resize").center());
+        assert!(batches(&mut st).is_empty());
+        let status = st.view.status.as_ref().unwrap().text.clone();
+        assert!(status.contains("doorshaft2"), "{status}");
+        d.click(&mut st, d.rect("level:crop").center());
+        let b = batches(&mut st);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0].0, "Crop level shaft");
+    }
 
     /// One egui frame with a color field at the top left; `events` are this
     /// frame's input. Returns what the field committed and the button rect.

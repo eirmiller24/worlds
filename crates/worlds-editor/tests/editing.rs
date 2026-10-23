@@ -436,6 +436,53 @@ fn select_moves_and_resizes_levels() {
 }
 
 #[test]
+fn a_resize_that_would_strand_an_entity_is_refused_and_crop_fits_the_content() {
+    let mut r = Rig::new();
+    let ix = r.doc.level_ix("shaft").unwrap();
+    let before = r.doc.project.clone();
+    // shaft's door stands on [2, 7]: pulling the bottom edge up 2 cells
+    // would leave it outside.
+    r.gesture(
+        r#"{ "gesture": "select", "level": "shaft", "layer": "collision", "path": [[3, 8], [3, 6]], "handle": [0, 1] }"#,
+    );
+    let status = r.view.status.as_ref().unwrap().text.clone();
+    assert!(
+        status.contains("Not resized") && status.contains("doorshaft2"),
+        "{status}"
+    );
+    assert_eq!(r.doc.project, before);
+    assert!(!r.ed.can_undo());
+    // The right edge in by 3 keeps it inside.
+    r.gesture(
+        r#"{ "gesture": "select", "level": "shaft", "layer": "collision", "path": [[6, 3], [3, 3]], "handle": [1, 0] }"#,
+    );
+    assert_eq!(r.doc.level(ix).size, [3, 8]);
+    // Crop to content: one entry down to the door's 1x3.
+    let world = Slug::new("main").unwrap();
+    let shaft = Slug::new("shaft").unwrap();
+    let crop = worlds_editor::tools::crop_command(&r.doc.project, &world, &shaft).unwrap();
+    r.apply_cmd(crop);
+    let l = r.doc.level(ix);
+    assert_eq!((l.size, l.world_px), ([1, 3], [352, 160]));
+    assert_eq!(r.ed.undo_label().as_deref(), Some("Crop level shaft"));
+    assert!(r.inv.contains(&Invalidation::Level(ix)));
+    let again = worlds_editor::tools::crop_command(&r.doc.project, &world, &shaft).unwrap_err();
+    assert!(again.contains("already fits"), "{again}");
+    r.undo();
+    assert_eq!(r.doc.level(ix).size, [3, 8]);
+    // The Inspector's path: a resize with an anchor that strands nothing.
+    let cmd = worlds_editor::tools::resize_command(&r.doc.project, &world, &shaft, [5, 10], [1, 1])
+        .unwrap();
+    r.apply_cmd(cmd);
+    let l = r.doc.level(ix);
+    assert_eq!((l.size, l.world_px), ([5, 10], [288, 48]));
+    assert_eq!(l.all_entities().next().unwrap().cell, [4, 9]);
+    let e = worlds_editor::tools::resize_command(&r.doc.project, &world, &shaft, [2, 2], [-1, -1])
+        .unwrap_err();
+    assert!(e.contains("doorshaft2"), "{e}");
+}
+
+#[test]
 fn level_drag_previews_and_commits_one_move() {
     let mut r = Rig::new();
     let ix = r.doc.level_ix("shaft").unwrap();

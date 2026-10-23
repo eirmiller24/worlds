@@ -365,7 +365,11 @@ mod tests {
         assert!(v.min[0] <= r.min[0] + 1e-6 && v.max[0] >= r.max[0] - 1e-6);
         assert!(close(v.center(), r.center()));
         // Just under the smallest step's reach still snaps to a step.
-        cam.fit(WRect::from_pos_size([0.0, 0.0], [1000.0 * 200.0, 10.0]), size, 0.0);
+        cam.fit(
+            WRect::from_pos_size([0.0, 0.0], [1000.0 * 200.0, 10.0]),
+            size,
+            0.0,
+        );
         assert_eq!(cam.zoom, 1.0 / 256.0);
         // Absurd sizes stop at MIN_ZOOM.
         cam.fit(WRect::from_pos_size([0.0, 0.0], [1e12, 1.0]), size, 0.0);

@@ -1237,6 +1237,11 @@ impl Viewport {
                     cx.actions.push(Action::DeleteLevel);
                     ui.close();
                 }
+                if ui.button(format!("Crop {slug} to content")).clicked() {
+                    cx.view.active_level = Some(ix);
+                    cx.actions.push(Action::CropLevel);
+                    ui.close();
+                }
             }
         });
     }
