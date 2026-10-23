@@ -150,7 +150,7 @@ expression: all
   "seed": 42,
   "bg_color": "#1a1c2c",
   "collision_layer": "collision",
-  "blocking_values": ["solid", "fortified", "ramp_l"],
+  "blocking_values": ["solid"],
   "level_fields": [
     { "slug": "biome", "type": "enum", "array": true, "default": [], "enum": "biome" },
     { "slug": "music", "type": "string", "nullable": true }

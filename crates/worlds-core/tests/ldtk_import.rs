@@ -356,7 +356,8 @@ fn collision_layer_is_the_layer_named_collision() {
             .map(|s| s.as_str()),
         Some("collision")
     );
-    // The blocking kinds the layer has, in its value order.
+    // The default blocking kind, `solid`; the layer's other wall kinds
+    // (breakable, fortified, ramps) are the project's to list.
     let blocking: Vec<&str> = imported
         .project
         .blocking_values
@@ -364,10 +365,7 @@ fn collision_layer_is_the_layer_named_collision() {
         .flatten()
         .map(|s| s.as_str())
         .collect();
-    assert_eq!(
-        blocking,
-        ["solid", "breakable", "fortified", "ramp_r", "ramp_l"]
-    );
+    assert_eq!(blocking, ["solid"]);
     assert!(
         worlds_core::validate(&imported.project)
             .iter()

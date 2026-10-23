@@ -26,7 +26,7 @@ Display names keep the LDtk spelling: layer and entity `name` is the LDtk identi
 | layer `gridSize` | project `grid_size`, plus a layer `grid_size` where a layer differs (see [Grids](#grids)) |
 | `defaultLevelBgColor` | project `bg_color` |
 | IntGrid layer named `collision` (any case) | project `collision_layer`; left unset when there is none (nothing else is guessed) |
-| (no LDtk equivalent) | project `blocking_values`: the collision layer's `solid`, `fortified`, `breakable`, `ramp_r`, `ramp_l` where they exist (see [Blocking values](#blocking-values)) |
+| (no LDtk equivalent) | project `blocking_values`: `["solid"]` when the collision layer has a `solid` value (see [Blocking values](#blocking-values)) |
 | `defs.levelFields` | project `level_fields` |
 | `defs.layers` (first = top) | `layers.json` reversed (first = bottom) |
 | IntGrid layer | `int_grid` layer; values keep `value` order with `identifier` (or `v<n>`), color, group, and a glyph (see [Glyphs](#glyphs)) |
@@ -140,4 +140,4 @@ Derived or cached data and editor-only state: every `__*` field, `toc`, `cachedP
 
 ## Blocking values
 
-The importer sets `project.json` `blocking_values`: of `solid`, `fortified`, `breakable`, `ramp_r` and `ramp_l`, the ones the collision layer has, in the layer's value order. With no collision layer, or none of those values, it is left out (and validation reports a collision layer with none). Loading a project whose `blocking_values` is left out applies the same rule (see the migration rule in [format.md](format.md)). The export's `open_edges` are the border cells whose value isn't listed, so `oneway`, `water` and `hazard` cells on an edge count as open.
+The importer sets `project.json` `blocking_values` to `["solid"]` when the collision layer has a `solid` value. LDtk has no notion of which values are walls, so list any other wall kinds yourself (`breakable`, ramps, ...), in the editor's Project pane or `project.json`. With no collision layer, or no `solid` value, it is left out (and validation reports a collision layer with none). Loading a project whose `blocking_values` is left out applies the same rule (see the migration rule in [format.md](format.md)). The export's `open_edges` are the border cells whose value isn't listed, so `oneway`, `water` and `hazard` cells on an edge count as open.

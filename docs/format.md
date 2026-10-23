@@ -115,7 +115,7 @@ A layer's grid must divide or be a multiple of the project grid. A level that is
 | `default_level_size` | `[w, h]` | no | Size in cells of a level made with the editor's New Level command. Left out, the editor uses the most common level size in the project |
 | `export_on_save` | bool | no | Default `false`. When `true`, the editor writes [export/](#export-generated) on every save, from its cached bakes |
 
-**Migration rule for `blocking_values`.** When `collision_layer` is set and `blocking_values` is left out, loading fills it with the collision layer's values whose slug is one of `solid`, `fortified`, `breakable`, `ramp_r`, `ramp_l`, in the layer's order, if it has any. The next full save writes that list out. If the layer has none of them the key stays absent, every border cell is open, and validation reports it; write `"blocking_values": []` to say that on purpose. The export always uses this effective list.
+**Migration rule for `blocking_values`.** When `collision_layer` is set and `blocking_values` is left out, loading fills it with `["solid"]` if the collision layer has a `solid` value. The next full save writes that list out. Other wall kinds (`breakable`, ramps, ...) only block when the project lists them. If the layer has no `solid` value the key stays absent, every border cell is open, and validation reports it; write `"blocking_values": []` to say that on purpose. The export always uses this effective list.
 
 ## layers.json
 

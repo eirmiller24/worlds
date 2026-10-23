@@ -241,10 +241,9 @@ fn canonical(p: &Path) -> PathBuf {
 }
 
 /// Collision value slugs that block movement when a project doesn't say:
-/// the usual wall kinds (solid, fortified, breakable, ramps). Used for an absent
-/// `blocking_values` (on load and LDtk import).
-pub const DEFAULT_BLOCKING_VALUES: [&str; 5] =
-    ["solid", "fortified", "breakable", "ramp_r", "ramp_l"];
+/// just `solid`. Used for an absent `blocking_values` (on load and LDtk
+/// import); a project with other wall kinds lists them itself.
+pub const DEFAULT_BLOCKING_VALUES: [&str; 1] = ["solid"];
 
 impl Project {
     /// The values of the collision layer named in [`DEFAULT_BLOCKING_VALUES`],

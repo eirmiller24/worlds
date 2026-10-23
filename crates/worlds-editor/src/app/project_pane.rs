@@ -1852,8 +1852,8 @@ fn parse_level_size(s: &str) -> Result<Option<[u32; 2]>, String> {
 }
 
 /// The collision layer: none or an int_grid layer. Choosing one also sets
-/// its blocking values (its `solid`, `fortified`, ... values, as loading
-/// would; none of them: nothing blocks until you tick some).
+/// its blocking values (its `solid` value, as loading would; without one,
+/// nothing blocks until you tick some).
 fn collision_combo(ui: &mut egui::Ui, doc: &Document, ps: &mut ProjectState) {
     let p = &doc.project;
     let shown = p.collision_layer.as_ref().map_or("none", |s| s.as_str());
@@ -2070,7 +2070,7 @@ mod tests {
         let mut d = Driver::new(pane_frame);
         d.frame(&mut st, vec![]);
         d.frame(&mut st, vec![]);
-        // mini: collision, blocking solid, fortified, ramp_l (loaded).
+        // mini: collision, blocking solid (the default, as loaded).
         let r = d.rect("project:blocking:oneway");
         d.click(&mut st, r.center());
         let q = queued(&mut st);
@@ -2082,7 +2082,7 @@ mod tests {
             panic!("{q:?}")
         };
         let list: Vec<&str> = list.iter().map(|s| s.as_str()).collect();
-        assert_eq!(list, ["solid", "fortified", "oneway", "ramp_l"]);
+        assert_eq!(list, ["solid", "oneway"]);
         // Grid size is fixed with levels.
         d.frame(&mut st, vec![]);
         assert!(super::super::fields::marked(&d.ctx, "project:grid").is_none());
