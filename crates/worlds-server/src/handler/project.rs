@@ -1,13 +1,15 @@
-//! `project.*`: describe, validate, bake, export, save, reload, read_file.
+//! `project.*`: describe, validate, bake, export, save, reload, read_file,
+//! update.
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use worlds_core::{Project, Slug};
+use worlds_core::command::ProjectSetting;
+use worlds_core::{Color, Command, Project, Slug};
 
 use super::events::problem_json;
-use super::params::{self, find_level, rel_path};
+use super::params::{self, find_level, present, rel_path};
 use super::{Client, Confirm, Handler, Write, with_rev};
 use crate::describe::{Mode, describe as describe_project};
 use crate::host::Host;
@@ -286,4 +288,44 @@ pub(crate) fn reload(
     host.doc().history.clear();
     let rev = h.reloaded(&client.origin(), Some(&client.session));
     Ok(json!({ "rev": rev }))
+}
+
+/// `project.update { name?, bg_color?, collision_layer?, seed? }` → one
+/// `set_project_setting` per key given (a `batch` when several).
+pub(crate) fn update(_project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        name: Option<String>,
+        #[serde(default, deserialize_with = "present")]
+        bg_color: Option<Option<Color>>,
+        #[serde(default, deserialize_with = "present")]
+        collision_layer: Option<Option<Slug>>,
+        seed: Option<i64>,
+    }
+    let p: P = params::parse(method, p)?;
+    let mut settings = Vec::new();
+    if let Some(name) = p.name {
+        settings.push(ProjectSetting::Name(name));
+    }
+    if let Some(c) = p.bg_color {
+        settings.push(ProjectSetting::BgColor(c));
+    }
+    if let Some(l) = p.collision_layer {
+        settings.push(ProjectSetting::CollisionLayer(l));
+    }
+    if let Some(s) = p.seed {
+        settings.push(ProjectSetting::Seed(s));
+    }
+    if settings.is_empty() {
+        return Err(RpcError::invalid_params(format!(
+            "{method}: nothing to update; give name, bg_color, collision_layer or seed"
+        )));
+    }
+    Ok(Write::cmds(
+        settings
+            .into_iter()
+            .map(|setting| Command::SetProjectSetting { setting })
+            .collect(),
+    ))
 }

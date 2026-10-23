@@ -61,6 +61,11 @@ struct CreateLevel {
     fields: Option<Map<String, Value>>,
     tags: Option<Vec<String>>,
     world: Option<String>,
+    content: Option<Map<String, Value>>,
+    #[serde(default)]
+    replace: bool,
+    #[serde(default)]
+    confirm: bool,
     label: Option<String>,
 }
 
@@ -351,6 +356,14 @@ struct SetStamp {
     index: Option<usize>,
 }
 
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct SetLevelState {
+    level: String,
+    #[serde(default, deserialize_with = "present")]
+    state: Option<Option<Value>>,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct RulesPatch {
@@ -364,6 +377,8 @@ struct RulesPatch {
     set_rules: Vec<SetRule>,
     #[serde(default)]
     move_rules: Vec<MoveRule>,
+    #[serde(default)]
+    set_level_states: Vec<SetLevelState>,
     #[serde(default)]
     remove_rules: Vec<String>,
     #[serde(default)]
@@ -381,6 +396,7 @@ impl RulesPatch {
             && self.set_groups.is_empty()
             && self.set_rules.is_empty()
             && self.move_rules.is_empty()
+            && self.set_level_states.is_empty()
             && self.remove_rules.is_empty()
             && self.remove_groups.is_empty()
             && self.remove_stamps.is_empty()
@@ -449,6 +465,18 @@ struct RemoveEntityField {
     field: String,
 }
 
+/// `edit_definitions` `set_project`: the project settings to change.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ProjectPatch {
+    name: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    bg_color: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    collision_layer: Option<Option<String>>,
+    seed: Option<i64>,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct DefsPatch {
@@ -472,6 +500,7 @@ struct DefsPatch {
     set_entity_fields: Vec<SetEntityField>,
     #[serde(default)]
     set_level_fields: Vec<SetLevelField>,
+    set_project: Option<ProjectPatch>,
     #[serde(default)]
     remove_entity_fields: Vec<RemoveEntityField>,
     #[serde(default)]
@@ -620,6 +649,18 @@ fn plan_rules(layer: &str, pt: &RulesPatch) -> Result<Vec<(&'static str, Value)>
             json!({ "layer": layer, "rule": m.rule, "group": m.group, "index": m.index }),
         ));
     }
+    for s in &pt.set_level_states {
+        let Some(state) = &s.state else {
+            return Err(format!(
+                "set_level_states entry for {} needs state: the rule state, or null to remove it",
+                s.level
+            ));
+        };
+        w.push((
+            "level.set_layer_state",
+            json!({ "level": s.level, "layer": layer, "state": state }),
+        ));
+    }
     for r in &pt.remove_rules {
         w.push(("rules.remove_rule", json!({ "layer": layer, "rule": r })));
     }
@@ -663,7 +704,7 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
         }
     };
     let mut push = |method: &'static str, mut p: Value| {
-        if confirm && method != "defs.rename" {
+        if confirm && (method == "defs.set" || method == "defs.remove") {
             p["confirm"] = json!(true);
         }
         w.push((method, p));
@@ -735,6 +776,20 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
         let mut p = json!({ "kind": "level_field", "def": f.def });
         put(&mut p, "index", &f.index);
         push("defs.set", p);
+    }
+    if let Some(s) = &pt.set_project {
+        let mut p = json!({});
+        put(&mut p, "name", &s.name);
+        put(&mut p, "bg_color", &s.bg_color);
+        put(&mut p, "collision_layer", &s.collision_layer);
+        put(&mut p, "seed", &s.seed);
+        if p.as_object().is_some_and(Map::is_empty) {
+            return Err(
+                "set_project is empty: give name, bg_color, collision_layer or seed".into(),
+            );
+        }
+        touch("project".into());
+        push("project.update", p);
     }
     for f in &pt.remove_entity_fields {
         touch(f.entity.clone());
@@ -836,14 +891,43 @@ impl Engine {
                 a.size
             ));
         }
+        if a.confirm && !a.replace {
+            return Err("confirm only goes with replace: true".into());
+        }
         let label = Self::label("create_level", a.label.as_deref(), &a.slug);
-        let mut level = json!({ "slug": a.slug, "name": a.name, "size": a.size,
-            "world_px": a.world_px, "depth": a.depth.unwrap_or(0) });
-        put(&mut level, "fields", &a.fields);
-        put(&mut level, "tags", &a.tags);
-        let mut p = json!({ "level": level });
-        put(&mut p, "world", &a.world);
-        let r = self.write(&label, |_| Ok(vec![("level.create", p.clone())]))?;
+        if !a.replace {
+            let mut level = json!({ "slug": a.slug, "name": a.name, "size": a.size,
+                "world_px": a.world_px, "depth": a.depth.unwrap_or(0) });
+            put(&mut level, "fields", &a.fields);
+            put(&mut level, "tags", &a.tags);
+            let mut p = json!({ "level": level });
+            put(&mut p, "world", &a.world);
+            put(&mut p, "content", &a.content);
+            let r = self.write(&label, |_| Ok(vec![("level.create", p.clone())]))?;
+            return Ok(vec![json_block(&r)]);
+        }
+        let r = self.write(&label, |e| {
+            // The level as it is: what this tool has no argument for (id,
+            // background, rule state), and what the call leaves out, stays.
+            let old = e.read(
+                "level.get",
+                json!({ "level": a.slug, "layers": [], "notes": "none" }),
+            )?;
+            let mut level = old["level"].clone();
+            level["name"] = json!(a.name);
+            level["size"] = json!(a.size);
+            level["world_px"] = json!(a.world_px);
+            put(&mut level, "depth", &a.depth);
+            put(&mut level, "fields", &a.fields);
+            put(&mut level, "tags", &a.tags);
+            let mut p = json!({ "level": level });
+            put(&mut p, "world", &a.world);
+            put(&mut p, "content", &a.content);
+            if a.confirm {
+                p["confirm"] = json!(true);
+            }
+            Ok(vec![("level.replace", p)])
+        })?;
         Ok(vec![json_block(&r)])
     }
 
@@ -1281,7 +1365,7 @@ impl Engine {
     pub(crate) fn edit_rules(&mut self, a: Value) -> ToolResult {
         let a: EditRules = args("edit_rules", a)?;
         if a.patch.is_empty() {
-            return Err("patch is empty: give set_macros, set_stamps, set_groups, set_rules, move_rules, remove_rules, remove_groups, remove_stamps or remove_macros".into());
+            return Err("patch is empty: give set_macros, set_stamps, set_groups, set_rules, move_rules, set_level_states, remove_rules, remove_groups, remove_stamps or remove_macros".into());
         }
         let label = Self::label("edit_rules", a.label.as_deref(), &a.layer);
         let writes = plan_rules(&a.layer, &a.patch)?;
@@ -1293,7 +1377,7 @@ impl Engine {
         let a: EditDefinitions = args("edit_definitions", a)?;
         let (writes, summary) = plan_defs(&a.patch, a.confirm)?;
         if writes.is_empty() {
-            return Err("patch is empty: give at least one of rename_entity_types, rename_enums, rename_enum_values, rename_entity_fields, rename_level_fields, set_layers, set_enums, set_entity_types, set_entity_fields, set_level_fields, remove_entity_fields, remove_level_fields, remove_enums, remove_entity_types, remove_layers".into());
+            return Err("patch is empty: give at least one of rename_entity_types, rename_enums, rename_enum_values, rename_entity_fields, rename_level_fields, set_layers, set_enums, set_entity_types, set_entity_fields, set_level_fields, set_project, remove_entity_fields, remove_level_fields, remove_enums, remove_entity_types, remove_layers".into());
         }
         let label = Self::label("edit_definitions", a.label.as_deref(), &summary);
         let r = self.write(&label, |_| Ok(writes.clone()))?;

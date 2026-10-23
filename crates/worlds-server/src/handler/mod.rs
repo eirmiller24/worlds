@@ -158,6 +158,7 @@ pub fn is_write(method: &str) -> bool {
     matches!(
         method,
         "project.reload"
+            | "project.update"
             | "defs.set"
             | "defs.rename"
             | "defs.remove"
@@ -167,6 +168,8 @@ pub fn is_write(method: &str) -> bool {
             | "level.resize"
             | "level.update"
             | "level.set_fields"
+            | "level.set_layer_state"
+            | "level.replace"
             | "grid.set_cells"
             | "grid.fill_rect"
             | "grid.flood_fill"
@@ -339,7 +342,7 @@ impl Handler {
             "project.export" => project::export(self, host, method, params),
             "project.save" => project::save(self, host, method, params),
             "project.read_file" => read(host, project::read_file),
-            "project.reload" => unreachable_write(method),
+            "project.reload" | "project.update" => unreachable_write(method),
             "defs.get" => read(host, defs::get),
             "level.list" => read(host, level::list),
             "level.get" => level::get(self, host, method, params),
@@ -397,6 +400,7 @@ pub(crate) fn with_rev(rev: u64, v: Value) -> Result<Value, RpcError> {
 fn write_builder(method: &str) -> Option<Builder> {
     Some(match method {
         "project.reload" => project::reload_builder,
+        "project.update" => project::update,
         "defs.set" => defs::set,
         "defs.rename" => defs::rename,
         "defs.remove" => defs::remove,
@@ -406,6 +410,8 @@ fn write_builder(method: &str) -> Option<Builder> {
         "level.resize" => level::resize,
         "level.update" => level::update,
         "level.set_fields" => level::set_fields,
+        "level.set_layer_state" => level::set_layer_state,
+        "level.replace" => level::replace,
         "grid.set_cells" => grid::set_cells,
         "grid.fill_rect" => grid::fill_rect,
         "grid.flood_fill" => grid::flood_fill,

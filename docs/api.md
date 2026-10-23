@@ -43,7 +43,7 @@ print(call("grid.fill_rect", level="crevasse", layer="collision",
 
 From there: [`project.describe`](#project) is the map (layers, values, entity types, levels), `level.get` with `format: "text"` shows a level, and every write is one undo entry. A script that makes several writes should wrap them in [`history.begin_batch`/`end_batch`](#history) so the user can undo them in one step.
 
-Not reachable over the API: the project settings (`set_project_setting`: name, background, collision layer, seed), an existing level's rule state (`set_layer_state`: seed, optional groups, tileset substitutions; `level.create` takes them for a new level in `level.layers`) and `replace_level`. Use the editor, edit the files ([format.md](format.md)), or apply those [commands](commands.md) from Rust.
+The project settings that have a [command](commands.md#set_project_setting) (`name`, `bg_color`, `collision_layer`, `seed`) are written with [`project.update`](#project); the rest of `project.json` (`grid_size`, `blocking_values`, `default_level_size`, `export_on_save`) has no command yet, so only the editor's files can change it ([format.md](format.md)).
 
 ## Discovery: `.worlds/server.json`
 
@@ -134,6 +134,7 @@ These, and only these, need `confirm: true`; without it the error is `needs_conf
 | Method | When |
 | --- | --- |
 | `level.delete` | always |
+| `level.replace` | when the level holds something the new `content` leaves out: an `int_grid` layer's cells or a derived layer's overrides, a `tiles` layer's tiles, an entity or a note (by id). The reason names them ("drops the marks overrides, which the new content leaves out") |
 | `defs.remove` | always. For a field kind the reason says how many stored values go with it ("removes field needs_item of locked_door and the values 2 entities store; undo brings them back") |
 | `defs.set` of an `entity` | when entities store a value for a field the new definition takes out, or for a field it retypes (the reason says "2 entities store a value for a field that no longer exists or becomes invalid: delay, channel"). A field is retyped when its `type`, its `array` flag or its enum source changes: a project `enum` for inline `values` or the other way round, or another project enum. Reordering fields, or changing anything else about them (default, bounds, inline values, display), is not |
 | `defs.set` of an `entity_field` | when it replaces a field and retypes it (as above) while instances of the type store a value for it ("2 entities store a value for field needs_item, whose type changes"). Creating or moving a field never needs it |
@@ -312,6 +313,8 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 
 **`project.reload { confirm? }`** reloads from disk, discarding unsaved edits (`confirm: true` needed if there are any) and the undo history. Bumps `rev`; sends `changed` with `"kind": "reload"`. Refused (`unsupported`) in approval mode. A reload, by request or because files changed on disk, closes every open batch without recording it (the history is gone anyway; the owner's `end_batch` then gets `batch_state`) and rejects every pending approval batch (a `batch` notification with status `rejected`).
 
+**`project.update { name?, bg_color?, collision_layer?, seed? }`** is a write: one `set_project_setting` per key given, in that order (a `batch` labelled like its first when there are several). `bg_color` and `collision_layer` take `null` to unset them; `collision_layer` must name an `int_grid` layer. Each setting reports `{ "change": "project", "key" }`; a new `seed` changes every bake, and any setting change drops the headless bake cache. A setting given its current value changes nothing (no `changes`, no `rev` bump when none of them change). Giving no key is `invalid params`. Examples are in [project settings, rule state and replacing a level](#project-settings-rule-state-and-replacing-a-level).
+
 **`project.read_file { path }`** → `{ rev, path, text }`: a project file (`project.json`, `layers.json`, `entities/<slug>.json`, `worlds/<w>/levels/<l>/<layer>.json`, ...) rendered from memory exactly as saving would write it now, unsaved edits included. `path` is matched as a string against the set of project-relative paths a full save would write right now; nothing is read from the filesystem, so `..`, absolute paths and symlinks can't reach anything. A path not in that set is `command_error` (`invalid`).
 
 ```json
@@ -370,6 +373,8 @@ Reads of derived layers take their effective grids from the host's bake cache (t
 | `level.resize` | `{ level, size, anchor? }` | `resize_level` |
 | `level.update` | `{ level, slug?, name?, depth?, bg_color?, tags? }` | `batch` of `rename_level`, `set_level_depth`, `set_level_bg`, `set_level_tags` (only what's given; `tags` replaces the level's tags, `[]` clears them) |
 | `level.set_fields` | `{ level, fields?: { slug: value }, unset?: [slug] }` | `batch` of `set_level_field` (`fields` stores, `unset` removes the stored value) |
+| `level.set_layer_state` | `{ level, layer, state }`; `state` is an `auto` layer's per-level rule state as in `level.json` `layers` (`{ seed?, optional_groups?, tilesets? }`), or `null` to remove it | `set_layer_state`, reporting `layer_state` (that layer rebakes in the level). `state` replaces the entry whole. Checked first: `layer` must be an `auto` layer (`wrong_layer_kind`), each of `optional_groups` an `optional` group of its rules (`unknown_rule_group`, or `invalid` for an `always` or `off` group), each tileset of `tilesets` (keys and values) defined (`unknown_tileset`) |
+| `level.replace` | `{ world?, level, content?, confirm? }`, `level` and `content` as for `level.create`; `level.slug` names the level to replace, and a left-out `level.id` keeps its id | `replace_level`: `level.json` and all content, wholesale. Content left out of `content` is removed, so it needs `confirm` when the level holds anything `content` leaves out ([Confirmation](#confirmation)); rewriting the cells of a layer `content` includes never does. Reports `level_meta` part `all`, then a `grid` or `tiles` per layer with content before or after, an `entity_layer`, `entity` or `note` per entities layer entry, entity and note before or after ([commands.md](commands.md#replace_level)). It can't rename: use `level.update` |
 
 ### grid
 
@@ -1742,6 +1747,95 @@ The text view draws the effective grid, then the overrides:
 ```json
 { "jsonrpc": "2.0", "id": 118, "result": { "rev": 54, "levels": [ { "level": "hall", "layers": [ { "layer": "main_tiling", "tiles": 98 } ] } ],
   "warnings": [] } }
+```
+
+### project settings, rule state and replacing a level
+
+A new project seed (every bake changes) and no default background, in one write:
+
+```json
+{ "jsonrpc": "2.0", "id": 119, "method": "project.update", "params": { "seed": 7, "bg_color": null } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 119, "result": { "rev": 55, "status": "applied", "label": "claude-code: Set project bg_color",
+  "changes": [ { "change": "project", "key": "bg_color" }, { "change": "project", "key": "seed" } ] } }
+```
+
+The collision layer must be an `int_grid` layer:
+
+```json
+{ "jsonrpc": "2.0", "id": 120, "method": "project.update", "params": { "collision_layer": "main_tiling" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 120, "error": { "code": -32004, "message": "layer \"main_tiling\" is a auto layer, this needs a int_grid layer",
+  "data": { "kind": "wrong_layer_kind", "layer": "main_tiling", "expected": "int_grid", "actual": "auto", "message": "layer \"main_tiling\" is a auto layer, this needs a int_grid layer" } } }
+```
+
+Re-rolling `main_tiling` in `crevasse` and switching its `pillars` group on there too; the state replaces the old one whole, so `flooded_decor` is listed again:
+
+```json
+{ "jsonrpc": "2.0", "id": 121, "method": "level.set_layer_state", "params": { "level": "crevasse", "layer": "main_tiling",
+  "state": { "seed": 9, "optional_groups": ["flooded_decor", "pillars"] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 121, "result": { "rev": 56, "status": "applied", "label": "claude-code: Set main_tiling rule state on crevasse",
+  "changes": [ { "change": "layer_state", "world": "main", "level": "crevasse", "layer": "main_tiling" } ] } }
+```
+
+Only `optional` groups are switched on per level:
+
+```json
+{ "jsonrpc": "2.0", "id": 122, "method": "level.set_layer_state", "params": { "level": "crevasse", "layer": "main_tiling", "state": { "optional_groups": ["walls"] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 122, "error": { "code": -32004, "message": "rule group walls of main_tiling is not optional; only optional groups are switched on per level",
+  "data": { "kind": "invalid", "message": "rule group walls of main_tiling is not optional; only optional groups are switched on per level" } } }
+```
+
+Rewriting `hall` as a smaller room in one step. Its `marks` overrides aren't in the new content, so that needs `confirm`:
+
+```json
+{ "jsonrpc": "2.0", "id": 123, "method": "level.replace", "params": {
+  "level": { "slug": "hall", "name": "Hall", "world_px": [0, 160], "size": [8, 4], "depth": 0 },
+  "content": { "int_grids": [ { "layer": "collision", "rows": ["########", "#......#", "#......#", "########"] } ] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 123, "error": { "code": -32002,
+  "message": "replacing level hall drops the marks overrides, which the new content leaves out. Send confirm: true to do it",
+  "data": { "reason": "drops the marks overrides, which the new content leaves out" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 124, "method": "level.replace", "params": {
+  "level": { "slug": "hall", "name": "Hall", "world_px": [0, 160], "size": [8, 4], "depth": 0 },
+  "content": { "int_grids": [ { "layer": "collision", "rows": ["########", "#......#", "#......#", "########"] } ] }, "confirm": true } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 124, "result": { "rev": 57, "status": "applied", "label": "claude-code: Replace level hall",
+  "changes": [
+    { "change": "level_meta", "world": "main", "level": "hall", "part": "all" },
+    { "change": "grid", "world": "main", "level": "hall", "layer": "collision", "rect": [0, 0, 16, 6] },
+    { "change": "grid", "world": "main", "level": "hall", "layer": "marks", "rect": [0, 0, 16, 6] } ] } }
+```
+
+Undo puts the old level back, overrides and all:
+
+```json
+{ "jsonrpc": "2.0", "id": 125, "method": "history.undo", "params": {} }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 125, "result": { "rev": 58, "steps": [ { "label": "claude-code: Replace level hall", "origin": { "agent": "claude-code" } } ],
+  "changes": [
+    { "change": "level_meta", "world": "main", "level": "hall", "part": "all" },
+    { "change": "grid", "world": "main", "level": "hall", "layer": "collision", "rect": [0, 0, 16, 6] },
+    { "change": "grid", "world": "main", "level": "hall", "layer": "marks", "rect": [0, 0, 16, 6] } ] } }
 ```
 
 ## Headless mode

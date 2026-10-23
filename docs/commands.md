@@ -1,6 +1,6 @@
 # Worlds commands
 
-Every edit to a Worlds project, from the editor, the JSON-RPC server or an MCP agent, is a **command**: one JSON object tagged by `op`. This page is the reference for all of them: what each does, its JSON shape, its inverse, and the changes it reports. The [live API](api.md) wraps them in methods whose params are a command's fields without `op` (`grid.fill_rect` is `fill_rect`); `set_project_setting`, `set_layer_state` and `replace_level` have no method there.
+Every edit to a Worlds project, from the editor, the JSON-RPC server or an MCP agent, is a **command**: one JSON object tagged by `op`. This page is the reference for all of them: what each does, its JSON shape, its inverse, and the changes it reports. The [live API](api.md) wraps them in methods whose params are a command's fields without `op` (`grid.fill_rect` is `fill_rect`; `set_project_setting` is `project.update`, `set_layer_state` is `level.set_layer_state` and `replace_level` is `level.replace`).
 
 In Rust they are `worlds_core::command::Command`, applied with `Project::apply(cmd) -> Result<Applied, CommandError>`. `Applied` holds the `inverse` (a command) and the `changes` (a list). A JSON Schema comes from `schemars::schema_for!(Command)` (MCP resource `worlds://schema/command.json`). Commands deserialize from these JSON objects with serde, so a Rust program can apply the examples below as they are ([crates/worlds-core/README.md](../crates/worlds-core/README.md)).
 
