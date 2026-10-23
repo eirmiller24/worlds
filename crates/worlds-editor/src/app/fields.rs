@@ -17,9 +17,10 @@
 //!   level, the world view too); `type @ level` beside it, red when no
 //!   entity has that id;
 //! - tile: the tileset and an atlas popup to click a tile in;
-//! - arrays: an editor per element with ↑ ↓ ×, and + (for points and
-//!   references + picks the new element); every change sends the whole
-//!   array.
+//! - arrays: a row per element, its editor with ⏶ ⏷ × at the row's right
+//!   end, and + (for points and references + picks the new element) on a
+//!   last line with the field's own `null` and `×`; every change sends the
+//!   whole array.
 //!
 //! [`field_row`] adds the nullable controls: `×` removes the stored value
 //! (the default applies) and `null` stores `null` (nullable fields only). A
@@ -110,16 +111,10 @@ fn field_row_inner(
     key: &str,
     removable: bool,
 ) -> Option<FieldEdit> {
-    let mut out = None;
-    let row = ui.horizontal(|ui| {
-        let v = if f.array {
-            array_editor(ui, fx, f, shown, mixed, key)
-        } else {
-            value_editor(ui, fx, f, shown, mixed, key)
-        };
-        if let Some(v) = v {
-            out = Some(FieldEdit::Set(v));
-        }
+    // The field's own controls: `null`, `×` (remove the stored value) and
+    // a quiet "default" when nothing is stored.
+    let mut ctrl = None;
+    let mut controls = |ui: &mut egui::Ui| {
         if f.nullable
             && (mixed || stored != Some(&Value::Null))
             && ui
@@ -127,24 +122,38 @@ fn field_row_inner(
                 .on_hover_text("Store null")
                 .clicked()
         {
-            out = Some(FieldEdit::Set(Value::Null));
+            ctrl = Some(FieldEdit::Set(Value::Null));
         }
-        if removable
-            && (stored.is_some() || mixed)
-            && ui
+        if removable && (stored.is_some() || mixed) {
+            let x = ui
                 .small_button("×")
-                .on_hover_text("Remove the stored value (the default applies)")
-                .clicked()
-        {
-            out = Some(FieldEdit::Remove);
+                .on_hover_text("Remove the stored value (the default applies)");
+            mark(ui, &format!("{key}:remove"), x.rect);
+            if x.clicked() {
+                ctrl = Some(FieldEdit::Remove);
+            }
         }
         if stored.is_none() && !mixed && removable && f.default.is_some() {
             // Nothing stored, the default applies: say so, quietly.
             ui.weak("default");
         }
-    });
-    mark(ui, key, row.response.rect);
-    out
+    };
+    let (rect, v) = if f.array {
+        // An array is a column of element rows; the field's controls go on
+        // its last line, next to `+`, so they stay inside the column (a
+        // row of their own to the right would run past a narrow pane).
+        let r = ui.vertical(|ui| array_editor(ui, fx, f, shown, mixed, key, &mut controls));
+        (r.response.rect, r.inner)
+    } else {
+        let r = ui.horizontal(|ui| {
+            let v = value_editor(ui, fx, f, shown, mixed, key);
+            controls(ui);
+            v
+        });
+        (r.response.rect, r.inner)
+    };
+    mark(ui, key, rect);
+    ctrl.or(v.map(FieldEdit::Set))
 }
 
 /// The live problems about stored field values, by field slug: each
@@ -355,6 +364,8 @@ pub fn text_commit(
     } else {
         egui::TextEdit::singleline(&mut s).desired_width(width)
     };
+    // Narrower when the row has less room left.
+    let edit = edit.desired_width(width.min(ui.available_width()).max(width.min(40.0)));
     let r = ui.add(edit.hint_text(if mixed { "—" } else { "" }));
     mark(ui, key, r.rect);
     if r.changed() {
@@ -497,24 +508,40 @@ fn enum_combo(
         }
     };
     let mut out = None;
-    egui::ComboBox::from_id_salt(("enum", key))
-        .selected_text(text)
-        .show_ui(ui, |ui| {
-            if f.nullable && ui.selectable_label(false, "null").clicked() {
-                out = Some(Value::Null);
-            }
-            for c in &choices {
-                ui.horizontal(|ui| {
-                    choice_swatch(ui, fx, c);
-                    if ui
-                        .selectable_label(current.as_deref() == Some(c.0.as_str()), &c.1)
-                        .clicked()
-                    {
-                        out = Some(Value::from(c.0.clone()));
-                    }
-                });
-            }
-        });
+    // As wide as its text (at least the default width), less when the row
+    // has less room left (an array element next to its buttons, a narrow
+    // pane): long names are cut with "…" rather than pushing the row past
+    // the pane's edge. (The button's frame grows past the room its text was
+    // cut to, by its padding: the text gets that much less.)
+    let pad = 2.0 * ui.spacing().button_padding.x;
+    let icon = ui.spacing().icon_width + ui.spacing().icon_spacing;
+    let width = (button_width(ui, &text) + icon + 4.0)
+        .max(ui.spacing().combo_width)
+        .min(ui.available_width())
+        .max(48.0);
+    let room = Vec2::new(width - pad, ui.spacing().interact_size.y);
+    ui.allocate_ui(room, |ui| {
+        egui::ComboBox::from_id_salt(("enum", key))
+            .width(width)
+            .truncate()
+            .selected_text(text)
+            .show_ui(ui, |ui| {
+                if f.nullable && ui.selectable_label(false, "null").clicked() {
+                    out = Some(Value::Null);
+                }
+                for c in &choices {
+                    ui.horizontal(|ui| {
+                        choice_swatch(ui, fx, c);
+                        if ui
+                            .selectable_label(current.as_deref() == Some(c.0.as_str()), &c.1)
+                            .clicked()
+                        {
+                            out = Some(Value::from(c.0.clone()));
+                        }
+                    });
+                }
+            });
+    });
     out.filter(|v| mixed || Some(v) != shown)
 }
 
@@ -531,10 +558,13 @@ fn point_editor(
         .and_then(Value::as_array)
         .and_then(|a| Some([a.first()?.as_i64()?, a.get(1)?.as_i64()?]));
     let mut out = None;
+    // Narrower in a wrapping row (an array element), so x, y and Pick
+    // share one line at the Inspector's usual width.
+    let w = if ui.layout().main_wrap() { 26.0 } else { 36.0 };
     let mut axis = |ui: &mut egui::Ui, i: usize, bufs: &mut HashMap<String, String>| {
         let init = xy.map_or(String::new(), |p| p[i].to_string());
         let k = format!("{key}.{}", ["x", "y"][i]);
-        if let Some(s) = text_commit(ui, bufs, &k, &init, mixed, false, 36.0) {
+        if let Some(s) = text_commit(ui, bufs, &k, &init, mixed, false, w) {
             // The note goes under the axis it is about (where
             // `text_commit` shows it), and the next good value clears it.
             let parsed = s.trim().parse::<i64>().map(|n| {
@@ -551,6 +581,15 @@ fn point_editor(
     axis(ui, 0, fx.bufs);
     ui.weak("y");
     axis(ui, 1, fx.bufs);
+    // In a wrapping row (an array element in a narrow pane) Pick goes
+    // under x and y when it doesn't fit after them; its scope below
+    // wouldn't wrap on its own.
+    if ui.layout().main_wrap()
+        && ui.available_size_before_wrap().x
+            < button_width(ui, "Pick") + ui.spacing().item_spacing.x
+    {
+        ui.end_row();
+    }
     ui.add_enabled_ui(fx.pick_cells, |ui| {
         pick_button(
             ui,
@@ -595,6 +634,16 @@ fn picked_cell(fx: &FieldCx<'_>, level: LevelIx, world_px: [f64; 2]) -> Result<[
 
 /// A Pick button: arms a canvas pick for `key` (or cancels the one in
 /// progress). Returns whether it is armed.
+/// How wide a button with `text` is (its text and padding).
+fn button_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(text.to_string(), font, Color32::WHITE)
+        .size()
+        .x
+        + 2.0 * ui.spacing().button_padding.x
+}
+
 fn pick_button(
     ui: &mut egui::Ui,
     fx: &mut FieldCx<'_>,
@@ -835,8 +884,21 @@ fn new_element(doc: &Document, f: &FieldDef) -> Value {
     }
 }
 
-/// An array: each element's editor with ↑ ↓ ×, then +. Every change
-/// returns the whole new array.
+/// The array editor's element buttons: move up, move down, remove. Glyphs
+/// the bundled fonts have (`↑` and `↓` aren't in them and drew as empty
+/// boxes); a test checks every one.
+pub const ARRAY_UP: &str = "⏶";
+pub const ARRAY_DOWN: &str = "⏷";
+pub const ARRAY_REMOVE: &str = "×";
+
+/// An array row keeps its buttons on its line while that leaves the index
+/// and the editor this much room (an enum's combo fits); less, and they go
+/// under the editor.
+const ARRAY_EDITOR_MIN_W: f32 = 130.0;
+
+/// An array: a row per element (its index and editor, then ⏶ ⏷ × at the
+/// row's right end), then a last line with `+` and `controls` (the
+/// field's own buttons). Every change returns the whole new array.
 fn array_editor(
     ui: &mut egui::Ui,
     fx: &mut FieldCx<'_>,
@@ -844,13 +906,14 @@ fn array_editor(
     shown: Option<&Value>,
     mixed: bool,
     key: &str,
+    controls: &mut dyn FnMut(&mut egui::Ui),
 ) -> Option<Value> {
     let items: Vec<Value> = if mixed {
         Vec::new()
     } else {
         shown.and_then(Value::as_array).cloned().unwrap_or_default()
     };
-    // Element edits (text committed when focus moves, e.g. onto ↑ or +)
+    // Element edits (text committed when focus moves, e.g. onto ⏶ or +)
     // and the frame's one structural change are collected, then applied
     // in that order to one array, so neither discards the other.
     let mut edits: Vec<(usize, Value)> = Vec::new();
@@ -861,90 +924,161 @@ fn array_editor(
         default: None,
         ..f.clone()
     };
+    // Rows are as wide as the column (the grid's last one: up to the
+    // pane's right edge). The buttons sit at its right end; when that would
+    // leave the editor too little room (a narrow pane), they go on a line of
+    // their own under it. The pane can be narrower than the grid (a wide
+    // value in another row widens the column): the rows end where the pane
+    // does, so the buttons stay in sight.
+    let row_w = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left() - 8.0)
+        .max(0.0);
+    let gap = ui.spacing().item_spacing.x;
+    let buttons_w = [ARRAY_UP, ARRAY_DOWN, ARRAY_REMOVE]
+        .iter()
+        .map(|s| button_width(ui, s))
+        .sum::<f32>()
+        + 2.0 * gap;
+    let two_lines = row_w - buttons_w - gap < ARRAY_EDITOR_MIN_W;
     ui.vertical(|ui| {
         if mixed {
-            ui.weak("— (differs; + starts a new list for all)");
+            ui.add(egui::Label::new(
+                RichText::new("— (differs; + starts a new list for all)").weak(),
+            ))
+            .on_hover_text("The selected entities hold different lists");
         }
         let n = items.len();
         for (i, v) in items.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.weak(format!("{i}"));
-                if let Some(nv) =
-                    value_editor(ui, fx, &elem, Some(v), false, &format!("{key}[{i}]"))
-                {
-                    edits.push((i, nv));
-                }
-                if ui
-                    .add_enabled(i > 0, egui::Button::new("↑").small())
-                    .clicked()
-                {
-                    op = Some(ArrayOp::Swap(i, i - 1));
-                }
-                if ui
-                    .add_enabled(i + 1 < n, egui::Button::new("↓").small())
-                    .clicked()
-                {
-                    op = Some(ArrayOp::Swap(i, i + 1));
-                }
-                let x = ui.small_button("×").on_hover_text("Remove this element");
-                mark(ui, &format!("{key}[{i}]:remove"), x.rect);
+            let ekey = format!("{key}[{i}]");
+            // ⏶ ⏷ × from the right end of `row`.
+            let mut buttons = |row: &mut egui::Ui| {
+                let x = row
+                    .small_button(ARRAY_REMOVE)
+                    .on_hover_text("Remove this element");
+                mark(row, &format!("{ekey}:remove"), x.rect);
                 if x.clicked() {
                     op = Some(ArrayOp::Remove(i));
                 }
-                if f.ty.is_entity_ref() {
-                    ref_note(ui, fx.doc, Some(v));
+                let down = row
+                    .add_enabled(i + 1 < n, egui::Button::new(ARRAY_DOWN).small())
+                    .on_hover_text("Move down");
+                mark(row, &format!("{ekey}:down"), down.rect);
+                if down.clicked() {
+                    op = Some(ArrayOp::Swap(i, i + 1));
                 }
-            });
+                let up = row
+                    .add_enabled(i > 0, egui::Button::new(ARRAY_UP).small())
+                    .on_hover_text("Move up");
+                mark(row, &format!("{ekey}:up"), up.rect);
+                if up.clicked() {
+                    op = Some(ArrayOp::Swap(i, i - 1));
+                }
+            };
+            // The index and the editor, left to right, wrapping (a point's
+            // Pick goes under its x and y rather than past the edge).
+            // Top-aligned, so a tall editor (text, JSON) grows the row
+            // downwards, never over the row above.
+            let mut editor = |ui: &mut egui::Ui| {
+                ui.with_layout(
+                    egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+                    |ui| {
+                        // Tighter than the pane's 8: a point's x and y fit
+                        // on one line of a narrow pane.
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        // A widget that doesn't fit goes to the next line
+                        // whole (Pick), not wrapped a letter per line.
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                        ui.weak(format!("{i}"));
+                        if let Some(nv) = value_editor(ui, fx, &elem, Some(v), false, &ekey) {
+                            edits.push((i, nv));
+                        }
+                    },
+                );
+            };
+            let line = Vec2::new(row_w, ui.spacing().interact_size.y);
+            let row = if two_lines {
+                let a = ui.allocate_ui_with_layout(
+                    line,
+                    egui::Layout::left_to_right(egui::Align::Min),
+                    |ui| editor(ui),
+                );
+                let b = ui.allocate_ui_with_layout(
+                    line,
+                    egui::Layout::right_to_left(egui::Align::Min),
+                    |ui| buttons(ui),
+                );
+                a.response.rect.union(b.response.rect)
+            } else {
+                ui.allocate_ui_with_layout(
+                    line,
+                    egui::Layout::right_to_left(egui::Align::Min),
+                    |ui| {
+                        buttons(ui);
+                        editor(ui);
+                    },
+                )
+                .response
+                .rect
+            };
+            mark(ui, &format!("{ekey}:row"), row);
+            // A reference's target on its own line under the row.
+            if f.ty.is_entity_ref() {
+                ui.indent(("ref", &ekey), |ui| ref_note(ui, fx.doc, Some(v)));
+            }
         }
         // + : points and references pick the new element on the map.
         let add_key = format!("{key}[+]");
-        match &f.ty {
-            FieldType::Point | FieldType::EntityRef { .. } => {
-                let accept = PickAccept {
-                    entity: f.ty.is_entity_ref(),
-                    cell: !f.ty.is_entity_ref(),
-                    ..Default::default()
-                };
-                let armed = fx.view.pick.as_ref().is_some_and(|p| p.target == add_key);
-                let b = ui
-                    .add_enabled(
-                        accept.entity || fx.pick_cells,
-                        egui::Button::selectable(armed, "+ Pick"),
-                    )
-                    .on_hover_text("Add an element: click it on the map (Esc cancels)");
-                mark(ui, &add_key, b.rect);
-                if b.clicked() {
-                    if armed {
-                        fx.view.pick = None;
-                    } else {
-                        fx.view.start_pick(
-                            accept,
-                            add_key.clone(),
-                            format!("Click to add to {}", f.slug),
-                        );
-                    }
-                }
-                match fx.view.take_picked(&add_key) {
-                    Some(PickedThing::Entity { id, .. }) => {
-                        op = Some(ArrayOp::Push(Value::from(id.to_string())));
-                    }
-                    Some(PickedThing::Cell { level, world_px }) => {
-                        match picked_cell(fx, level, world_px) {
-                            Ok(c) => op = Some(ArrayOp::Push(serde_json::json!([c[0], c[1]]))),
-                            Err(e) => fx.view.set_status(e, true),
+        ui.horizontal(|ui| {
+            match &f.ty {
+                FieldType::Point | FieldType::EntityRef { .. } => {
+                    let accept = PickAccept {
+                        entity: f.ty.is_entity_ref(),
+                        cell: !f.ty.is_entity_ref(),
+                        ..Default::default()
+                    };
+                    let armed = fx.view.pick.as_ref().is_some_and(|p| p.target == add_key);
+                    let b = ui
+                        .add_enabled(
+                            accept.entity || fx.pick_cells,
+                            egui::Button::selectable(armed, "+ Pick"),
+                        )
+                        .on_hover_text("Add an element: click it on the map (Esc cancels)");
+                    mark(ui, &add_key, b.rect);
+                    if b.clicked() {
+                        if armed {
+                            fx.view.pick = None;
+                        } else {
+                            fx.view.start_pick(
+                                accept,
+                                add_key.clone(),
+                                format!("Click to add to {}", f.slug),
+                            );
                         }
                     }
-                    Some(PickedThing::Level { .. } | PickedThing::Note { .. }) | None => {}
+                    match fx.view.take_picked(&add_key) {
+                        Some(PickedThing::Entity { id, .. }) => {
+                            op = Some(ArrayOp::Push(Value::from(id.to_string())));
+                        }
+                        Some(PickedThing::Cell { level, world_px }) => {
+                            match picked_cell(fx, level, world_px) {
+                                Ok(c) => op = Some(ArrayOp::Push(serde_json::json!([c[0], c[1]]))),
+                                Err(e) => fx.view.set_status(e, true),
+                            }
+                        }
+                        Some(PickedThing::Level { .. } | PickedThing::Note { .. }) | None => {}
+                    }
+                }
+                _ => {
+                    let b = ui.small_button("+").on_hover_text("Add an element");
+                    mark(ui, &add_key, b.rect);
+                    if b.clicked() {
+                        op = Some(ArrayOp::Push(new_element(fx.doc, f)));
+                    }
                 }
             }
-            _ => {
-                let b = ui.small_button("+").on_hover_text("Add an element");
-                mark(ui, &add_key, b.rect);
-                if b.clicked() {
-                    op = Some(ArrayOp::Push(new_element(fx.doc, f)));
-                }
-            }
-        }
+            controls(ui);
+        });
     });
     if edits.is_empty() && op.is_none() {
         return None;

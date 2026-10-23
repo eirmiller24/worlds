@@ -713,6 +713,8 @@ mod tests {
     struct Driver {
         ctx: egui::Context,
         t: f64,
+        /// The pane's width (the screen's).
+        width: f32,
     }
 
     impl Driver {
@@ -720,6 +722,7 @@ mod tests {
             Driver {
                 ctx: egui::Context::default(),
                 t: 0.0,
+                width: 900.0,
             }
         }
 
@@ -728,7 +731,7 @@ mod tests {
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(900.0, 1400.0),
+                    egui::vec2(self.width, 1400.0),
                 )),
                 time: Some(self.t),
                 focused: true,
@@ -1090,6 +1093,103 @@ mod tests {
         let row = d.rect("btncrev222:field:target");
         let note = d.rect("ref note:locked_door @ crevasse");
         assert!(note.top() >= row.bottom() - 1.0, "{note:?} under {row:?}");
+    }
+
+    /// Array rows lay out cleanly at a wide and a narrow pane: each
+    /// element's ⏶ ⏷ × (glyphs the fonts have) inside the pane and apart,
+    /// `+` and the field's own × under the elements, and nothing over the
+    /// next field's row. An Array<enum> like LDtk's chest `content`, and an
+    /// array of points.
+    #[test]
+    fn array_rows_stay_inside_the_pane_at_any_width() {
+        use super::super::fields::{ARRAY_DOWN, ARRAY_REMOVE, ARRAY_UP};
+        let (_tmp, mut st) = state();
+        let dir = st.doc.as_ref().unwrap().dir.clone();
+        let edit = |rel: &str, from: &str, to: &str| {
+            let p = dir.join(rel);
+            let s = std::fs::read_to_string(&p).unwrap();
+            assert!(s.contains(from), "{rel}");
+            std::fs::write(&p, s.replace(from, to)).unwrap();
+        };
+        let waypoints =
+            r#"{ "slug": "waypoints", "type": "point", "array": true, "default": [] },"#;
+        edit(
+            "entities/locked_door.json",
+            waypoints,
+            &format!(
+                "{waypoints}\n    {}",
+                r#"{ "slug": "content", "type": "enum", "values": ["sword", "bow", "healing_potion"], "array": true },"#
+            ),
+        );
+        edit(
+            "worlds/main/levels/crevasse/entities.json",
+            r#""waypoints": [[1, 1], [2, 1]],"#,
+            r#""waypoints": [[1, 1], [2, 1]], "content": ["sword", "healing_potion"],"#,
+        );
+        st.doc = Some(Document::open(&dir).unwrap());
+        st.view.selection.set_entities([id("doorcrev22")]);
+        for width in [900.0, 330.0, 250.0] {
+            let mut d = Driver::new();
+            d.width = width;
+            for _ in 0..3 {
+                d.frame(&mut st, vec![]);
+            }
+            let glyphs = format!("{ARRAY_UP}{ARRAY_DOWN}{ARRAY_REMOVE}");
+            assert!(
+                d.ctx
+                    .fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), &glyphs)),
+                "{glyphs} not in the fonts"
+            );
+            for (field, next) in [("waypoints", "content"), ("content", "exit_to")] {
+                let key = format!("doorcrev22:field:{field}");
+                let at = |s: &str| d.rect(&format!("{key}{s}"));
+                let inside = |r: egui::Rect, what: &str| {
+                    assert!(
+                        r.left() >= 0.0 && r.right() <= width,
+                        "{width}: {field}{what} {r:?} past the pane"
+                    );
+                };
+                let next_row = d.rect(&format!("doorcrev22:field:{next}"));
+                assert!(
+                    next_row.top() >= at("").bottom() - 0.5,
+                    "{width}: {field} {:?} runs into {next} {next_row:?}",
+                    at("")
+                );
+                let mut last = None;
+                for i in 0..2 {
+                    let row = at(&format!("[{i}]:row"));
+                    inside(row, &format!("[{i}]"));
+                    let parts: Vec<egui::Rect> = ["up", "down", "remove"]
+                        .iter()
+                        .map(|p| at(&format!("[{i}]:{p}")))
+                        .collect();
+                    for (k, r) in parts.iter().enumerate() {
+                        inside(*r, &format!("[{i}] button {k}"));
+                        assert!(row.contains_rect(*r), "{width}: {field}[{i}] {r:?}");
+                        for o in &parts[k + 1..] {
+                            assert!(!r.intersects(*o), "{width}: {field}[{i}] {r:?} {o:?}");
+                        }
+                    }
+                    if let Some(prev) = last {
+                        assert!(row.top() >= prev - 0.5, "{width}: {field}[{i}] overlaps");
+                    }
+                    last = Some(row.bottom());
+                }
+                let plus = at("[+]");
+                inside(plus, "[+]");
+                assert!(plus.top() >= last.unwrap() - 0.5, "{width}: {field} +");
+                assert!(
+                    plus.bottom() <= next_row.top() + 0.5,
+                    "{width}: {field} + over {next}"
+                );
+                if field == "content" {
+                    // Stored: the field's own ×, on +'s line.
+                    let x = at(":remove");
+                    inside(x, ":remove");
+                    assert!((x.center().y - plus.center().y).abs() < 4.0, "{width}");
+                }
+            }
+        }
     }
 
     #[test]

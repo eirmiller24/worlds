@@ -96,6 +96,39 @@ pub struct RulesState {
     /// The selected region rule's regions, and what they were worked out
     /// for (edit revision, images, level, layer, rule).
     region_cache: Option<(RegionKey, Option<Vec<RegionPreview>>)>,
+    /// A slug being renamed in the list (a double click on it, or Rename…
+    /// in its menu).
+    pub renaming: Option<Rename>,
+    /// Where each group's and entry's slug was drawn last frame, by
+    /// (is a group, slug) (tests).
+    #[doc(hidden)]
+    pub slug_rects: HashMap<(bool, Slug), egui::Rect>,
+}
+
+/// An inline rename in the Rules list: a group's or an entry's (a rule's or
+/// a reference's) slug being typed.
+#[derive(Clone, Debug)]
+pub struct Rename {
+    /// A group, else an entry.
+    pub group: bool,
+    pub from: Slug,
+    pub text: String,
+    /// Why the last try was refused, shown under the box.
+    pub error: Option<String>,
+    /// The box has had the keyboard (it asks for it once).
+    focused: bool,
+}
+
+impl Rename {
+    pub fn new(group: bool, from: Slug) -> Self {
+        Rename {
+            group,
+            text: from.to_string(),
+            from,
+            error: None,
+            focused: false,
+        }
+    }
 }
 
 /// What a region preview was worked out for.
@@ -679,6 +712,218 @@ fn fresh_slug(base: &str, taken: &dyn Fn(&str) -> bool) -> Slug {
     }
 }
 
+/// The commands that rename a group (`group`) or an entry of `layer`'s
+/// rule set from `from` to `to`, as one batch: an entry is taken out and put
+/// back under the new slug at its place (`remove_rule` + `set_rule`); a
+/// group likewise (`remove_rule_group` + `set_rule_group`, the rule set
+/// kept while it is empty), plus a `set_layer_state` for every level that
+/// switches it on in `optional_groups`. Refused with the reason: `to` isn't
+/// a slug, or another group (another entry, or a rule a reference expands
+/// to) of the layer already has it. `Ok(vec![])` when `to` is `from`.
+pub fn rename_commands(
+    doc: &Document,
+    layer: &Slug,
+    group: bool,
+    from: &Slug,
+    to: &str,
+) -> Result<Vec<Command>, String> {
+    let to = to.trim();
+    let what = if group { "group" } else { "rule" };
+    let new = Slug::new(to).map_err(|e| format!("{to:?} can't be a {what} slug: {e}"))?;
+    if new == *from {
+        return Ok(Vec::new());
+    }
+    let set = doc
+        .project
+        .rules_for(layer.as_str())
+        .ok_or_else(|| format!("{layer} has no rules"))?;
+    if group {
+        let gi = set
+            .groups
+            .iter()
+            .position(|g| g.slug == *from)
+            .ok_or_else(|| format!("rules/{layer}.json has no group {from}"))?;
+        if set.groups.iter().any(|g| g.slug == new) {
+            return Err(format!(
+                "rules/{layer}.json already has a group {new}: pick another slug"
+            ));
+        }
+        let mut def = set.groups[gi].clone();
+        def.slug = new.clone();
+        let mut cmds = vec![
+            Command::RemoveRuleGroup {
+                layer: layer.clone(),
+                group: from.clone(),
+                keep_empty: true,
+            },
+            Command::SetRuleGroup {
+                layer: layer.clone(),
+                group: new.clone(),
+                def,
+                index: Some(gi),
+            },
+        ];
+        // Levels switch optional groups on by slug.
+        for level in doc.project.worlds.iter().flat_map(|w| &w.levels) {
+            let Some(state) = level.layers.get(layer.as_str()) else {
+                continue;
+            };
+            if !state.optional_groups.contains(from) {
+                continue;
+            }
+            let mut state = state.clone();
+            for g in &mut state.optional_groups {
+                if g == from {
+                    *g = new.clone();
+                }
+            }
+            cmds.push(Command::SetLayerState {
+                level: level.slug.clone(),
+                layer: layer.clone(),
+                state: Some(state),
+            });
+        }
+        return Ok(cmds);
+    }
+    let (gi, ei) = find_entry(set, from.as_str())
+        .ok_or_else(|| format!("rules/{layer}.json has no {from}"))?;
+    if let Some((g, _)) = set.entries().find(|(_, e)| *e.slug() == new) {
+        return Err(format!(
+            "rules/{layer}.json already has {new} (group {}): pick another slug",
+            g.slug
+        ));
+    }
+    // A rule a reference expands to (`<reference>__<rule>`) has that slug
+    // in the bake too.
+    for (_, e) in set.entries() {
+        if let RuleEntry::Use(u) = e
+            && let Some(t) = doc.project.template(u.template.as_str())
+            && t.rules
+                .iter()
+                .any(|r| format!("{}__{}", u.slug(), r.slug) == new.as_str())
+        {
+            return Err(format!(
+                "{new} is a rule reference {} expands to: pick another slug",
+                u.slug()
+            ));
+        }
+    }
+    let g = &set.groups[gi];
+    let mut def = g.rules[ei].clone();
+    match &mut def {
+        RuleEntry::Rule(r) => r.slug = new.clone(),
+        RuleEntry::Use(u) => u.slug = Some(new.clone()),
+    }
+    Ok(vec![
+        Command::RemoveRule {
+            layer: layer.clone(),
+            rule: from.clone(),
+        },
+        Command::SetRule {
+            layer: layer.clone(),
+            group: g.slug.clone(),
+            rule: new,
+            def,
+            index: Some(ei),
+        },
+    ])
+}
+
+/// The rename box in place of a slug in the list, when `from` is being
+/// renamed: it takes the keyboard (the text selected) once; Enter or
+/// leaving the box renames (one entry, [`rename_commands`]), Escape
+/// cancels. A refused slug keeps the box open with the reason under it (and
+/// in the status bar). Returns whether it drew the box.
+fn rename_box(ui: &mut egui::Ui, cx: &mut Cx<'_>, group: bool, from: &Slug) -> bool {
+    let Some(rn) =
+        cx.r.renaming
+            .as_mut()
+            .filter(|r| r.group == group && r.from == *from)
+    else {
+        return false;
+    };
+    let id = egui::Id::new(("rules rename", group, from.as_str()));
+    let resp = ui
+        .vertical(|ui| {
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut rn.text)
+                    .id(id)
+                    .desired_width(140.0)
+                    .hint_text("slug"),
+            );
+            if let Some(e) = &rn.error {
+                ui.add(egui::Label::new(
+                    RichText::new(e).color(Color32::from_rgb(230, 110, 110)),
+                ));
+            }
+            resp
+        })
+        .inner;
+    cx.r.slug_rects.insert((group, from.clone()), resp.rect);
+    let rn = cx.r.renaming.as_mut().expect("still renaming");
+    if !rn.focused && ui.is_enabled() && ui.is_visible() && !ui.is_sizing_pass() {
+        rn.focused = true;
+        resp.request_focus();
+        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(rn.text.chars().count()),
+            )));
+        state.store(ui.ctx(), id);
+    }
+    if resp.changed() {
+        rn.error = None;
+    }
+    if !resp.lost_focus() {
+        return true;
+    }
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        cx.r.renaming = None;
+        return true;
+    }
+    let text = rn.text.clone();
+    match rename_commands(cx.doc, &cx.layer, group, from, &text) {
+        Ok(cmds) if cmds.is_empty() => cx.r.renaming = None,
+        Ok(cmds) => {
+            let to = Slug::new(text.trim()).expect("checked");
+            let what = if group { "rule group" } else { "rule" };
+            push(cx.pending, format!("Rename {what} {from} to {to}"), cmds);
+            cx.r.renamed(group, from, &to);
+            cx.r.renaming = None;
+        }
+        Err(e) => {
+            cx.status = Some(e.clone());
+            rn.error = Some(e);
+            // Back to the box, to fix the slug.
+            rn.focused = false;
+        }
+    }
+    true
+}
+
+impl RulesState {
+    /// The pane's own state follows a rename: the selection, the multi
+    /// selection, collapsed groups and opened references.
+    fn renamed(&mut self, group: bool, from: &Slug, to: &Slug) {
+        let swap = |set: &mut BTreeSet<Slug>| {
+            if set.remove(from) {
+                set.insert(to.clone());
+            }
+        };
+        if group {
+            swap(&mut self.collapsed);
+            return;
+        }
+        swap(&mut self.multi);
+        swap(&mut self.expanded);
+        if self.selected.as_ref() == Some(from) {
+            self.selected = Some(to.clone());
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // Per-frame data: counts and the highlight
 // ---------------------------------------------------------------------
@@ -1234,7 +1479,24 @@ fn group_header(ui: &mut egui::Ui, cx: &mut Cx<'_>, set: &RuleSet, gi: usize, g:
                     ui.painter()
                         .rect_filled(r, 2.0, Color32::from_rgb(c[0], c[1], c[2]));
                 }
-                ui.strong(g.slug.as_str());
+                if !rename_box(ui, cx, true, &g.slug) {
+                    let l = ui
+                        .add(
+                            egui::Label::new(RichText::new(g.slug.as_str()).strong())
+                                .sense(Sense::click()),
+                        )
+                        .on_hover_text("Double-click to rename");
+                    cx.r.slug_rects.insert((true, g.slug.clone()), l.rect);
+                    if l.double_clicked() {
+                        cx.r.renaming = Some(Rename::new(true, g.slug.clone()));
+                    }
+                    l.context_menu(|ui| {
+                        if ui.button("Rename…").clicked() {
+                            cx.r.renaming = Some(Rename::new(true, g.slug.clone()));
+                            ui.close();
+                        }
+                    });
+                }
                 let text = match matches {
                     Some(m) => format!("{fires} · {m}"),
                     None => format!("{fires}"),
@@ -1682,7 +1944,23 @@ fn entry_row(
             RuleEntry::Use(u) => RichText::new(format!("use {} as {}", u.template, u.slug())),
         };
         let text = if e.active() { text } else { text.weak() };
-        let r = ui.selectable_label(selected, text);
+        if rename_box(ui, cx, false, &slug) {
+            ui.weak(counts_text(cx.r, &slug));
+            return handle;
+        }
+        let r = ui
+            .selectable_label(selected, text)
+            .on_hover_text("Double-click to rename");
+        cx.r.slug_rects.insert((false, slug.clone()), r.rect);
+        if r.double_clicked() {
+            cx.r.renaming = Some(Rename::new(false, slug.clone()));
+        }
+        r.context_menu(|ui| {
+            if ui.button("Rename…").clicked() {
+                cx.r.renaming = Some(Rename::new(false, slug.clone()));
+                ui.close();
+            }
+        });
         if cx.r.reveal && cx.r.selected.as_ref() == Some(&slug) {
             reveal_row(ui, cx.r, g, r.rect);
             cx.r.reveal = false;
@@ -5375,5 +5653,197 @@ mod tests {
         assert_eq!(m[&'S'].to_string(), "!fortified");
         assert!(parse_legend_line("# fortified").is_err());
         assert!(parse_legend_line("").unwrap().is_empty());
+    }
+
+    /// Inline rename in the list: a double click on a group's or a rule's
+    /// slug opens a box with the slug selected; typing and Enter queue one
+    /// batch that renames it in place (a group's optional uses in levels
+    /// follow), undone exactly by its inverse; a taken or invalid slug is
+    /// refused with the reason and nothing is queued; Escape cancels.
+    #[test]
+    fn groups_and_rules_rename_inline_and_refuse_bad_slugs() {
+        let (_tmp, mut st) = derived_state();
+        st.view.active_layer = st
+            .doc
+            .as_ref()
+            .unwrap()
+            .project
+            .layers
+            .iter()
+            .position(|l| l.slug == "main_tiling");
+        st.rules.layer = Some(slug("main_tiling"));
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let mut frame = |st: &mut EditorState, events: Vec<egui::Event>| {
+            t += 0.1;
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                time: Some(t),
+                focused: true,
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                refresh(st, 1, false);
+                pane(ui, st);
+            });
+            out.textures_delta.clear();
+        };
+        let click = |p: egui::Pos2| {
+            let b = |pressed| egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            vec![egui::Event::PointerMoved(p), b(true), b(false)]
+        };
+        let key = |k: egui::Key| {
+            [true, false]
+                .map(|pressed| egui::Event::Key {
+                    key: k,
+                    physical_key: None,
+                    pressed,
+                    repeat: false,
+                    modifiers: Default::default(),
+                })
+                .to_vec()
+        };
+        for _ in 0..3 {
+            frame(&mut st, vec![]);
+        }
+        // Double click a slug, then type over it (it starts selected).
+        type Frame<'a> = dyn FnMut(&mut EditorState, Vec<egui::Event>) + 'a;
+        let rename = |frame: &mut Frame<'_>,
+                      st: &mut EditorState,
+                      group: bool,
+                      from: &str,
+                      to: &str,
+                      end| {
+            let p = st.rules.slug_rects[&(group, slug(from))].center();
+            frame(st, click(p));
+            frame(st, click(p));
+            frame(st, vec![]);
+            frame(st, vec![]);
+            let r = st.rules.renaming.clone().expect("renaming");
+            assert_eq!((r.group, r.from.as_str()), (group, from));
+            frame(st, vec![egui::Event::Text(to.into())]);
+            frame(st, key(end));
+            frame(st, vec![]);
+        };
+        let apply = |st: &mut EditorState| -> (String, Command) {
+            let cmd = st.pending.pop().expect("a batch");
+            assert!(st.pending.is_empty(), "{:?}", st.pending);
+            let Command::Batch { label, .. } = &cmd else {
+                panic!("{cmd:?}")
+            };
+            let label = label.clone();
+            let doc = st.doc.as_mut().unwrap();
+            let inverse = doc.project.apply(cmd).unwrap().inverse;
+            doc.reindex();
+            (label, inverse)
+        };
+        let before = st.doc.as_ref().unwrap().project.clone();
+
+        // A group: in place, and crevasse's optional_groups follow it.
+        rename(
+            &mut frame,
+            &mut st,
+            true,
+            "flooded_decor",
+            "flooded",
+            egui::Key::Enter,
+        );
+        assert!(st.rules.renaming.is_none());
+        let (label, undo) = apply(&mut st);
+        assert_eq!(label, "Rename rule group flooded_decor to flooded");
+        let doc = st.doc.as_ref().unwrap();
+        let set = doc.project.rules_for("main_tiling").unwrap();
+        let slugs: Vec<&str> = set.groups.iter().map(|g| g.slug.as_str()).collect();
+        assert_eq!(slugs, ["walls", "flooded", "pillars", "retired"]);
+        assert_eq!(set.groups[1].rules.len(), 1);
+        let crevasse = doc.level(doc.level_ix("crevasse").unwrap());
+        assert_eq!(crevasse.optional_groups("main_tiling"), [slug("flooded")]);
+        {
+            let doc = st.doc.as_mut().unwrap();
+            doc.project.apply(undo).unwrap();
+            doc.reindex();
+        }
+        assert_eq!(
+            st.doc.as_ref().unwrap().project,
+            before,
+            "undo restores all"
+        );
+        frame(&mut st, vec![]);
+
+        // A rule: a slug another rule has is refused, with the reason.
+        st.rules.selected = Some(slug("wall_fill"));
+        frame(&mut st, vec![]);
+        rename(
+            &mut frame,
+            &mut st,
+            false,
+            "wall_fill",
+            "wall_top_edge",
+            egui::Key::Enter,
+        );
+        let r = st.rules.renaming.clone().expect("still renaming");
+        let e = r.error.expect("an error");
+        assert!(e.contains("already has wall_top_edge"), "{e}");
+        assert!(st.pending.is_empty());
+        // Not a slug.
+        frame(&mut st, vec![]);
+        frame(&mut st, vec![egui::Event::Text("Bad Slug".into())]);
+        frame(&mut st, key(egui::Key::Enter));
+        frame(&mut st, vec![]);
+        let e = st.rules.renaming.clone().unwrap().error.expect("an error");
+        assert!(e.contains("can't be a rule slug"), "{e}");
+        assert!(st.pending.is_empty());
+        // Escape cancels.
+        frame(&mut st, vec![]);
+        frame(&mut st, key(egui::Key::Escape));
+        frame(&mut st, vec![]);
+        assert!(st.rules.renaming.is_none());
+        assert!(st.pending.is_empty());
+        // A good one: in place, the selection follows.
+        rename(
+            &mut frame,
+            &mut st,
+            false,
+            "wall_fill",
+            "fill",
+            egui::Key::Enter,
+        );
+        let (label, _) = apply(&mut st);
+        assert_eq!(label, "Rename rule wall_fill to fill");
+        assert_eq!(st.rules.selected, Some(slug("fill")));
+        let set = st
+            .doc
+            .as_ref()
+            .unwrap()
+            .project
+            .rules_for("main_tiling")
+            .unwrap()
+            .clone();
+        let walls: Vec<&str> = set.groups[0]
+            .rules
+            .iter()
+            .map(|e| e.slug().as_str())
+            .collect();
+        assert_eq!(walls, ["wall_top_edge", "fill", "any_wall_group"]);
+        // The same slug again changes nothing.
+        let doc = st.doc.as_ref().unwrap();
+        assert!(
+            rename_commands(doc, &slug("main_tiling"), false, &slug("fill"), "fill")
+                .unwrap()
+                .is_empty()
+        );
+        // A group slug another group has.
+        let e = rename_commands(doc, &slug("main_tiling"), true, &slug("walls"), "retired")
+            .unwrap_err();
+        assert!(e.contains("already has a group retired"), "{e}");
     }
 }
