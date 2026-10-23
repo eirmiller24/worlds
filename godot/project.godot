@@ -1,0 +1,13 @@
+; Test project for the Worlds Godot addon (addons/worlds). To use the addon
+; in your own game, copy addons/worlds into it; see addons/worlds/README.md.
+
+config_version=5
+
+[application]
+
+config/name="Worlds addon tests"
+config/features=PackedStringArray("4.7")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/worlds/plugin.cfg")

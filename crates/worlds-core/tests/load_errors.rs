@@ -20,7 +20,7 @@ fn replace(path: &Path, from: &str, to: &str) {
 }
 
 fn err_text(r: Result<Project, Error>) -> String {
-    r.expect_err("load should fail").to_string()
+    common::slashed(r.expect_err("load should fail"))
 }
 
 #[test]

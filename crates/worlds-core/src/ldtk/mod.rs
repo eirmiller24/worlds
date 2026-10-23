@@ -447,10 +447,11 @@ impl Ctx {
     }
 
     /// Path to an LDtk-relative file, relative to the output project directory.
+    /// Both sides have their symlinks resolved, so the `..`s walk the real
+    /// directories (macOS's `/var` is `/private/var`, one level deeper).
     fn image_path(&self, rel: &str) -> String {
-        let target = normalize(&absolute(&self.ldtk_dir.join(rel)));
-        let base = normalize(&absolute(&self.out_dir));
-        relative(&base, &target)
+        let real = |p: &Path| crate::export::resolve(&normalize(&absolute(p)));
+        relative(&real(&self.out_dir), &real(&self.ldtk_dir.join(rel)))
     }
 }
 

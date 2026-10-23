@@ -32,8 +32,12 @@ pub struct ProjectWatcher {
     tilesets: Vec<(usize, PathBuf)>,
 }
 
+/// The one form every path here is compared in: symlinks resolved as far
+/// as the path exists (macOS reports `/private/var/...` for `/var/...`;
+/// Windows canonical paths are `\\?\`-prefixed), so a deleted file still
+/// matches what we recorded while it was there.
 fn canon(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    worlds_core::export::resolve(p)
 }
 
 impl ProjectWatcher {
@@ -162,7 +166,10 @@ impl OwnWrites {
     pub fn record<'a>(&mut self, dir: &Path, rels: impl IntoIterator<Item = &'a PathBuf>) {
         let dir = canon(dir);
         for rel in rels {
-            let abs = dir.join(rel);
+            // Component by component: `rel` may be `/`-separated, which a
+            // `\\?\` path on Windows doesn't split on.
+            let mut abs = dir.clone();
+            abs.extend(rel.components());
             if rel.extension().is_some() {
                 self.files.insert(abs.clone(), content_hash(&abs));
                 continue;
@@ -186,18 +193,11 @@ impl OwnWrites {
     /// save left there.
     pub fn explains(&self, p: &Path) -> bool {
         let c = canon(p);
-        let key = if self.files.contains_key(&c) { &c } else { p };
-        match self.files.get(key) {
+        match self.files.get(&c) {
             Some(h) => *h == content_hash(p),
             // A file of a level directory we removed (or rewrote) that is
             // gone now.
-            None => {
-                !p.exists()
-                    && self
-                        .dirs
-                        .iter()
-                        .any(|d| p.starts_with(d) || c.starts_with(d))
-            }
+            None => !p.exists() && self.dirs.iter().any(|d| c.starts_with(d)),
         }
     }
 
@@ -214,11 +214,7 @@ pub fn entity_files(dir: &Path, paths: &[PathBuf]) -> Option<Vec<PathBuf>> {
     let dir = canon(dir);
     let mut out = Vec::new();
     for p in paths {
-        // A deleted file can't be canonicalized; its parent can.
-        let abs = match (p.parent(), p.file_name()) {
-            (Some(parent), Some(name)) => canon(parent).join(name),
-            _ => return None,
-        };
+        let abs = canon(p);
         let rel = abs.strip_prefix(&dir).ok()?;
         let mut parts = rel.components();
         let (Some(first), Some(file), None) = (parts.next(), parts.next(), parts.next()) else {
@@ -408,5 +404,30 @@ mod tests {
         assert!(!own.explains(&dir.join("worlds/main/levels/gone/level.json")));
         own.clear();
         assert!(!own.explains(&level.join("collision.json")));
+    }
+
+    /// The project opened through a symlink (as macOS's `/var` is
+    /// `/private/var`) while the watcher reports real paths: our save is
+    /// still ours, including the files of a level we deleted.
+    #[cfg(unix)]
+    #[test]
+    fn own_writes_see_through_a_symlinked_project_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        let level = real.join("worlds/main/levels/a");
+        std::fs::create_dir_all(&level).unwrap();
+        std::fs::write(level.join("level.json"), "{}").unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let mut own = OwnWrites::default();
+        let rels = [
+            PathBuf::from("worlds/main/levels/a"),
+            PathBuf::from("worlds/main/levels/gone"),
+        ];
+        own.record(&link, &rels);
+        for dir in [&real, &link] {
+            assert!(own.explains(&dir.join("worlds/main/levels/a/level.json")));
+            assert!(own.explains(&dir.join("worlds/main/levels/gone/level.json")));
+        }
     }
 }

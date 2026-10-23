@@ -80,7 +80,10 @@ fn temp_copy(project: &std::path::Path) -> (tempfile::TempDir, PathBuf) {
         for sib in LINKED_SIBLINGS {
             let src = parent.join(sib);
             if src.is_dir() {
+                #[cfg(unix)]
                 std::os::unix::fs::symlink(&src, tmp.path().join(sib)).unwrap();
+                #[cfg(not(unix))]
+                copy_dir(&src, &tmp.path().join(sib));
             }
         }
         for sib in COPIED_SIBLINGS {
@@ -140,7 +143,9 @@ fn temp_copy_never_links_a_written_sibling() {
     std::fs::create_dir_all(game.path().join("tools")).unwrap();
 
     let (tmp, dir) = temp_copy(&project);
-    for (sib, linked) in [("assets", true), ("data", false)] {
+    // `assets` is linked where `temp_copy` can make symlinks (unix) and
+    // copied elsewhere; `data` is always a real directory.
+    for (sib, linked) in [("assets", cfg!(unix)), ("data", false)] {
         let ft = std::fs::symlink_metadata(tmp.path().join(sib))
             .unwrap()
             .file_type();
@@ -159,11 +164,16 @@ fn temp_copy_never_links_a_written_sibling() {
         std::fs::read_to_string(game.path().join("data/rooms.json")).unwrap(),
         "game"
     );
-    // The guard catches a write through a link, existing file or not.
-    let through = dir.join("../assets/new.json");
-    let caught = std::panic::catch_unwind(|| assert_write_inside(tmp.path(), &through));
-    assert!(caught.is_err(), "a write through ../assets must be refused");
-    assert!(!game.path().join("assets/new.json").exists());
+    // The guard catches a write through a link, existing file or not. Only
+    // unix copies have the `assets` link to write through; elsewhere it is
+    // a copy inside the tempdir, where the write is allowed.
+    #[cfg(unix)]
+    {
+        let through = dir.join("../assets/new.json");
+        let caught = std::panic::catch_unwind(|| assert_write_inside(tmp.path(), &through));
+        assert!(caught.is_err(), "a write through ../assets must be refused");
+        assert!(!game.path().join("assets/new.json").exists());
+    }
 }
 
 fn collision_rows(dir: &std::path::Path) -> Vec<String> {

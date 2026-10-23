@@ -72,9 +72,15 @@ Coming from LDtk? `worlds-cli import-ldtk` converts an LDtk 1.5 project; see
 
 `bake` writes `export/`: a `world.json` index, `enums.json`, and one
 `levels/<slug>.json` per level with its grids, baked tiles, entities and
-exported notes. Your game (or a Godot editor plugin) reads those files; you
-never edit them by hand. The format, and what `check-export` verifies, are in
+exported notes. Your game reads those files; you never edit them by hand.
+The format, and what `check-export` verifies, are in
 [docs/format.md](docs/format.md#export-generated).
+
+**Godot:** copy [`godot/addons/worlds/`](godot/addons/worlds/README.md) into
+your project and enable it. **Project > Tools > Import Worlds Export...**
+turns each level into a scene with tile layers, collision, entities (your own
+scene per entity type, if you have one) and their fields. It can also build
+levels at runtime.
 
 ## Agents (Claude Code)
 
@@ -109,6 +115,7 @@ per tool call, optionally waiting for your approval); with it closed,
 cargo test --workspace                              # everything that needs no GPU
 WORLDS_GPU_TESTS=1 cargo test -p worlds-editor      # editor GPU and window tests (Xvfb for the window ones)
 cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --check
+godot/tests/run.sh                                  # the Godot addon, headless (Godot 4.3+ on PATH, or $GODOT)
 ```
 
 The GPU tests run on `tests/fixtures/game/`, a small platformer project
