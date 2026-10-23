@@ -296,9 +296,12 @@ That's what you want for a ceiling.
 Click **Walls** in the Layers pane; the **Rules** tab comes to the front.
 
 1. Click **+ Group** (top right). A group is a list of rules that run
-   together. Give it a name, `Terrain`, in the field under its header.
+   together. It starts out as `group`: double-click that slug, type
+   `terrain` and press Enter. Give it a display name, `Terrain`, in the
+   field under its header.
 2. Click **+ Rule** on the group's header. A new rule appears, selected,
-   matching any value and drawing tile `[0, 0]`.
+   matching any value and drawing tile `[0, 0]`. It's called `rule`;
+   double-click the name and rename it `top` the same way.
 3. In the **text box** under the pattern grid, replace `+` with the three
    rows above (Shift+Enter for a new line), then press **Enter**. You can
    also click the grid cells to cycle their glyphs; the box and the grid are
@@ -325,11 +328,11 @@ The moment you press Enter the level re-tiles. Now add the other four with
 match, so one rule handles both walls. Rows can be dragged by their `☰`
 handle to reorder them.
 
-The pane names new rules `rule`, `rule_2`, and so on, and can't rename them
-yet. The names are only for you (and they feed the dice, so renaming a rule
-re-rolls its random choices). If you'd like readable ones, as in the
-screenshots, save, change the `slug`s in `rules/walls.json`, and the editor
-reloads it.
+Each new rule comes in as `rule` (or `rule_2` and so on, if that's taken);
+double-click its name (or right-click it, **Rename…**) and give it the one
+in the table. Enter
+renames, Escape cancels, and it's one undo step. The names are only for you
+(and they feed the dice, so renaming a rule re-rolls its random choices).
 
 ![The Rules pane with the side rule selected](../screenshots/tutorial/04-rules-pane.png)
 
