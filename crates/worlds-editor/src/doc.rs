@@ -75,6 +75,10 @@ struct LayerJob {
 struct LayerQueue {
     jobs: VecDeque<LayerJob>,
     workers: usize,
+    /// [`Document::max_layer_workers`] as of the last batch, set with its
+    /// jobs: a worker over it quits before taking another job, so lowering
+    /// the cap holds for workers already running, not just new ones.
+    max: usize,
 }
 
 /// Every auto layer of `level`, in dependency order (writers of derived
@@ -623,6 +627,7 @@ impl Document {
         self.layer_jobs_pending += jobs.len();
         let spawn = {
             let mut q = lock(&self.layer_queue);
+            q.max = self.max_layer_workers;
             for (ix, layer) in jobs {
                 q.jobs.push_back(LayerJob {
                     project: project.clone(),
@@ -742,8 +747,9 @@ impl Document {
     }
 }
 
-/// A layer worker: bake queued jobs until the queue is empty, skipping
-/// those a newer request superseded.
+/// A layer worker: bake queued jobs until the queue is empty (or there are
+/// more workers than [`LayerQueue::max`]), skipping those a newer request
+/// superseded.
 fn layer_worker(
     queue: &Mutex<LayerQueue>,
     want: &Mutex<Want>,
@@ -753,6 +759,10 @@ fn layer_worker(
     loop {
         let job = {
             let mut q = lock(queue);
+            if q.workers > q.max {
+                q.workers -= 1;
+                return;
+            }
             match q.jobs.pop_front() {
                 Some(j) => j,
                 None => {
