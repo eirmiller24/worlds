@@ -319,6 +319,9 @@ impl Engine {
             "bake_and_validate" => self.bake_and_validate(a),
             "screenshot" => self.screenshot(a),
             "undo" => self.undo(a),
+            "copy_fragment" => self.copy_fragment(a),
+            "paste_fragment" => self.paste_fragment(a),
+            "duplicate_level" => self.duplicate_level(a),
             other => Err(format!(
                 "there is no tool {other:?}; the tools are {}",
                 crate::catalog::TOOLS
