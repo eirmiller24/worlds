@@ -106,6 +106,8 @@ Shipped: `layout` in [format.md](format.md#world-layouts) (the lattice check is 
 
 Shipped: one thumbnail system for levels and assemblies (`src/thumbs/`, one cache shared by the Library, the Levels pane and every map tab, levels in memory keyed per level, assemblies in `.worlds/thumbs/`) and levels drawn as their thumbnails on the map below 4 screen px per cell, void transparent, names on top, in the [editor README](../crates/worlds-editor/README.md#thumbnails); the threading note and the viewport section of [DESIGN.md](DESIGN.md) now describe it.
 
+## Phase 4: content and the game loop
+
 ### 4.1 Non-rectangular levels
 
 Shipped: a level's `void` rects; the spec is in [format.md](format.md#non-rectangular-levels-void) (and its export section), [commands.md](commands.md#set_level_void), [api.md](api.md#non-rectangular-levels), [mcp.md](mcp.md) (`shape_level`) and the editor README (Non-rectangular levels). Export stayed `format` 1; grid vania (3.9) should require whole lattice cells of void.
