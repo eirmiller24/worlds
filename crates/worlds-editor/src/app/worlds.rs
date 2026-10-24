@@ -335,10 +335,9 @@ pub fn section(
         .show(ui, |ui| {
             for (i, w) in doc.project.worlds.iter().enumerate() {
                 let levels = super::worlds::world_levels(doc, i);
-                let text = format!("{}  ·  {}", world_label(w), w.slug);
                 let r = ui
-                    .selectable_label(i == shown, RichText::new(text))
-                    .on_hover_text("Show this world");
+                    .selectable_label(i == shown, RichText::new(world_label(w)))
+                    .on_hover_text(format!("worlds/{}/: click to show it", w.slug));
                 ps.rects.insert(format!("world:{}", w.slug), r.rect);
                 if r.clicked() {
                     actions.push(Action::SwitchWorld(w.slug.clone()));
