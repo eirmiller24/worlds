@@ -79,6 +79,8 @@ pub enum Action {
         level: crate::doc::LevelIx,
         origin: [i64; 2],
     },
+    /// Crop the active level to the bounding box of its content.
+    CropLevel,
 }
 
 impl Action {
@@ -100,6 +102,7 @@ impl Action {
             ("Previous level".into(), "PgUp", Action::PrevLevel),
             ("New level…".into(), "", Action::NewLevel(None)),
             ("Delete level…".into(), "Del", Action::DeleteLevel),
+            ("Crop level to content".into(), "", Action::CropLevel),
             ("Reset panel layout".into(), "", Action::ResetLayout),
             ("Clear log".into(), "", Action::ClearLog),
             ("Place entity".into(), "Enter", Action::PlaceEntity),

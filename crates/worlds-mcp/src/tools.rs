@@ -327,6 +327,24 @@ struct TagLevels {
     label: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResizeLevel {
+    level: String,
+    size: [u32; 2],
+    anchor: Option<[i8; 2]>,
+    world: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CropLevel {
+    level: String,
+    world: Option<String>,
+    label: Option<String>,
+}
+
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct SetRule {
@@ -1412,6 +1430,25 @@ impl Engine {
             .map(|(level, tags)| ("level.update", json!({ "level": level, "tags": tags })))
             .collect();
         let r = self.write(&label, |_| Ok(writes.clone()))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn resize_level(&mut self, a: Value) -> ToolResult {
+        let a: ResizeLevel = args("resize_level", a)?;
+        let label = Self::label("resize_level", a.label.as_deref(), &a.level);
+        let mut p = json!({ "level": a.level, "size": a.size });
+        put(&mut p, "anchor", &a.anchor);
+        put(&mut p, "world", &a.world);
+        let r = self.write(&label, |_| Ok(vec![("level.resize", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn crop_level(&mut self, a: Value) -> ToolResult {
+        let a: CropLevel = args("crop_level", a)?;
+        let label = Self::label("crop_level", a.label.as_deref(), &a.level);
+        let mut p = json!({ "level": a.level });
+        put(&mut p, "world", &a.world);
+        let r = self.write(&label, |_| Ok(vec![("level.crop", p.clone())]))?;
         Ok(vec![json_block(&r)])
     }
 

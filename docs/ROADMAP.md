@@ -100,9 +100,7 @@ Shipped: the Select tool's geometry handles and the `vertex` script gesture are 
 
 ### 2.6 Random and scatter brushes
 
-**What.** Paint from a weighted set of tiles or stamps instead of one, and scatter at a density.
-
-**Editor.** On a tiles layer the brush can be a list of alternatives with weights (the same shape as a rule's `out.tiles`), built from a multi-selection in the atlas with a "Random" toggle in the Paint strip. A density slider (1 to 100 %) skips cells on the stroke. The randomness is the brush's, not the project's (no determinism needed; what lands is what is saved). Brushes with alternatives can be saved as named presets in `.worlds/ui.json`.
+Shipped: the editor README's "Random and scatter brushes" (Paint strip, palette, presets in `ui.json`, the script `brush` forms).
 
 ### 2.7 Layer operations
 
@@ -112,9 +110,7 @@ Shipped: the Select tool's geometry handles and the `vertex` script gesture are 
 
 ### 2.8 Level resize with an anchor, crop to content
 
-**What.** `resize_level` already changes the size from the bottom-right. Add an anchor so a level can grow or shrink at any edge with its content shifting accordingly, and "Crop to content", which shrinks to the bounding box of the non-empty cells, tiles and entities.
-
-**Commands.** `resize_level` grows `anchor: [ax, ay]` (0, 0.5 or 1 per axis; default `[0, 0]`, today's behaviour) and shifts content; entities that fall outside are refused as the tools refuse them today.
+Shipped: [commands.md](commands.md#resize_level) (`anchor`, crop to content), `level.crop` in [api.md](api.md), `resize_level` and `crop_level` in [mcp.md](mcp.md), the Inspector's Resize in the editor README.
 
 ## Phase 3: organisation and navigation
 
@@ -155,7 +151,7 @@ Finding your way around a big project, and planning on the map.
 
 ### 3.5 Zoom range
 
-**What.** Zoom is 1.5625 % to 1600 % in fixed steps (`viewport/camera.rs` `ZOOM_STEPS`, 1/64 to 16), so a world larger than 64 times the viewport cannot be fitted. Let Fit world (and `view.focus` with a rect) pick any zoom below the smallest step, add steps 1/128 and 1/256, and have the wheel step from an off-grid zoom to the nearest step. At very small zooms levels already draw as thumbnails, so nothing new needs drawing.
+Shipped: the editor README's Wheel row (steps 1/256 to 16, fits below them) and `view.focus` in [api.md](api.md).
 
 ### 3.6 Camera bookmarks
 

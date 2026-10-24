@@ -490,4 +490,26 @@ patch holds any of these, applied in this order: set_macros ([{ kind: "pattern",
     "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
   "required": ["level", "slug"], "additionalProperties": false }"#,
     },
+    ToolDef {
+        name: "resize_level",
+        description: r#"Change a level's size, as one undo entry. size is the new [width, height] in cells of the project grid, at least [1, 1]. anchor says what stays put in the world, per axis: -1 the left (or top) edge, 0 the center, 1 the right (or bottom) edge; default [0, 0]. So [-1, -1] grows or shrinks the level at its right and bottom, [1, 1] at its left and top. The content keeps its place in the world: when the left or top edge moves, the level's world_px changes and every cell coordinate inside shifts by the same amount, so read_level again afterwards. Cells and tiles beyond the new edges are cut off; entities and notes that end up outside the level are kept and reported (entity_outside in changes): move or remove them. On a layer whose cells are bigger than the project grid the content must move by whole cells, else the call fails and nothing changes: pick another anchor. world is needed only when the project has more than one world. crop_level shrinks a level to its content."#,
+        schema: r#"{ "type": "object",
+  "properties": {
+    "level": { "type": "string", "description": "Level slug." },
+    "size": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 2, "maxItems": 2, "description": "New [width, height] in cells of the project grid." },
+    "anchor": { "type": "array", "items": { "type": "integer", "enum": [-1, 0, 1] }, "minItems": 2, "maxItems": 2, "default": [0, 0], "description": "What stays put per axis: -1 left/top edge, 0 center, 1 right/bottom edge." },
+    "world": { "type": "string", "description": "World slug. Needed only when the project has more than one." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level", "size"], "additionalProperties": false }"#,
+    },
+    ToolDef {
+        name: "crop_level",
+        description: r#"Shrink a level to the bounding box of its content, as one undo entry: its non-empty int_grid cells, tiles and entities (notes don't count). As with resize_level the content keeps its place in the world, so the level's world_px and every cell coordinate inside change: read_level again afterwards. The left and top edges may stay a little wider than the content so that layers with cells bigger than the project grid still move by whole cells. A level that already fits its content changes nothing; a level with no content is an error."#,
+        schema: r#"{ "type": "object",
+  "properties": {
+    "level": { "type": "string", "description": "Level slug." },
+    "world": { "type": "string", "description": "World slug. Needed only when the project has more than one." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level"], "additionalProperties": false }"#,
+    },
 ];

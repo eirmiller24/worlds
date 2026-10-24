@@ -959,6 +959,118 @@ fn resize_refuses_bad_input() {
 }
 
 #[test]
+fn resize_leaves_outside_predicts_entity_outside() {
+    for ax in -1i8..=1 {
+        for ay in -1i8..=1 {
+            for size in [[6, 5], [3, 2], [4, 1], [1, 3]] {
+                let mut p = resize_fixture();
+                let predicted = p
+                    .resize_leaves_outside(&s("main"), &s("box"), size, [ax, ay])
+                    .unwrap();
+                let a = p
+                    .apply(Command::ResizeLevel {
+                        world: s("main"),
+                        level: s("box"),
+                        size,
+                        anchor: [ax, ay],
+                    })
+                    .unwrap();
+                let reported: Vec<Id> = a
+                    .changes
+                    .iter()
+                    .filter_map(|c| match c {
+                        Change::EntityOutside { id, .. } => Some(id.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(predicted, reported, "{size:?} anchor [{ax}, {ay}]");
+            }
+        }
+    }
+    let p = resize_fixture();
+    assert!(matches!(
+        p.resize_leaves_outside(&s("main"), &s("nope"), [1, 1], [0, 0]),
+        Err(CommandError::UnknownLevel(_))
+    ));
+}
+
+#[test]
+fn crop_level_undoes_a_grow_at_every_anchor() {
+    let original = resize_fixture();
+    // Already tight: nothing to do.
+    assert_eq!(original.crop_level(&s("main"), &s("box")).unwrap(), None);
+    for ax in -1i8..=1 {
+        for ay in -1i8..=1 {
+            let ctx = format!("anchor [{ax}, {ay}]");
+            let mut p = original.clone();
+            p.apply(Command::ResizeLevel {
+                world: s("main"),
+                level: s("box"),
+                size: [11, 8],
+                anchor: [ax, ay],
+            })
+            .unwrap();
+            let grown = p.clone();
+            let l = p.level("box").unwrap();
+            let bounds = p.content_bounds(l).unwrap().unwrap();
+            assert_eq!([bounds[2], bounds[3]], [4, 3], "{ctx}");
+            let crop = p.crop_level(&s("main"), &s("box")).unwrap().unwrap();
+            assert_eq!(crop.label(), "Crop level box", "{ctx}");
+            let mut h = History::new();
+            h.push(&mut p, crop).unwrap();
+            // Back to the original level exactly: size, position, content.
+            assert_eq!(p.level("box"), original.level("box"), "{ctx}");
+            assert_eq!(p.crop_level(&s("main"), &s("box")).unwrap(), None);
+            // One undo entry puts the grown level back.
+            h.undo(&mut p).unwrap().unwrap();
+            assert!(p == grown, "{ctx}: undo");
+            h.redo(&mut p).unwrap().unwrap();
+            assert_eq!(p.level("box"), original.level("box"), "{ctx}: redo");
+        }
+    }
+}
+
+#[test]
+fn crop_level_keeps_layers_on_whole_cells_and_refuses_an_empty_level() {
+    let mut p = common::fixture();
+    p.worlds[0].levels.push(new_level("empty", [5, 5]));
+    p.normalize();
+    assert!(matches!(
+        p.crop_level(&s("main"), &s("empty")),
+        Err(CommandError::Invalid(_))
+    ));
+    // One door on a 32 px entities layer (the project grid is 16 px) at
+    // cell [2, 1]: its cell covers project cells x 4..6, y 2..4, its box
+    // (1x3 project cells, pivot bottom center) x 4.5..5.5, y 1..4. A crop
+    // at the top by 1 project cell would move the layer half a cell, so the
+    // top stays.
+    let i = p.layers.iter().position(|l| l.slug == "objects").unwrap();
+    p.layers[i].grid_size = Some(32);
+    let mut l = new_level("wide", [10, 8]);
+    l.entities.push(EntitiesLayer {
+        layer: s("objects"),
+        entities: vec![EntityInstance {
+            id: id("widedoor22"),
+            ty: s("locked_door"),
+            cell: [2, 1],
+            offset_px: [0, 0],
+            size: None,
+            fields: BTreeMap::new(),
+        }],
+    });
+    p.worlds[0].levels.push(l);
+    p.normalize();
+    let bounds = p.content_bounds(p.level("wide").unwrap()).unwrap();
+    assert_eq!(bounds, Some([4, 0, 2, 4]));
+    let crop = p.crop_level(&s("main"), &s("wide")).unwrap().unwrap();
+    p.apply(crop).unwrap();
+    let l = p.level("wide").unwrap();
+    assert_eq!(l.size, [2, 4]);
+    assert_eq!(l.world_px, [64, 0]);
+    assert_eq!(l.all_entities().next().unwrap().cell, [0, 1]);
+}
+
+#[test]
 fn entity_commands() {
     let mut p = common::fixture();
     let door = || EntityInstance {

@@ -283,6 +283,9 @@ pub struct EditorState {
     /// Palette tileset tab per tiles layer slug.
     pub palette_tab: HashMap<String, String>,
     pub atlas_drag: Option<[u32; 2]>,
+    /// The random brush as it was when the current atlas drag started (a
+    /// Ctrl or Shift drag adds to it).
+    pub random_base: Option<crate::tools::Brush>,
     pub tool_events: Vec<ToolEvent>,
     /// Commands queued by panels this frame (inspector edits), applied as
     /// one undo entry each.
@@ -323,6 +326,7 @@ impl Default for EditorState {
             atlas: HashMap::new(),
             palette_tab: HashMap::new(),
             atlas_drag: None,
+            random_base: None,
             tool_events: Vec::new(),
             pending: Vec::new(),
             edit_bufs: HashMap::new(),
@@ -766,6 +770,12 @@ impl EditorApp {
         }
         if let Some(b) = plan.brush {
             self.st.view.palette.brushes.insert(slug, b);
+        }
+        if let Some(d) = plan.density {
+            self.st.view.palette.density = d;
+        }
+        if let Some(s) = plan.seed {
+            self.st.view.palette.seed = Some(s);
         }
         if let Some(b) = plan.entity_brush {
             self.st.view.entities.brush = Some(b);
@@ -3196,6 +3206,24 @@ impl EditorApp {
             }
             Action::ResetLayout => self.dock = default_dock(),
             Action::ClearLog => self.st.log.clear(),
+            Action::CropLevel => {
+                let Some(doc) = &self.st.doc else {
+                    return;
+                };
+                let Some(ix) = self.st.view.active_level.filter(|&i| i < doc.levels.len()) else {
+                    self.st.view.set_status("No active level to crop", true);
+                    return;
+                };
+                let world = &doc.project.worlds[doc.levels[ix].world].slug;
+                match crate::tools::crop_command(&doc.project, world, &doc.level(ix).slug) {
+                    Ok(cmd) => {
+                        if let Err(e) = self.apply_command(cmd) {
+                            self.st.view.set_status(e, true);
+                        }
+                    }
+                    Err(e) => self.st.view.set_status(e, true),
+                }
+            }
             Action::CommandPalette => {
                 self.palette.open = !self.palette.open;
                 self.palette.query.clear();
@@ -3395,7 +3423,7 @@ impl EditorApp {
                     "{:.1} ms · {} chunks · {} draws · {} tiles",
                     self.frame_ms, s.chunks, s.draws, s.instances
                 ));
-                ui.label(format!("{:.0}%", vp.camera.zoom * 100.0));
+                ui.label(crate::viewport::camera::zoom_label(vp.camera.zoom));
                 if let Some(doc) = &self.st.doc
                     && doc.bakes_pending > 0
                 {

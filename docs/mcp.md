@@ -14,7 +14,7 @@ worlds-mcp [--project <dir>] [--headless] [--name <client>]
 
 **Client name.** `session.hello` sends the MCP client's name: `clientInfo.name` (e.g. `claude-code`) from `initialize`, or, for a client on the stateless lifecycle that sends no `initialize` (Claude Code opens with `server/discover`), from the `io.modelcontextprotocol/clientInfo` of each request's `_meta`, lowercased with characters outside `a-z 0-9 - _ .` dropped and cut to 32; empty means the `--name` argument (sanitized the same way), else `mcp`. The editor records every edit as `Origin::Agent(<name>)`.
 
-**Undo labels.** Every write tool call is one undo entry labelled `Agent: <tool> <summary>`. The summary is the tool's `label` argument when given ("Agent: paint east wall"), else generated: the slug for `create_level`; `<layer> in <level>` for `paint`, `place_tiles` and `clear_tiles`; `<type> in <level>` for `place_entity`; the id (or `<n> entities`) for `update_entity` and `remove_entity`; `<kind> in <level>` or `<kind> in world <world>` for `add_note` ("Agent: add_note pin in world main"); the id for `resolve_note` and `update_note`; the id (or `<n> notes`) for `remove_note`; the slug for `set_guide_group`; the level slugs for `tag_levels`, in slug order, cut to 60 characters; the layer for `edit_rules`; for `edit_definitions`, what it touches, in patch order, each named once (layer, entity type and enum slugs, `level fields`, `project`), cut to 60 characters ("Agent: edit_definitions locked_door, facing"). A call that needs several API writes wraps them in `history.begin_batch`/`end_batch`.
+**Undo labels.** Every write tool call is one undo entry labelled `Agent: <tool> <summary>`. The summary is the tool's `label` argument when given ("Agent: paint east wall"), else generated: the slug for `create_level`; `<layer> in <level>` for `paint`, `place_tiles` and `clear_tiles`; `<type> in <level>` for `place_entity`; the id (or `<n> entities`) for `update_entity` and `remove_entity`; `<kind> in <level>` or `<kind> in world <world>` for `add_note` ("Agent: add_note pin in world main"); the id for `resolve_note` and `update_note`; the id (or `<n> notes`) for `remove_note`; the slug for `set_guide_group`; the level slugs for `tag_levels`, in slug order, cut to 60 characters; the layer for `edit_rules`; the level slug for `resize_level` and `crop_level`; for `edit_definitions`, what it touches, in patch order, each named once (layer, entity type and enum slugs, `level fields`, `project`), cut to 60 characters ("Agent: edit_definitions locked_door, facing"). A call that needs several API writes wraps them in `history.begin_batch`/`end_batch`.
 
 **Revisions.** Every write is sent with `expect_rev` set to the newest rev `worlds-mcp` has seen (from results and from the `changed` events it subscribes to). That only orders requests in flight: it catches an edit that landed between the reads a tool call built its request from and the write itself. It is not a lock on the agent's view of the project (that is what the notices below are for). On `stale_rev` it refreshes first, re-running the `project.describe` or level read the request was built from (a `paint` with `outline` reads nothing; `edit_rules` and `edit_definitions` read nothing either), rebuilds the request and retries once; a second `stale_rev` becomes a tool error. Separately, it remembers the rev at which the agent last read each level (`read_level`, or a write to it); when a write lands on a level that someone else changed since (a `changed` event touching that level whose `session` isn't this connection's, which also catches a second client with the same name), the result carries a notice saying who changed what, so the agent can re-read if it matters. User activity never blocks the agent.
 
@@ -80,6 +80,8 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `bake_and_validate` | `project.bake`, `project.validate`, `project.export` |
 | `screenshot` | `view.snapshot`; headless: `worlds --screenshot` on the saved project |
 | `undo` | `history.undo` |
+| `resize_level` | `level.resize` |
+| `crop_level` | `level.crop` |
 | `copy_fragment` | `edit.copy` (the arguments are its `selection`) |
 | `paste_fragment` | `edit.paste` |
 | `duplicate_level` | `level.duplicate` |
@@ -692,13 +694,45 @@ Copy a whole level under a new slug, as one undo entry: its grids, tiles, entiti
   "required": ["level", "slug"], "additionalProperties": false }
 ```
 
+### resize_level
+
+```text
+Change a level's size, as one undo entry. size is the new [width, height] in cells of the project grid, at least [1, 1]. anchor says what stays put in the world, per axis: -1 the left (or top) edge, 0 the center, 1 the right (or bottom) edge; default [0, 0]. So [-1, -1] grows or shrinks the level at its right and bottom, [1, 1] at its left and top. The content keeps its place in the world: when the left or top edge moves, the level's world_px changes and every cell coordinate inside shifts by the same amount, so read_level again afterwards. Cells and tiles beyond the new edges are cut off; entities and notes that end up outside the level are kept and reported (entity_outside in changes): move or remove them. On a layer whose cells are bigger than the project grid the content must move by whole cells, else the call fails and nothing changes: pick another anchor. world is needed only when the project has more than one world. crop_level shrinks a level to its content.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "level": { "type": "string", "description": "Level slug." },
+    "size": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 2, "maxItems": 2, "description": "New [width, height] in cells of the project grid." },
+    "anchor": { "type": "array", "items": { "type": "integer", "enum": [-1, 0, 1] }, "minItems": 2, "maxItems": 2, "default": [0, 0], "description": "What stays put per axis: -1 left/top edge, 0 center, 1 right/bottom edge." },
+    "world": { "type": "string", "description": "World slug. Needed only when the project has more than one." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level", "size"], "additionalProperties": false }
+```
+
+### crop_level
+
+```text
+Shrink a level to the bounding box of its content, as one undo entry: its non-empty int_grid cells, tiles and entities (notes don't count). As with resize_level the content keeps its place in the world, so the level's world_px and every cell coordinate inside change: read_level again afterwards. The left and top edges may stay a little wider than the content so that layers with cells bigger than the project grid still move by whole cells. A level that already fits its content changes nothing; a level with no content is an error.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "level": { "type": "string", "description": "Level slug." },
+    "world": { "type": "string", "description": "World slug. Needed only when the project has more than one." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level"], "additionalProperties": false }
+```
+
 ## Results by tool
 
 | Tool | Result |
 | --- | --- |
 | `describe_project` | the `project.describe` result. In headless mode only, when a Worlds editor session that ended without saving left an autosave, it adds `autosave: { unrecovered: true, pid, written, files, last_label, message }` (`files` the number of files with unsaved edits, `message` the warning in words; an unreadable manifest gives `files: 0` and nulls), looked up again on every call, and also given as a notice when the project is loaded. Not reported while an editor holds the project (its autosave is its own) |
 | `read_level` | text: the [text view](format.md#text-view) (done notes left out unless asked; derived layers drawn by their effective grids); json: the `level.get` result (with `derived`) |
-| write tools (`create_level`, `paint`, `place_tiles`, `clear_tiles`, `place_entity`, `update_entity`, `remove_entity`, `add_note`, `resolve_note`, `update_note`, `remove_note`, `set_guide_group`, `tag_levels`, `edit_rules`, `edit_definitions`) | the write result above; `create_level`, `place_entity` and `add_note` add `id`. For `edit_definitions`, `changes` has a `def` per definition it wrote (`{ "change": "def", "kind": "entity", "slug": "locked_door" }`), `def_renamed` for a renamed type or enum, `project` key `level_fields` for level fields and the setting's key for each `set_project` setting, and an `entity` or `level_meta` change per stored value a rename or removal rewrote. For `edit_rules`, `set_level_states` adds a `layer_state` change per level. For `create_level` with `replace`, the `level.replace` changes (`level_meta` part `all`, then a change per layer, entity and note before or after) |
+| write tools (`create_level`, `paint`, `place_tiles`, `clear_tiles`, `place_entity`, `update_entity`, `remove_entity`, `add_note`, `resolve_note`, `update_note`, `remove_note`, `set_guide_group`, `tag_levels`, `edit_rules`, `edit_definitions`, `resize_level`, `crop_level`) | the write result above; `create_level`, `place_entity` and `add_note` add `id`. For `edit_definitions`, `changes` has a `def` per definition it wrote (`{ "change": "def", "kind": "entity", "slug": "locked_door" }`), `def_renamed` for a renamed type or enum, `project` key `level_fields` for level fields and the setting's key for each `set_project` setting, and an `entity` or `level_meta` change per stored value a rename or removal rewrote. For `edit_rules`, `set_level_states` adds a `layer_state` change per level. For `create_level` with `replace`, the `level.replace` changes (`level_meta` part `all`, then a change per layer, entity and note before or after) |
 | `find_entities` | `{ rev, entities }` |
 | `list_notes` | `{ rev, notes }`, each `{ scope, note }` as in `notes.list` |
 | `preview_rule` | `{ rev, rule, level, grid, pass, count, cells, matched_count, matched, occupied, picture, regions?, write?, other_grids?, rules?, truncated? }`: `grid` the int_grid layer the rule matched on (from `rules.preview`: a region rule's `region.grid`), `pass` the rule's pass (the first rule's for a reference), `cells` where it fires, `matched` where it matches but doesn't fire, `occupied` the part of `matched` skipped because the footprint was taken (`avoid_overlap`), and `picture` that layer's rows (effective values on a derived layer) with `@` where it fires and `?` where it is blocked (a cell where one rule of a reference fires and another is blocked reads `@`). A region rule adds `regions` and a write rule `write`, as `rules.preview` gives them. For a template reference, `count`, `cells`, `matched` and `occupied` cover all its rules and `rules` lists each one's `{ rule, pass, grid, count, matched_count }`; when its rules match on more than one layer, `picture` marks only the cells of the rules on `grid`, and `other_grids` is `[{ grid, picture }]` for each other layer, in rule order. An unknown `rule` is an error listing the layer's rules and references |

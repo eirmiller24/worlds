@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use worlds_core::{Command, Slug};
+use worlds_core::{Command, Slug, TileAlt};
 
 use crate::doc::{Document, LevelIx};
 use crate::view::ViewState;
@@ -263,6 +263,113 @@ pub enum Brush {
     /// Derived layers only: override cells to empty (`"!"`, suppress what
     /// the rules would put there).
     Suppress,
+    /// Tiles layers: a random brush. Each painted cell (each cell of the
+    /// tiles' lattice when tiles are bigger than cells) picks one of
+    /// `alternatives` by weight, in the forms of a rule's `out.tiles`
+    /// ([`TileAlt`]): tiles that form a rectangle listed row by row
+    /// (`[c, r]`, `[c, r, w, h]`, `{ rect }`, or a `stack` that happens to
+    /// be one) keep their atlas layout with the top-left tile on the cell,
+    /// any other `stack` is drawn on the cell in list order. Painting
+    /// skips a pick whose tiles would land on cells this stroke already
+    /// filled.
+    Random {
+        tileset: Slug,
+        alternatives: Vec<TileAlt>,
+    },
+}
+
+impl Brush {
+    /// What the Paint strip's Random toggle makes of this brush: a stamp
+    /// becomes the random brush of its tiles, a random brush the stamp of
+    /// its first alternative (its first tile, for a stack); `None` for
+    /// anything else (or a random brush with no tiles).
+    pub fn toggled_random(&self) -> Option<Brush> {
+        match self {
+            Brush::Tiles { tileset, rect } => Some(Brush::random_of_rect(tileset.clone(), *rect)),
+            Brush::Random {
+                tileset,
+                alternatives,
+            } => alternatives
+                .iter()
+                .find_map(|a| {
+                    a.as_rect()
+                        .or_else(|| a.tiles.first().map(|t| [t[0], t[1], 1, 1]))
+                })
+                .map(|rect| Brush::Tiles {
+                    tileset: tileset.clone(),
+                    rect,
+                }),
+            _ => None,
+        }
+    }
+
+    /// The random brush of every tile of an atlas rect, one alternative
+    /// each, weight 1 (the Paint strip's Random toggle on a stamp).
+    pub fn random_of_rect(tileset: Slug, rect: [u32; 4]) -> Brush {
+        let alternatives = (rect[1]..rect[1] + rect[3].max(1))
+            .flat_map(|r| (rect[0]..rect[0] + rect[2].max(1)).map(move |c| TileAlt::single(c, r)))
+            .collect();
+        Brush::Random {
+            tileset,
+            alternatives,
+        }
+    }
+}
+
+/// A named random brush the palette lists (`ui.json` `palette.presets`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrushPreset {
+    pub name: String,
+    pub tileset: Slug,
+    pub alternatives: Vec<TileAlt>,
+}
+
+/// A fresh random seed for a stroke: the random brush and the density
+/// need no determinism (what lands is what is saved).
+pub fn fresh_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    h.finish()
+}
+
+/// A well-mixed 64-bit hash of a stroke's seed, a cell and a salt
+/// (splitmix64): the same cell of the same stroke always rolls the same.
+pub fn cell_roll(seed: u64, cell: [i32; 2], salt: u64) -> u64 {
+    let mut z = seed
+        ^ (cell[0] as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (cell[1] as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ salt.wrapping_mul(0x1656_67B1_9E37_79F9);
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Whether `cell` is painted at `density` percent (100: always).
+pub fn density_keeps(seed: u64, cell: [i32; 2], density: u8) -> bool {
+    density >= 100 || cell_roll(seed, cell, 1) % 100 < density as u64
+}
+
+/// The index of the alternative `cell` picks, by weight (`None` when every
+/// weight is 0).
+pub fn pick_weighted(weights: &[u32], seed: u64, cell: [i32; 2]) -> Option<usize> {
+    let total: u64 = weights.iter().map(|&w| w as u64).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut r = cell_roll(seed, cell, 2) % total;
+    for (i, &w) in weights.iter().enumerate() {
+        if r < w as u64 {
+            return Some(i);
+        }
+        r -= w as u64;
+    }
+    None
 }
 
 /// What the entity tool places: a type and the field values every new
@@ -414,10 +521,37 @@ impl EntityPalette {
     }
 }
 
-/// The current brush of each layer, by layer slug.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The current brush of each layer, by layer slug, and the tiles
+/// brushes' density and saved random brushes (`ui.json` `palette`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaletteSelection {
     pub brushes: HashMap<String, Brush>,
+    /// The Paint strip's density on tiles layers, 1 to 100 %: a stroke
+    /// (and a rectangle or fill) paints each cell with this chance.
+    #[serde(default = "full_density")]
+    pub density: u8,
+    /// Named random brushes, listed in the palette.
+    #[serde(default)]
+    pub presets: Vec<BrushPreset>,
+    /// A fixed seed for the strokes' randomness (`--script` brushes with
+    /// `seed`); `None`: a fresh one per stroke. Not saved.
+    #[serde(skip)]
+    pub seed: Option<u64>,
+}
+
+fn full_density() -> u8 {
+    100
+}
+
+impl Default for PaletteSelection {
+    fn default() -> Self {
+        PaletteSelection {
+            brushes: HashMap::new(),
+            density: 100,
+            presets: Vec::new(),
+            seed: None,
+        }
+    }
 }
 
 impl PaletteSelection {
@@ -880,9 +1014,117 @@ pub fn resize_level(
     (px, sz)
 }
 
+/// The `resize_level` the editor sends (a drag, the Inspector), or why it
+/// refuses: like moving an entity out of its level, a resize that would
+/// leave an entity outside is refused (entities already outside don't
+/// count).
+pub fn resize_command(
+    project: &worlds_core::Project,
+    world: &Slug,
+    level: &Slug,
+    size: [u32; 2],
+    anchor: [i8; 2],
+) -> Result<Command, String> {
+    let l = project
+        .level(level.as_str())
+        .ok_or_else(|| format!("no level {level}"))?;
+    let before = project
+        .resize_leaves_outside(world, level, l.size, [-1, -1])
+        .map_err(|e| e.to_string())?;
+    let after = project
+        .resize_leaves_outside(world, level, size, anchor)
+        .map_err(|e| e.to_string())?;
+    let stranded: Vec<String> = after
+        .iter()
+        .filter(|id| !before.contains(id))
+        .map(|id| id.to_string())
+        .collect();
+    if !stranded.is_empty() {
+        let n = stranded.len();
+        let mut names = stranded.into_iter().take(3).collect::<Vec<_>>().join(", ");
+        if n > 3 {
+            names += &format!(" and {} more", n - 3);
+        }
+        return Err(format!(
+            "Not resized: {} would be outside level {level} (move {} first, or pick another anchor)",
+            if n == 1 {
+                format!("entity {names}")
+            } else {
+                format!("entities {names}")
+            },
+            if n == 1 { "it" } else { "them" },
+        ));
+    }
+    Ok(Command::ResizeLevel {
+        world: world.clone(),
+        level: level.clone(),
+        size,
+        anchor,
+    })
+}
+
+/// Crop to content for the editor (command palette, the level's right
+/// click menu, the Inspector): the `Crop level <slug>` batch, or the
+/// status message saying why there is nothing to do.
+pub fn crop_command(
+    project: &worlds_core::Project,
+    world: &Slug,
+    level: &Slug,
+) -> Result<Command, String> {
+    match project.crop_level(world, level) {
+        Ok(Some(cmd)) => Ok(cmd),
+        Ok(None) => Err(format!("Level {level} already fits its content")),
+        Err(e) => Err(format!("Not cropped: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn random_toggle_and_rolls() {
+        let ts = Slug::new("t").unwrap();
+        let stamp = Brush::Tiles {
+            tileset: ts.clone(),
+            rect: [2, 1, 2, 2],
+        };
+        let random = stamp.toggled_random().unwrap();
+        let Brush::Random { alternatives, .. } = &random else {
+            panic!("{random:?}")
+        };
+        let tiles: Vec<_> = alternatives.iter().map(|a| a.tiles.clone()).collect();
+        assert_eq!(tiles, [[[2, 1]], [[3, 1]], [[2, 2]], [[3, 2]]]);
+        assert!(alternatives.iter().all(|a| a.weight == 1));
+        assert_eq!(
+            random.toggled_random(),
+            Some(Brush::Tiles {
+                tileset: ts.clone(),
+                rect: [2, 1, 1, 1]
+            })
+        );
+        assert_eq!(Brush::Erase.toggled_random(), None);
+        let empty = Brush::Random {
+            tileset: ts,
+            alternatives: Vec::new(),
+        };
+        assert_eq!(empty.toggled_random(), None);
+        // Rolls: the same cell and seed always agree; weights steer picks.
+        assert_eq!(cell_roll(5, [3, -4], 1), cell_roll(5, [3, -4], 1));
+        assert_ne!(cell_roll(5, [3, -4], 1), cell_roll(6, [3, -4], 1));
+        let mut hits = [0u32; 3];
+        for x in 0..3000 {
+            hits[pick_weighted(&[1, 0, 3], 11, [x, 0]).unwrap()] += 1;
+        }
+        assert_eq!(hits[1], 0);
+        assert!((600..900).contains(&hits[0]), "{hits:?}");
+        assert_eq!(pick_weighted(&[0, 0], 1, [0, 0]), None);
+        let kept = (0..10_000)
+            .filter(|&x| density_keeps(9, [x, 1], 25))
+            .count();
+        assert!((2_200..2_800).contains(&kept), "{kept}");
+        assert!((0..100).all(|x| density_keeps(9, [x, 1], 100)));
+    }
 
     #[test]
     fn line_endpoints_and_continuity() {
