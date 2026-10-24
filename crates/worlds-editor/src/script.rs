@@ -231,6 +231,36 @@ pub enum UiStep {
     /// `"ui": "paste"`: Ctrl+V (the ghost, pinned where the step says, and
     /// optionally placed) or Ctrl+Shift+V.
     Paste(PasteStep),
+    /// `"ui": "find"`: the Find pane with a query, optionally Select all
+    /// and Replace.
+    Find(FindStep),
+}
+
+/// `{ "ui": "find", "query": "...", "kind"?: "all" | "entities" |
+/// "levels" | "notes" | "tiles", "select_all"?: true, "replace"?: {
+/// "field", "value" } }`: the Find pane in front with that query (and
+/// kind, default all) and its results. `select_all` presses Select all;
+/// `replace` presses Replace with that field and value text (one entry).
+/// A query that doesn't parse, or that the kind doesn't take, is an error;
+/// so are Select all with no result and a refused Replace.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindStep {
+    pub query: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub select_all: bool,
+    #[serde(default)]
+    pub replace: Option<ReplaceStep>,
+}
+
+/// `"replace": { "field": slug, "value": text }` of a [`FindStep`].
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaceStep {
+    pub field: String,
+    pub value: String,
 }
 
 /// `{ "ui": "copy" }` / `{ "ui": "cut" }`: the key, exactly as pressed

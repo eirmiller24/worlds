@@ -330,7 +330,7 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 
 ### level
 
-**`level.list { world? }`** → `{ rev, levels: [{ slug, name, id, world, world_px, size, depth }] }`.
+**`level.list { world? }`** → `{ rev, levels: [{ slug, name, id, world, world_px, size, depth }] }`. To search levels by tag, field or name, see `level.find` ([find](#find-entities-levels-notes-and-tiles)).
 
 ```json
 { "jsonrpc": "2.0", "id": 5, "method": "level.list", "params": {} }
@@ -496,7 +496,7 @@ A stale `expect_rev` and a refused command change nothing:
 
 `tiles` layers; placements as in the layer files: `{ cell, tileset, tile: [col, row], flip?, alpha? }`, `tile` being the atlas column and row.
 
-**`tiles.get { level, layer, rect? }`** → `{ rev, tiles }`, the placements whose cell is in `rect` (default all), in file order.
+**`tiles.get { level, layer, rect? }`** → `{ rev, tiles }`, the placements whose cell is in `rect` (default all), in file order. `tiles.find` searches every level by tileset and atlas tile ([find](#find-entities-levels-notes-and-tiles)).
 
 ```json
 { "jsonrpc": "2.0", "id": 17, "method": "tiles.get", "params": { "level": "crevasse", "layer": "decor_back", "rect": [0, 0, 10, 4] } }
@@ -617,7 +617,7 @@ An entity on the wire: `{ id, type, level, world, layer, cell, offset_px, size, 
 | --- | --- | --- |
 | `entity.list` | `{ level?, layer?, type? }` | `{ rev, entities }` in file order |
 | `entity.get` | `{ id }` | `{ rev, entity, index, effective_fields }`: `effective_fields` holds every field of the type, defaults applied |
-| `entity.find` | `{ type?, tag?, fields?, level?, rect? }` | `{ rev, entities }`. All filters must hold: `type` (slug), `tag` (one of the type's tags), `fields` (`{ slug: value }`, compared as JSON to the effective value), `level`, `rect` (`[x, y, w, h]` in the entities layer's cells; needs `level`) |
+| `entity.find` | `{ query?, type?, tag?, fields?, world?, level?, layer?, text?, rect? }` | `{ rev, entities }`. All filters must hold: `query` (the [find query language](#find-entities-levels-notes-and-tiles)), `type` (slug, `*` a wildcard), `tag` (one of the type's tags), `fields` (`{ slug: value }`, compared as JSON to the effective value, numbers by value), `world`, `level`, `layer`, `text` (in the id, type slug or type name), `rect` (`[x, y, w, h]` in the entities layer's cells; needs `level`) |
 | `entity.add` | `{ level, layer?, entity, index? }`; `entity.id` optional; `layer` optional when the project has one entities layer | `add_entity`; result has `id` |
 | `entity.update` | `{ id, fields?, unset?, size? }` (`size: null` resets it) | `batch` of `set_entity_field` and `resize_entity` |
 | `entity.move` | `{ id, cell, offset_px? }` | `move_entity` |
@@ -693,7 +693,7 @@ A note on the wire: `{ scope, note }`, `scope` being `{ "world": slug }` or `{ "
 
 | Method | Params | Result / command |
 | --- | --- | --- |
-| `notes.list` | `{ scope?, tag?, status?, kind?, kinds?, group?, export? }`; `status`: `"open"`, `"done"` or `"all"` (default); `kind` one kind, `kinds` any of several (`["note", "pin", "path", "region", "connector"]` leaves guides out); `group`: only the guides of that guide group; `export`: only annotations with that `export` flag. Every kind is listed by default, guides included | `{ rev, notes }`, world notes first, then levels in `level.list` order |
+| `notes.list` | `{ scope?, tag?, status?, kind?, kinds?, group?, export?, text?, query? }`; `status`: `"open"`, `"done"` or `"all"` (default); `kind` one kind, `kinds` any of several (`["note", "pin", "path", "region", "connector"]` leaves guides out); `group`: only the guides of that guide group; `export`: only annotations with that `export` flag; `text`: in the id, title, body or label (case-insensitive); `query`: the [find query language](#find-entities-levels-notes-and-tiles). Every kind is listed by default, guides included | `{ rev, notes }`, world notes first, then levels in `level.list` order |
 | `notes.add` | `{ scope, note, index? }`; `note.id` optional; a guide may name a `group` | `add_note`; result has `id` |
 | `notes.update` | `{ id, note }` (wholesale) or `{ id, patch }` (top-level keys merged in, geometry keys included; `null` removes an optional key; `kind` can't change), plus `confirm?` for a locked one | `update_note` |
 | `notes.move` | `{ ids: [id], delta: [dx, dy], confirm? }`: every point of each annotation moves by `delta` pixels | `batch` of `update_note`, labelled "Move note \<id\>" or "Move \<n\> notes" |
@@ -1939,6 +1939,73 @@ The new ids are derived from the destination level, the origin and the fragment'
   "changes": [ { "change": "level_created", "world": "main", "level": "shaft_b" } ] } }
 ```
 
+### find: entities, levels, notes and tiles
+
+Four reads search the whole project, every world, with one **query language** (the editor's Find pane and the MCP `find` tool use the same one, from `worlds_core::find`). A `query` is words separated by spaces, and every word must hold:
+
+| Word | Matches |
+| --- | --- |
+| `type:locked_door` | entities of that type |
+| `tag:puzzle` | an entity whose type has the tag, a level or an annotation with the tag |
+| `field:target = null`, `field:needs_item != ""` | a field's effective value (stored, else the default, else `null`) equal or not equal to the value; spaces around the operator are optional |
+| `channel:3` | any other `key:value` is a field test, `field:channel = 3` |
+| `world:main`, `level:crevasse`, `layer:objects` | where it is (`level:` never matches a world-scope annotation) |
+| `kind:pin`, `status:open` | annotations of that kind (`note`, `pin`, `path`, `region`, `guide`, `connector`) or status (`open`, `done`) |
+| `tileset:castle_main`, `tile:4,4` | tile placements from that tileset, of that atlas `[column, row]` |
+| `brass`, `"key room"` | free text, case-insensitive, in an entity's id, type slug or type name; a level's slug, name or id; an annotation's id, title, body or pin or connector label |
+
+Values are read as JSON when they parse (`3`, `true`, `null`, `[1,2]`, written without spaces), else as text; a quoted value (`"3"`) is always text. Numbers compare by value (`2` equals `2.0`). Slug values (`type`, `tag`, `world`, `level`, `layer`, `tileset`) may use `*` as a wildcard: `type:*door`. Each method takes only the words that make sense for it, and anything else is `invalid_params` naming it ("type: is for entities, not levels"): field tests are for entities and levels, `type` for entities, `kind` and `status` for annotations, `tileset` and `tile` for tiles, and free text for everything but tiles. The other parameters are the same tests spelled as keys, and add up with `query`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `entity.find` | `{ query?, type?, tag?, fields?, world?, level?, layer?, text?, rect? }` | `{ rev, entities }`, as in [entity](#entity) |
+| `level.find` | `{ query?, tag?, fields?: { slug: value }, world?, text? }` | `{ rev, levels }`, in `level.list` order, each as `level.list` gives it plus `tags` and the stored `fields` |
+| `tiles.find` | `{ query?, tileset?, tile?: [col, row], world?, level?, layer?, limit? }` | `{ rev, tiles, total }`: hand-placed tiles (not baked autotiles), level by level and in file order, each placement as in the layer file plus `world`, `level` and `layer`; at most `limit` (default 1000) of them, `total` counting every match |
+| `notes.list` | the filters in [notes](#notes), plus `text?` and `query?` | `{ rev, notes }` |
+
+Floor buttons that open something, then levels by name:
+
+```json
+{ "jsonrpc": "2.0", "id": 131, "method": "entity.find", "params": { "query": "type:floor_button field:target != null" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 131, "result": { "rev": 61, "entities": [
+  { "id": "75rk7gzrhn", "type": "floor_button", "level": "crevasse", "world": "main", "layer": "objects", "cell": [2, 1], "offset_px": [0, 0], "size": null,
+    "fields": { "target": "5w6isso7ut" } } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 132, "method": "level.find", "params": { "query": "shaft" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 132, "result": { "rev": 61, "levels": [
+  { "slug": "shaft", "name": "Shaft", "id": "shaft22222", "world": "main", "world_px": [320, 80], "size": [6, 8], "depth": 1, "tags": [], "fields": {} },
+  { "slug": "shaft_b", "name": "Shaft copy", "id": "s64pc4niie", "world": "main", "world_px": [416, 80], "size": [6, 8], "depth": 1, "tags": [], "fields": {} } ] } }
+```
+
+Where one tileset's tiles are, and the open todo notes that mention the gap:
+
+```json
+{ "jsonrpc": "2.0", "id": 133, "method": "tiles.find", "params": { "query": "tileset:castle_main tile:5,1", "level": "crevasse" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 133, "result": { "rev": 61, "total": 1, "tiles": [
+  { "world": "main", "level": "crevasse", "layer": "decor_back", "cell": [4, 2], "tileset": "castle_main", "tile": [5, 1] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 134, "method": "notes.list", "params": { "query": "tag:todo status:open gap" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 134, "result": { "rev": 61, "notes": [
+  { "scope": { "level": "crevasse" }, "note": { "id": "notecrev22", "kind": "note", "title": "Widen the gap", "body": "Jump is **too easy**.\nTry 5 cells.",
+    "px": [160, 48], "tags": ["todo"], "links": ["entity:btncrev222", "note:pinstatue2", "https://example.com"] } } ] } }
+```
+
 ### worlds
 
 A project holds one or more worlds: separate maps, each with its own levels, world-scope annotations and guide groups ([commands.md](commands.md#world-commands)). Layers, tilesets, entity types, enums, rules and the grid are shared, and level slugs are unique across worlds, so every method that takes a `level` finds it in whichever world it is. `project.describe` lists the worlds in display order (`project.json` `worlds`) with their levels, `level_count` and `bbox`.
@@ -1954,33 +2021,33 @@ A project holds one or more worlds: separate maps, each with its own levels, wor
 The changes are `world_created`, `world_renamed` (`from`, `to`), `world_meta` (the name), `world_removed` (after a `level_deleted` per level and a `note` per world note), and `project` key `worlds` when the order in `project.json` changes; moving a level reports `level_deleted` in the old world and `level_created` in the new one. A slug that is taken is `command_error` `duplicate_world`.
 
 ```json
-{ "jsonrpc": "2.0", "id": 131, "method": "world.create", "params": { "slug": "underdark", "name": "Underdark" } }
+{ "jsonrpc": "2.0", "id": 135, "method": "world.create", "params": { "slug": "underdark", "name": "Underdark" } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 131, "result": { "rev": 62, "status": "applied", "label": "claude-code: Create world underdark",
+{ "jsonrpc": "2.0", "id": 135, "result": { "rev": 62, "status": "applied", "label": "claude-code: Create world underdark",
   "changes": [
     { "change": "world_created", "world": "underdark" },
     { "change": "project", "key": "worlds" } ] } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 132, "method": "level.move_to_world", "params": { "level": "hall", "world": "underdark", "world_px": [0, 0] } }
+{ "jsonrpc": "2.0", "id": 136, "method": "level.move_to_world", "params": { "level": "hall", "world": "underdark", "world_px": [0, 0] } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 132, "result": { "rev": 63, "status": "applied", "label": "claude-code: Move level hall to world underdark",
+{ "jsonrpc": "2.0", "id": 136, "result": { "rev": 63, "status": "applied", "label": "claude-code: Move level hall to world underdark",
   "changes": [
     { "change": "level_deleted", "world": "main", "level": "hall" },
     { "change": "level_created", "world": "underdark", "level": "hall" } ] } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 133, "method": "world.rename", "params": { "world": "underdark", "slug": "caves", "name": "The Caves" } }
+{ "jsonrpc": "2.0", "id": 137, "method": "world.rename", "params": { "world": "underdark", "slug": "caves", "name": "The Caves" } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 133, "result": { "rev": 64, "status": "applied", "label": "claude-code: Rename world underdark to caves",
+{ "jsonrpc": "2.0", "id": 137, "result": { "rev": 64, "status": "applied", "label": "claude-code: Rename world underdark to caves",
   "changes": [
     { "change": "world_renamed", "from": "underdark", "to": "caves" },
     { "change": "project", "key": "worlds" },
@@ -1988,38 +2055,38 @@ The changes are `world_created`, `world_renamed` (`from`, `to`), `world_meta` (t
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 134, "method": "world.reorder", "params": { "order": ["caves", "main"] } }
+{ "jsonrpc": "2.0", "id": 138, "method": "world.reorder", "params": { "order": ["caves", "main"] } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 134, "result": { "rev": 65, "status": "applied", "label": "claude-code: Reorder worlds",
+{ "jsonrpc": "2.0", "id": 138, "result": { "rev": 65, "status": "applied", "label": "claude-code: Reorder worlds",
   "changes": [ { "change": "project", "key": "worlds" } ] } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 135, "method": "world.create", "params": { "slug": "main" } }
+{ "jsonrpc": "2.0", "id": 139, "method": "world.create", "params": { "slug": "main" } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 135, "error": { "code": -32004, "message": "a world \"main\" already exists",
+{ "jsonrpc": "2.0", "id": 139, "error": { "code": -32004, "message": "a world \"main\" already exists",
   "data": { "kind": "duplicate_world", "world": "main", "message": "a world \"main\" already exists" } } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 136, "method": "world.remove", "params": { "world": "caves" } }
+{ "jsonrpc": "2.0", "id": 140, "method": "world.remove", "params": { "world": "caves" } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 136, "error": { "code": -32002, "message": "deleting world caves needs confirm: true: it holds 1 level",
+{ "jsonrpc": "2.0", "id": 140, "error": { "code": -32002, "message": "deleting world caves needs confirm: true: it holds 1 level",
   "data": { "reason": "deletes world caves with 1 level" } } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 137, "method": "world.remove", "params": { "world": "caves", "confirm": true } }
+{ "jsonrpc": "2.0", "id": 141, "method": "world.remove", "params": { "world": "caves", "confirm": true } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 137, "result": { "rev": 66, "status": "applied", "label": "claude-code: Delete world caves",
+{ "jsonrpc": "2.0", "id": 141, "result": { "rev": 66, "status": "applied", "label": "claude-code: Delete world caves",
   "changes": [
     { "change": "level_deleted", "world": "caves", "level": "hall" },
     { "change": "world_removed", "world": "caves" },

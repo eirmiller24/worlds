@@ -83,6 +83,7 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `resize_level` | `level.resize` |
 | `crop_level` | `level.crop` |
 | `copy_fragment` | `edit.copy` (the arguments are its `selection`) |
+| `find` | `entity.find`, `level.find`, `notes.list` (with `kinds: ["note", "pin", "path", "region", "connector"]` unless the query has a `kind:` word) or `tiles.find` (with `limit`), each with `query` |
 | `paste_fragment` | `edit.paste` |
 | `duplicate_level` | `level.duplicate` |
 | `create_world` | `world.create` |
@@ -779,6 +780,21 @@ Move a level, as one undo entry. world_px is its new top-left corner in world pi
   "required": ["level"], "additionalProperties": false }
 ```
 
+### find
+
+```text
+Search the whole project (every world and level) with a short query and get back what matches: kind "entities", "levels", "notes" (annotations; guides only with kind:guide) or "tiles" (hand-placed tiles). The query is words separated by spaces and every word must hold: type:locked_door (entity type), tag:puzzle (a tag of the entity's type, of a level or of a note), channel:3 or field:channel = 3 (a field's value, its default when the entity or level stores none, null when there is neither; also field:target != null), world:main, level:crevasse, layer:objects, kind:pin and status:open (notes), tileset:castle_main and tile:4,2 (tiles, atlas column,row), and free words matching a name, slug or id (for notes: title, body or label; "quote words" to keep them together). Values are JSON when they parse (3, true, null, [1,2]), else text; "3" in quotes is text. Slugs may use * as a wildcard (type:*door). Field tests are for entities and levels, free words for everything but tiles; a word the kind doesn't take is an error that says so. An empty query lists everything of that kind. Returns { rev, kind, total, <kind>: [...] }: each entity with id, type, world, level, layer, cell and stored fields; each level with slug, name, world, position, size, tags and fields; each note as list_notes gives it; each tile with world, level, layer, cell, tileset and tile. To change what you found, use update_entity, remove_entity, tag_levels, update_note or place_tiles with the ids and cells it gives.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "kind": { "type": "string", "enum": ["entities", "levels", "notes", "tiles"] },
+    "query": { "type": "string", "description": "e.g. \"type:locked_door channel:3\", \"tag:puzzle\", \"field:target = null\", \"tileset:castle_main tile:4,2\", \"todo gap\". Default: everything of that kind." },
+    "limit": { "type": "integer", "minimum": 0, "default": 100, "description": "At most this many results; total still counts them all." } },
+  "required": ["kind"], "additionalProperties": false }
+```
+
 ## Results by tool
 
 | Tool | Result |
@@ -797,6 +813,7 @@ Move a level, as one undo entry. world_px is its new top-left corner in world pi
 | `copy_fragment` | `{ rev, fragment }`, the `edit.copy` result |
 | `paste_fragment` | the write result above plus `items`, `ids` (fragment id -> new id) and `problems` (`[]` when everything went in), from `edit.paste` |
 | `duplicate_level` | the write result above plus `id` (the copy's level id) and `world_px` |
+| `find` | `{ rev, kind, total, entities \| levels \| notes \| tiles }`: the method's list (the key is `kind`), cut to `limit`; `total` counts every match |
 
 **`screenshot` in headless mode** is not an error. Headless `worlds-mcp` saves after every write, so the files on disk are the project; it runs the editor binary's headless screenshot mode on them, asking for the map alone as `view.snapshot` draws it: `worlds --screenshot <tmp>.png --snapshot [--level <slug> | --world-rect x,y,w,h] --max-size WxH [--layers a,b] <project>` with the level or world rect, size (default `1024x1024`) and layers of the call (the editor's [README](../crates/worlds-editor/README.md) describes the flags), and returns that PNG. `scale` is then the image width over the drawn width in world pixels. The binary is `WORLDS_EDITOR_BIN` when set, else `worlds` next to the `worlds-mcp` executable. If it can't be found or exits non-zero, the tool error says so, names the path tried and includes its stderr.
 

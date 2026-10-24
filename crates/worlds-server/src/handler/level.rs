@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use worlds_core::command::LevelContent;
+use worlds_core::find::{self, FindKind};
 use worlds_core::format::IntGridFile;
 use worlds_core::text::{NoteFilter, render_level_baked_with};
 use worlds_core::{
@@ -38,6 +39,44 @@ pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, R
                 json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": w.slug,
                     "world_px": l.world_px, "size": l.size, "depth": l.depth })
             })
+        })
+        .collect();
+    Ok(json!({ "levels": levels }))
+}
+
+/// `level.find { query?, tag?, fields?, world?, text? }`: the levels every
+/// filter holds for ([`worlds_core::find`]), in `level.list` order, each
+/// as `level.list` gives it plus its `tags` and stored `fields`.
+pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        query: Option<String>,
+        tag: Option<String>,
+        #[serde(default)]
+        fields: BTreeMap<String, Value>,
+        world: Option<Slug>,
+        text: Option<String>,
+    }
+    let p: P = params::parse(method, p)?;
+    if let Some(w) = &p.world
+        && project.world(w.as_str()).is_none()
+    {
+        return Err(RpcError::command(&CommandError::UnknownWorld(w.clone())));
+    }
+    let mut q = params::query(method, p.query.as_deref(), FindKind::Levels)?;
+    q.tags.extend(p.tag);
+    q.fields.extend(params::field_tests(p.fields));
+    q.worlds.extend(p.world.map(|w| w.to_string()));
+    q.text.extend(p.text.map(|t| t.to_lowercase()));
+    let levels: Vec<Value> = find::levels(project, &q)
+        .map_err(|e| RpcError::invalid_params(format!("{method}: {e}")))?
+        .into_iter()
+        .map(|h| {
+            let l = h.level;
+            json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": h.world.slug,
+                "world_px": l.world_px, "size": l.size, "depth": l.depth,
+                "tags": l.tags, "fields": l.fields })
         })
         .collect();
     Ok(json!({ "levels": levels }))

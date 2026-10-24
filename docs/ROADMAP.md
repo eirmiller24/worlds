@@ -112,9 +112,7 @@ Finding your way around a big project, and planning on the map.
 
 ### 3.2 Find and replace
 
-**What.** A Find pane for project-wide queries: entities by type, tag or field value (`type:door channel:3`, `field:target = null`), levels by tag or field, notes by text or tag, tiles by tileset and atlas tile. Results list with world, level and a preview; click jumps; "Select all" puts them in the selection so a field edit in the Inspector or a Delete applies to all of them. Replace: set a field value across the results in one batch.
-
-**API / MCP.** `entity.find` exists; add `level.find` and `tiles.find`, and MCP `find` wrapping all three. The pane uses the same queries.
+Shipped: the query language is `worlds_core::find`, `entity.find`/`level.find`/`tiles.find` and `notes.list`'s `text`/`query` in [api.md](api.md#find-entities-levels-notes-and-tiles), MCP `find` in [mcp.md](mcp.md#find), the Find pane (Ctrl+F, Select all, Replace as one entry) and the `"ui": "find"` step in the [editor README](../crates/worlds-editor/README.md#the-find-pane).
 
 ### 3.3 Object groups and layer folders
 

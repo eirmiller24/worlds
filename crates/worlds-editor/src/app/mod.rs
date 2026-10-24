@@ -11,6 +11,7 @@ pub mod agent;
 pub mod defs;
 pub mod entities;
 pub mod fields;
+pub mod find;
 pub mod inspector;
 pub mod note_inspector;
 pub mod notes;
@@ -67,11 +68,14 @@ pub enum Pane {
     /// Layers, tilesets and project settings ([`project_pane`]), tab
     /// "Project".
     Project,
+    /// Project-wide find and replace ([`find`]), tab "Find".
+    Find,
 }
 
 /// Default layout. Split fractions are the share of the first (left or
 /// top) child. The bottom node holds the Log and the Rules pane as tabs;
-/// the Types and Project panes are tabs next to the Inspector.
+/// the Types and Project panes are tabs next to the Inspector, Notes and
+/// Find next to the Problems.
 pub fn default_dock() -> DockState<Pane> {
     let mut dock = DockState::new(vec![Pane::Viewport]);
     let s = dock.main_surface_mut();
@@ -82,7 +86,8 @@ pub fn default_dock() -> DockState<Pane> {
         0.72,
         vec![Pane::Inspector, Pane::EntityDefs, Pane::Project],
     );
-    let [_inspector, _problems] = s.split_below(right, 0.7, vec![Pane::Problems, Pane::Notes]);
+    let [_inspector, _problems] =
+        s.split_below(right, 0.7, vec![Pane::Problems, Pane::Notes, Pane::Find]);
     let [_center, _log] = s.split_below(center, 0.62, vec![Pane::Log, Pane::Rules]);
     dock
 }
@@ -162,6 +167,27 @@ pub fn add_project_pane(dock: &mut DockState<Pane>) {
     if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
         dock.main_surface_mut()
             .split_right(node, 0.75, vec![Pane::Project]);
+    }
+}
+
+/// Give a layout saved before the Find pane existed one: a tab next to the
+/// Notes, else the Problems, else the Inspector, else a split right of the
+/// map.
+pub fn add_find_pane(dock: &mut DockState<Pane>) {
+    if dock.find_tab(&Pane::Find).is_some() {
+        return;
+    }
+    for next_to in [Pane::Notes, Pane::Problems, Pane::Inspector] {
+        if let Some(p) = dock.find_tab(&next_to)
+            && let Ok(leaf) = dock.leaf_mut(p.node_path())
+        {
+            leaf.append_tab(Pane::Find);
+            return;
+        }
+    }
+    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+        dock.main_surface_mut()
+            .split_right(node, 0.75, vec![Pane::Find]);
     }
 }
 
@@ -314,6 +340,8 @@ pub struct EditorState {
     pub project: project_pane::ProjectState,
     /// Where each pane drew last frame (screen points; tests).
     pub pane_rects: HashMap<Pane, egui::Rect>,
+    /// The Find pane.
+    pub find: find::FindState,
 }
 
 impl Default for EditorState {
@@ -343,6 +371,7 @@ impl Default for EditorState {
             notes: notes::NotesState::default(),
             project: project_pane::ProjectState::default(),
             pane_rects: HashMap::new(),
+            find: find::FindState::default(),
         }
     }
 }
@@ -1085,7 +1114,56 @@ impl EditorApp {
             UiStep::Copy(_) => self.status_step(Action::Copy),
             UiStep::Cut(_) => self.status_step(Action::Cut),
             UiStep::Paste(p) => self.paste_step(p),
+            UiStep::Find(f) => self.find_step(f),
         }
+    }
+
+    /// `"ui": "find"`: see [`crate::script::FindStep`].
+    fn find_step(&mut self, f: &crate::script::FindStep) -> Result<(), String> {
+        use worlds_core::find::FindKind;
+        let kind = match f.kind.as_deref() {
+            None | Some("all") => None,
+            Some(k) => Some(
+                FindKind::parse(k)
+                    .ok_or_else(|| format!("kind {k:?}: all, entities, levels, notes or tiles"))?,
+            ),
+        };
+        self.st.find.query = f.query.clone();
+        self.st.find.kind = kind;
+        self.st.find.notice = None;
+        self.st.find.rev = self.commands.editing_ref().map_or(0, |e| e.rev());
+        let doc = self.st.doc.as_ref().ok_or("no project open")?;
+        self.st.find.refresh(doc);
+        if let Some(e) = &self.st.find.found().error {
+            return Err(format!("query {:?}: {e}", f.query));
+        }
+        show_pane(&mut self.dock, Pane::Find);
+        if f.select_all {
+            if find::select_all(&mut self.st) == 0 {
+                return Err(format!("query {:?} found nothing to select", f.query));
+            }
+            self.st.find.notice = Some((
+                format!("Selected {}", self.st.view.selection.items.len()),
+                false,
+            ));
+        }
+        if let Some(r) = &f.replace {
+            let n = find::replace(&mut self.st, &r.field, &r.value)?;
+            self.st.find.replace_field = Some(r.field.clone());
+            self.st.find.replace_value = r.value.clone();
+            for cmd in std::mem::take(&mut self.st.pending) {
+                self.apply_command(cmd)?;
+            }
+            self.st.find.notice = Some((
+                format!(
+                    "Replaced {} in {n} {}",
+                    r.field,
+                    if n == 1 { "entity" } else { "entities" }
+                ),
+                false,
+            ));
+        }
+        Ok(())
     }
 
     /// Run an action as a script step: an error status it leaves is an
@@ -1894,6 +1972,7 @@ impl EditorApp {
         self.st.entities = entities::PaletteState::default();
         self.st.types = defs::TypesState::default();
         self.st.notes = notes::NotesState::default();
+        self.st.find = find::FindState::default();
         self.dock = default_dock();
         let restored = if self.opts.headless {
             false
@@ -1993,6 +2072,7 @@ impl EditorApp {
         add_types_pane(&mut self.dock);
         add_notes_pane(&mut self.dock);
         add_project_pane(&mut self.dock);
+        add_find_pane(&mut self.dock);
         self.st.viewport.camera = f.camera;
         self.st.view.active_level = f.active_level.and_then(|s| doc.level_ix(&s));
         if let Some(i) = f
@@ -2138,6 +2218,10 @@ impl EditorApp {
         let rev = self.commands.editing_ref().map_or(0, |e| e.rev());
         entities::refresh(&mut self.st, rev, &ctx);
         self.st.notes.rev = rev;
+        self.st.find.rev = rev;
+        if std::mem::take(&mut self.st.find.focus) {
+            show_pane(&mut self.dock, Pane::Find);
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
@@ -3002,6 +3086,9 @@ impl EditorApp {
             if i.consume_key(cmd, Key::G) {
                 acts.push(Action::ToggleGrid);
             }
+            if i.consume_key(cmd, Key::F) {
+                acts.push(Action::ShowFind);
+            }
         });
         if !ctx.egui_wants_keyboard_input() && !self.palette.open {
             ctx.input_mut(|i| {
@@ -3181,6 +3268,10 @@ impl EditorApp {
                 crate::annot::drawing_backspace(&mut self.st.view);
             }
             Action::ShowNotes => show_pane(&mut self.dock, Pane::Notes),
+            Action::ShowFind => {
+                show_pane(&mut self.dock, Pane::Find);
+                self.st.find.focus_query = true;
+            }
             Action::OpenProject(s) => {
                 self.st.project.section = s;
                 show_pane(&mut self.dock, Pane::Project);
@@ -4112,6 +4203,7 @@ impl TabViewer for Tabs<'_> {
             Pane::EntityDefs => "Types".into(),
             Pane::Notes => "Notes".into(),
             Pane::Project => "Project".into(),
+            Pane::Find => "Find".into(),
         }
     }
 
@@ -4143,6 +4235,7 @@ impl TabViewer for Tabs<'_> {
             Pane::EntityDefs => defs::pane(ui, self.st),
             Pane::Notes => notes::pane(ui, self.st),
             Pane::Project => project_pane::pane(ui, self.st),
+            Pane::Find => find::pane(ui, self.st),
         }
     }
 
@@ -4280,6 +4373,36 @@ mod tests {
         let p = d.find_tab(&Pane::Rules).unwrap();
         let leaf = d.leaf(p.node_path()).unwrap();
         assert_eq!(leaf.tabs()[leaf.active.0], Pane::Rules);
+    }
+
+    #[test]
+    fn old_layouts_get_the_find_pane_next_to_the_notes() {
+        // The default layout before Find: Problems and Notes as tabs.
+        let mut old = DockState::new(vec![Pane::Viewport]);
+        let s = old.main_surface_mut();
+        let [_, right] = s.split_right(NodeIndex::root(), 0.7, vec![Pane::Inspector]);
+        s.split_below(right, 0.7, vec![Pane::Problems, Pane::Notes]);
+        add_find_pane(&mut old);
+        let notes = old.find_tab(&Pane::Notes).unwrap();
+        let find = old.find_tab(&Pane::Find).unwrap();
+        assert_eq!(notes.node_path(), find.node_path(), "a tab next to Notes");
+        add_find_pane(&mut old);
+        assert_eq!(
+            old.iter_all_tabs()
+                .filter(|(_, t)| **t == Pane::Find)
+                .count(),
+            1
+        );
+        // No Notes, Problems or Inspector: a split right of the map.
+        let mut bare = DockState::new(vec![Pane::Viewport]);
+        add_find_pane(&mut bare);
+        assert!(bare.find_tab(&Pane::Find).is_some());
+        // The default layout has it beside the Notes.
+        let d = default_dock();
+        assert_eq!(
+            d.find_tab(&Pane::Find).unwrap().node_path(),
+            d.find_tab(&Pane::Notes).unwrap().node_path()
+        );
     }
 
     #[test]

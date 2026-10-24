@@ -3,6 +3,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use worlds_core::command::Rect;
+use worlds_core::find::{self, FindKind};
 use worlds_core::{Command, CommandError, Project, Slug, TilePlacement};
 
 use super::Write;
@@ -33,6 +34,57 @@ pub(crate) fn get(project: &Project, method: &str, p: Value) -> Result<Value, Rp
         })
         .unwrap_or_default();
     Ok(json!({ "tiles": tiles }))
+}
+
+/// How many placements `tiles.find` returns by default.
+const FIND_LIMIT: usize = 1000;
+
+/// `tiles.find { query?, tileset?, tile?, world?, level?, layer?, limit? }`:
+/// hand-placed tiles across the project that every filter holds for
+/// ([`worlds_core::find`]), level by level, each placement as in the layer
+/// file plus its `world`, `level` and `layer`; at most `limit` (default
+/// 1000), `total` counting them all.
+pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        query: Option<String>,
+        tileset: Option<String>,
+        tile: Option<[u32; 2]>,
+        world: Option<String>,
+        level: Option<Slug>,
+        layer: Option<Slug>,
+        limit: Option<usize>,
+    }
+    let p: P = params::parse(method, p)?;
+    if let Some(l) = &p.level {
+        find_level(project, l.as_str())?;
+    }
+    if let Some(l) = &p.layer {
+        layer_of_kind(project, l.as_str(), "tiles")?;
+    }
+    let mut q = params::query(method, p.query.as_deref(), FindKind::Tiles)?;
+    q.tilesets.extend(p.tileset);
+    q.tiles.extend(p.tile);
+    q.worlds.extend(p.world);
+    q.levels.extend(p.level.map(|l| l.to_string()));
+    q.layers.extend(p.layer.map(|l| l.to_string()));
+    let hits =
+        find::tiles(project, &q).map_err(|e| RpcError::invalid_params(format!("{method}: {e}")))?;
+    let total = hits.len();
+    let tiles: Vec<Value> = hits
+        .into_iter()
+        .take(p.limit.unwrap_or(FIND_LIMIT))
+        .map(|h| {
+            let mut v = json!({ "world": h.world.slug, "level": h.level.slug, "layer": h.layer });
+            if let (Value::Object(m), Ok(Value::Object(t))) = (&mut v, serde_json::to_value(h.tile))
+            {
+                m.extend(t);
+            }
+            v
+        })
+        .collect();
+    Ok(json!({ "tiles": tiles, "total": total }))
 }
 
 /// `tiles.set` → `set_tiles`.

@@ -94,6 +94,8 @@ pub enum Action {
         level: worlds_core::Slug,
         world: worlds_core::Slug,
     },
+    /// Ctrl+F: the Find pane in front, its query box focused.
+    ShowFind,
 }
 
 impl Action {
@@ -153,6 +155,11 @@ impl Action {
             ("New world…".into(), "", Action::NewWorld),
             ("Rename world…".into(), "", Action::RenameWorld(None)),
             ("Delete world…".into(), "", Action::DeleteWorld(None)),
+            (
+                "Find: search the whole project".into(),
+                "Ctrl+F",
+                Action::ShowFind,
+            ),
         ];
         use super::project_pane::Section;
         for (name, s) in [
