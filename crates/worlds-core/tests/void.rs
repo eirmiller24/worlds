@@ -493,7 +493,19 @@ fn crop_moves_and_clips_the_void_and_refuses_only_void() {
 #[test]
 fn duplicate_and_move_to_another_world_keep_the_void() {
     let mut p = common::fixture();
-    p.apply(set_void("crevasse", &[[16, 0, 4, 1]])).unwrap();
+    // A reference image over the void: the void doesn't touch it.
+    let sketch = Reference::new(Id::new("refsketch2").unwrap(), "art/sketch.png", [240, -16]);
+    p.apply(Command::AddReference {
+        scope: command::NoteScope::Level(s("crevasse")),
+        reference: sketch.clone(),
+        index: None,
+    })
+    .unwrap();
+    check(&mut p, set_void("crevasse", &[[16, 0, 4, 1]]));
+    assert_eq!(
+        p.level("crevasse").unwrap().references,
+        std::slice::from_ref(&sketch)
+    );
     check(
         &mut p,
         Command::DuplicateLevel {
@@ -506,6 +518,9 @@ fn duplicate_and_move_to_another_world_keep_the_void() {
     );
     let copy = p.level("crevasse_b").unwrap();
     assert_eq!(copy.void, rects(&[[16, 0, 4, 1]]));
+    assert_eq!(copy.references.len(), 1, "the copy has the reference too");
+    assert_eq!(copy.references[0].px, sketch.px);
+    let copy_refs = copy.references.clone();
     assert_eq!(
         rows(&p, "crevasse_b", "collision"),
         rows(&p, "crevasse", "collision")
@@ -525,6 +540,158 @@ fn duplicate_and_move_to_another_world_keep_the_void() {
     );
     let w = p.world("caves").unwrap();
     assert_eq!(w.levels[0].void, rects(&[[16, 0, 4, 1]]));
+    assert_eq!(w.levels[0].references, copy_refs);
+}
+
+/// A tile at layer cell `[x, y]` of castle_main.
+fn tile(x: u32, y: u32) -> TilePlacement {
+    TilePlacement {
+        cell: [x, y],
+        tileset: s("castle_main"),
+        tile: [1, 1],
+        flip: None,
+        alpha: 1.0,
+    }
+}
+
+fn void_tiles(p: &Project, level: &str, layer: &str) -> Vec<[u32; 2]> {
+    let l = p.level(level).unwrap();
+    let def = p.layer(layer).unwrap();
+    l.tiles_layer(layer).map_or(Vec::new(), |t| {
+        t.tiles
+            .iter()
+            .filter(|t| p.layer_cell_void(def, l, t.cell[0] as i64, t.cell[1] as i64))
+            .map(|t| t.cell)
+            .collect()
+    })
+}
+
+#[test]
+fn layer_operations_never_put_tiles_in_the_void() {
+    let mut p = common::fixture();
+    check(&mut p, set_void("crevasse", &[[16, 0, 4, 2]]));
+    // decor_front above decor_back (both 8 px): tiles beside the void only,
+    // as the tools and validation keep them.
+    let i = p
+        .layers
+        .iter()
+        .position(|l| l.slug == "decor_back")
+        .unwrap();
+    let def: LayerDef = serde_json::from_value(json!({
+        "slug": "decor_front", "name": "decor_front", "kind": "tiles",
+        "tileset": "castle_main", "grid_size": 8
+    }))
+    .unwrap();
+    p.apply(Command::SetLayerDef {
+        layer: s("decor_front"),
+        def,
+        index: Some(i + 1),
+        content: vec![command::LayerContent {
+            level: s("crevasse"),
+            rows: None,
+            tiles: Some(vec![tile(4, 2), tile(31, 3)]),
+            entities: None,
+            state: None,
+        }],
+        rules: None,
+    })
+    .unwrap();
+    assert!(void_tiles(&p, "crevasse", "decor_front").is_empty());
+    let cmd = command::layer_ops::merge_down(&p, &s("decor_front")).unwrap();
+    check(&mut p, cmd);
+    // Same grid, same void: nothing lands there.
+    assert!(void_tiles(&p, "crevasse", "decor_back").is_empty());
+    // An entity a file put in the void still moves to another layer (as
+    // it is: validation reports it), instead of the move being refused.
+    let mut q = p.clone();
+    q.apply(Command::SetLevelVoid {
+        level: s("crevasse"),
+        void: rects(&[[16, 0, 4, 2], [18, 3, 2, 2]]),
+        restore: true,
+    })
+    .unwrap();
+    q.apply(Command::DuplicateLayer {
+        layer: s("objects"),
+        slug: s("objects_b"),
+    })
+    .unwrap();
+    let mv =
+        command::layer_ops::move_entities(&q, &[Id::new("doorcrev22").unwrap()], &s("objects_b"))
+            .unwrap();
+    check(&mut q, mv);
+    assert!(
+        q.level("crevasse")
+            .unwrap()
+            .entities_layer("objects_b")
+            .is_some_and(|l| l.entities.iter().any(|e| e.id.as_str() == "doorcrev22"))
+    );
+    assert!(
+        validate(&p).iter().all(|x| !x.message.contains("void")),
+        "{:?}",
+        validate(&p)
+    );
+}
+
+#[test]
+fn the_import_carries_the_void_and_keeps_content_out_of_it() {
+    use worlds_core::merge::{self, Action, Kind, Policy, Preset, Selection};
+    let empty = |dir: &std::path::Path| {
+        let mut p = Project::new("Sequel");
+        p.grid_size = 16;
+        p.seed = 1;
+        save(&mut p, dir).unwrap();
+        load(dir).unwrap()
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let sel = Selection::preset(Preset::Everything);
+    // A clean shaped level comes across as it is.
+    let mut src = common::fixture();
+    src.apply(set_void("crevasse", &[[16, 0, 4, 2]])).unwrap();
+    let mut dst = empty(&tmp.path().join("a.worlds"));
+    let plan = merge::plan(&src, &dst, &sel, &Policy::default()).unwrap();
+    dst.apply(plan.command()).unwrap();
+    assert_eq!(
+        dst.level("crevasse").unwrap(),
+        src.level("crevasse").unwrap()
+    );
+    // Walls a file left in the void are dropped on the way in.
+    let mut src = common::fixture();
+    src.apply(Command::SetLevelVoid {
+        level: s("crevasse"),
+        void: rects(&[[0, 3, 4, 2]]),
+        restore: true,
+    })
+    .unwrap();
+    let mut dst = empty(&tmp.path().join("b.worlds"));
+    let plan = merge::plan(&src, &dst, &sel, &Policy::default()).unwrap();
+    assert_eq!(
+        plan.item(Kind::Level, "crevasse").unwrap().action,
+        Action::Add
+    );
+    dst.apply(plan.command()).unwrap();
+    let r = rows(&dst, "crevasse", "collision").unwrap();
+    assert_eq!(&r[3][..5], "....~");
+    assert_eq!(dst.level("crevasse").unwrap().void, rects(&[[0, 3, 4, 2]]));
+    // An entity in the void refuses the level, with the reason.
+    let mut src = common::fixture();
+    src.apply(Command::SetLevelVoid {
+        level: s("crevasse"),
+        void: rects(&[[18, 3, 2, 2]]),
+        restore: true,
+    })
+    .unwrap();
+    let dst = empty(&tmp.path().join("c.worlds"));
+    let plan = merge::plan(&src, &dst, &sel, &Policy::default()).unwrap();
+    let it = plan.item(Kind::Level, "crevasse").unwrap();
+    assert_eq!(it.action, Action::Refused, "{}", plan.text());
+    assert!(
+        it.reason
+            .as_deref()
+            .is_some_and(|r| r.contains("doorcrev22")),
+        "{:?}",
+        it.reason
+    );
+    assert_eq!(plan.item(Kind::Level, "shaft").unwrap().action, Action::Add);
 }
 
 #[test]

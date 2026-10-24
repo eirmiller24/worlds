@@ -227,6 +227,9 @@ pub fn move_entities(p: &Project, ids: &[Id], to: &Slug) -> Result<Command> {
             && e.cell[1] >= 0
             && (e.cell[0] as u32) < size[0]
             && (e.cell[1] as u32) < size[1];
+        // One a file put in a non-rectangular level's void moves as it is,
+        // like one a resize left outside.
+        let in_void = p.layer_cell_void(target, level, e.cell[0] as i64, e.cell[1] as i64);
         commands.push(Command::RemoveEntity {
             id: id.clone(),
             keep_empty: false,
@@ -236,7 +239,7 @@ pub fn move_entities(p: &Project, ids: &[Id], to: &Slug) -> Result<Command> {
             layer: to.clone(),
             entity: e.clone(),
             index: None,
-            allow_outside: !inside,
+            allow_outside: !inside || in_void,
         });
         moved.push(id);
     }
