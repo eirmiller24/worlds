@@ -18,6 +18,7 @@ mod entity;
 pub(crate) mod events;
 mod grid;
 mod history;
+mod import;
 mod level;
 mod notes;
 pub(crate) mod params;
@@ -151,6 +152,10 @@ pub struct Handler {
     pub(crate) last_batch: Option<String>,
     /// Changes applied since the last [`Handler::take_applied`].
     pub(crate) applied: Vec<Change>,
+    /// `project.import_plan` results waiting for `project.import`.
+    pub(crate) import_plans: Vec<import::StoredPlan>,
+    /// Plans made so far (`plan_<n>` ids).
+    pub(crate) import_seq: u64,
 }
 
 /// Methods that change the project (or step the history). While one
@@ -212,6 +217,7 @@ pub fn is_write(method: &str) -> bool {
             | "world.remove"
             | "world.reorder"
             | "level.move_to_world"
+            | "project.import"
     )
 }
 
@@ -227,6 +233,8 @@ impl Handler {
             out: Vec::new(),
             last_batch: None,
             applied: Vec::new(),
+            import_plans: Vec::new(),
+            import_seq: 0,
         }
     }
 
@@ -285,6 +293,9 @@ impl Handler {
         }
         if let Some(builder) = write_builder(method) {
             return self.run_write(host, client, method, &mut params, builder);
+        }
+        if method == "project.import" {
+            return import::apply(self, host, client, method, &mut params);
         }
         if method == "history.end_batch" {
             return history::end_batch(self, host, client, method, Value::Object(params));
@@ -352,6 +363,7 @@ impl Handler {
             "project.export" => project::export(self, host, method, params),
             "project.save" => project::save(self, host, method, params),
             "project.read_file" => read(host, project::read_file),
+            "project.import_plan" => import::plan(self, host, method, params),
             "project.reload" | "project.update" => unreachable_write(method),
             "defs.get" => read(host, defs::get),
             "level.list" => read(host, level::list),
