@@ -6,25 +6,52 @@ use super::{Endpoint, Level, NoteAt, Project, Shape, World};
 
 /// What a connector end is anchored to, in world pixels: a level's rect
 /// (the end sits on its edge) or an entity's pivot (the end sits on it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     /// The level's center, or the entity's pivot.
     pub point: [i64; 2],
     /// A level's `[x, y, w, h]`; `None` for an entity.
     pub rect: Option<[i64; 4]>,
+    /// A non-rectangular level's outline ([`Level::outline`], world
+    /// pixels); `None` for a rectangle or an entity. The end sits on it
+    /// instead of on the rect.
+    pub outline: Option<std::sync::Arc<[[i64; 2]]>>,
 }
 
 impl Anchor {
     /// The point where a line toward `toward` leaves this anchor: an
     /// entity's pivot; on a level, the point of its edge nearest `toward`
     /// (`toward` itself when it is on the edge or outside, clamped onto the
-    /// rect; from inside, straight out to the nearest edge).
+    /// rect; from inside, straight out to the nearest edge). A
+    /// non-rectangular level's edge is its outline.
     pub fn end_toward(&self, toward: [i64; 2]) -> [i64; 2] {
-        match self.rect {
-            None => self.point,
-            Some(r) => nearest_edge_point(r, toward),
+        match (&self.outline, self.rect) {
+            (Some(o), _) => nearest_outline_point(o, toward),
+            (None, None) => self.point,
+            (None, Some(r)) => nearest_edge_point(r, toward),
         }
     }
+}
+
+/// The point of a closed rectilinear outline (a level's, corners in order)
+/// nearest `p`, the first segment's on a tie. On a rectangle's outline this
+/// is [`nearest_edge_point`] (up to which edge wins a tie).
+pub fn nearest_outline_point(outline: &[[i64; 2]], p: [i64; 2]) -> [i64; 2] {
+    let n = outline.len();
+    let mut best = (i64::MAX, p);
+    for i in 0..n {
+        let (a, b) = (outline[i], outline[(i + 1) % n]);
+        // Axis-aligned segments: clamping onto the box is the nearest point.
+        let q = [
+            p[0].clamp(a[0].min(b[0]), a[0].max(b[0])),
+            p[1].clamp(a[1].min(b[1]), a[1].max(b[1])),
+        ];
+        let d = (q[0] - p[0]).pow(2) + (q[1] - p[1]).pow(2);
+        if d < best.0 {
+            best = (d, q);
+        }
+    }
+    best.1
 }
 
 /// The point of the edge of rect `[x, y, w, h]` nearest `p`.
@@ -110,6 +137,7 @@ impl Project {
                     Anchor {
                         point: [r[0] + r[2] / 2, r[1] + r[3] / 2],
                         rect: Some(r),
+                        outline: l.has_void().then(|| l.outline(self.grid_size).into()),
                     },
                     w,
                     l,
@@ -121,6 +149,7 @@ impl Project {
                     Anchor {
                         point: p,
                         rect: None,
+                        outline: None,
                     },
                     w,
                     l,
@@ -164,6 +193,7 @@ mod tests {
         Anchor {
             point: [r[0] + r[2] / 2, r[1] + r[3] / 2],
             rect: Some(r),
+            outline: None,
         }
     }
 
@@ -194,8 +224,35 @@ mod tests {
         let e = Anchor {
             point: [250, 80],
             rect: None,
+            outline: None,
         };
         let p = connector_polyline(level(ROOM_A), e, &[]);
         assert_eq!(p, vec![[100, 80], [250, 80]]);
+    }
+
+    #[test]
+    fn a_shaped_room_is_left_through_its_outline() {
+        // ROOM_A as an L: its top-right 50x50 quarter cut out.
+        let l = Anchor {
+            outline: Some(vec![[0, 0], [50, 0], [50, 50], [100, 50], [100, 100], [0, 100]].into()),
+            ..level(ROOM_A)
+        };
+        // A waypoint in the notch: the line leaves through the notch's wall,
+        // not the box's top edge at [70, 0].
+        let p = connector_polyline(l.clone(), level(ROOM_B), &[[70, 15]]);
+        assert_eq!(p[0], [50, 15]);
+        // From outside, the nearest point of the outline.
+        assert_eq!(l.end_toward([150, 20]), [100, 50]);
+        // The lower arm still leaves on the right.
+        assert_eq!(l.end_toward([150, 80]), [100, 80]);
+        // A rect's outline gives what the rect gives.
+        let box_ = [[0, 0], [100, 0], [100, 100], [0, 100]];
+        for p in [[150, 50], [-20, -20], [90, 40], [40, 90], [30, 20]] {
+            assert_eq!(
+                nearest_outline_point(&box_, p),
+                nearest_edge_point(ROOM_A, p),
+                "{p:?}"
+            );
+        }
     }
 }

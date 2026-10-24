@@ -408,3 +408,173 @@ fn the_export_carries_void_outline_and_seams_along_it() {
         json!({ "left": [], "right": [[1, 2, 16]], "top": [[16, 19, 2]], "bottom": [] })
     );
 }
+
+#[test]
+fn a_centred_resize_moves_the_void_by_half() {
+    let mut p = common::fixture();
+    p.apply(set_void("crevasse", &[[16, 0, 4, 1]])).unwrap();
+    // 20x5 to 24x9 about the centre: everything moves by [2, 2].
+    undo_exact(
+        &mut p,
+        Command::ResizeLevel {
+            world: s("main"),
+            level: s("crevasse"),
+            size: [24, 9],
+            anchor: [0, 0],
+        },
+    );
+    assert_eq!(p.level("crevasse").unwrap().void, rects(&[[18, 2, 4, 1]]));
+}
+
+/// Apply `cmd`; its undo must be exact. Leaves it applied. (Resizes undo
+/// by `replace_level`, so their redo reports differently than `check` wants.)
+fn undo_exact(p: &mut Project, cmd: Command) {
+    let before = p.clone();
+    let a = p.apply(cmd.clone()).unwrap();
+    p.apply(a.inverse).unwrap();
+    assert!(*p == before, "undo of {} isn't exact", cmd.label());
+    p.apply(cmd).unwrap();
+}
+
+/// A level `size` big holding `rows` of collision and the `void` as given
+/// (`restore`: content in the void is kept).
+fn shaped_level(p: &mut Project, slug: &str, size: [u32; 2], void: &[[u32; 4]], rows: &[&str]) {
+    let mut l = Level::new(s(slug), slug, size);
+    l.world_px = [0, 400];
+    l.void = rects(void);
+    let content: command::LevelContent = serde_json::from_value(json!({
+        "int_grids": [ { "layer": "collision", "rows": rows } ]
+    }))
+    .unwrap();
+    p.apply(Command::CreateLevel {
+        world: s("main"),
+        level: l,
+        content,
+        restore: true,
+    })
+    .unwrap();
+}
+
+#[test]
+fn crop_moves_and_clips_the_void_and_refuses_only_void() {
+    let mut p = common::fixture();
+    // Content in [2, 1] to [6, 5); a rect inside it and one outside it.
+    shaped_level(
+        &mut p,
+        "ell",
+        [8, 6],
+        &[[4, 1, 2, 2], [0, 4, 2, 2]],
+        &[
+            "........", "..##....", "..##....", "..####..", "..####..", "........",
+        ],
+    );
+    let crop = p.crop_level(&s("main"), &s("ell")).unwrap().unwrap();
+    undo_exact(&mut p, crop);
+    let l = p.level("ell").unwrap();
+    assert_eq!(l.size, [4, 4]);
+    assert_eq!(l.void, rects(&[[2, 0, 2, 2]]));
+    assert_eq!(
+        rows(&p, "ell", "collision").unwrap(),
+        ["##..", "##..", "####", "####"]
+    );
+    // Content only in the void (a file put it there): cropping to it would
+    // leave nothing but void.
+    shaped_level(
+        &mut p,
+        "odd",
+        [6, 4],
+        &[[2, 1, 2, 2]],
+        &["......", "..##..", "..##..", "......"],
+    );
+    let err = p.crop_level(&s("main"), &s("odd")).unwrap_err().to_string();
+    assert!(err.contains("only void"), "{err}");
+}
+
+#[test]
+fn duplicate_and_move_to_another_world_keep_the_void() {
+    let mut p = common::fixture();
+    p.apply(set_void("crevasse", &[[16, 0, 4, 1]])).unwrap();
+    check(
+        &mut p,
+        Command::DuplicateLevel {
+            level: s("crevasse"),
+            slug: s("crevasse_b"),
+            name: None,
+            world: None,
+            world_px: None,
+        },
+    );
+    let copy = p.level("crevasse_b").unwrap();
+    assert_eq!(copy.void, rects(&[[16, 0, 4, 1]]));
+    assert_eq!(
+        rows(&p, "crevasse_b", "collision"),
+        rows(&p, "crevasse", "collision")
+    );
+    p.apply(Command::CreateWorld {
+        slug: s("caves"),
+        name: None,
+    })
+    .unwrap();
+    check(
+        &mut p,
+        Command::MoveLevelToWorld {
+            level: s("crevasse_b"),
+            world: s("caves"),
+            world_px: Some([0, 0]),
+        },
+    );
+    let w = p.world("caves").unwrap();
+    assert_eq!(w.levels[0].void, rects(&[[16, 0, 4, 1]]));
+}
+
+#[test]
+fn paste_drops_cells_tiles_and_entities_in_the_void() {
+    use std::collections::BTreeMap;
+    use worlds_core::fragment::{self, CopySelection, Fragment, PasteOptions};
+    let mut p = common::fixture();
+    p.apply(set_void("crevasse", &[[16, 0, 4, 2]])).unwrap();
+    let at = |origin| PasteOptions {
+        level: s("crevasse"),
+        origin,
+        layer_map: BTreeMap::new(),
+    };
+    // Two 8 px decor stacks, pasted onto project cell [16, 0]: both void.
+    let tiles = fragment::copy(
+        &p,
+        &CopySelection {
+            level: Some(s("crevasse")),
+            tiles: [(s("decor_back"), vec![[4, 2], [5, 2]])].into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let plan = fragment::paste(&p, &tiles, &at([16, 0])).unwrap();
+    assert!(plan.commands.is_empty(), "{:?}", plan.commands);
+    assert_eq!(
+        plan.problems,
+        ["2 cells fell in the void of level crevasse (cut out of its shape) and were dropped"]
+    );
+    // Four wall cells across the void's edge and a button in it.
+    let frag: Fragment = serde_json::from_value(json!({
+        "worlds_fragment": 1, "grid_size": 16, "size": [4, 1],
+        "grids": { "collision": { "rows": ["oooo"] } },
+        "entities": [ { "id": "aaaaaaaaaa", "type": "floor_button", "cell": [3, 0] } ]
+    }))
+    .unwrap();
+    let plan = fragment::paste(&p, &frag, &at([14, 1])).unwrap();
+    let msgs = plan.problems.join("\n");
+    assert!(msgs.contains("2 cells fell in the void"), "{msgs}");
+    assert!(
+        msgs.contains(
+            "entity aaaaaaaaaa (floor_button) would land in the void of level crevasse at [17, 1]"
+        ),
+        "{msgs}"
+    );
+    assert!(plan.entities.is_empty());
+    let before = rows(&p, "crevasse", "collision").unwrap()[1].clone();
+    check(&mut p, plan.command());
+    let r = &rows(&p, "crevasse", "collision").unwrap()[1];
+    assert_eq!(&r[14..16], "oo");
+    assert_eq!(&r[16..], &before[16..], "the void stays empty");
+    assert!(validate(&p).iter().all(|x| !x.message.contains("void")));
+}

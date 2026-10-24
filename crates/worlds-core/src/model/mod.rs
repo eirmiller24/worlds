@@ -28,7 +28,7 @@ pub use annotation::{
     Annotation, ConnectorStyle, Endpoint, GuideGroup, Link, NoteStatus, Shape, bbox_of, parse_link,
 };
 pub use common::{Color, Flip, TileRef};
-pub use connector::{Anchor, connector_polyline, nearest_edge_point};
+pub use connector::{Anchor, connector_polyline, nearest_edge_point, nearest_outline_point};
 pub use defs::{EnumDef, EnumValue, TilesetDef};
 pub use derived::DerivedCycle;
 pub use entity::{
