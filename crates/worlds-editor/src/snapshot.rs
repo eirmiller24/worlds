@@ -235,6 +235,8 @@ impl SnapshotRenderer {
         self.hl.set_size(plan.size);
         let (mut events, mut actions) = (Vec::new(), Vec::new());
         let gpu = self.hl.gpu.clone();
+        // Snapshots draw no tooltips; the hints just need some keymap.
+        let keymap = crate::keymap::Keymap::defaults();
         let vp = &mut self.viewport;
         self.hl.run(&self.ctx, self.t, |ui| {
             egui::CentralPanel::default()
@@ -252,6 +254,7 @@ impl SnapshotRenderer {
                         atlas: None,
                         focused: true,
                         thumbs: None,
+                        keymap: &keymap,
                     };
                     vp.ui(ui, &mut cx);
                 });

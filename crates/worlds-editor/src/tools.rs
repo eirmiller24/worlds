@@ -76,39 +76,8 @@ impl Tool {
         }
     }
 
-    /// The single-key shortcut (holding Space also pans with any tool).
-    pub fn shortcut(self) -> &'static str {
-        match self {
-            Tool::Select => "V",
-            Tool::Brush => "B",
-            Tool::Rect => "R",
-            Tool::Line => "L",
-            Tool::Fill => "G",
-            Tool::Eraser => "E",
-            Tool::Hand => "H",
-            Tool::Entity => "T",
-            Tool::Note => "N",
-            Tool::Measure => "M",
-            Tool::Shape => "",
-        }
-    }
-
-    /// The tool's key; `None` for [`Tool::Shape`], which has none.
-    pub fn key(self) -> Option<egui::Key> {
-        Some(match self {
-            Tool::Select => egui::Key::V,
-            Tool::Brush => egui::Key::B,
-            Tool::Rect => egui::Key::R,
-            Tool::Line => egui::Key::L,
-            Tool::Fill => egui::Key::G,
-            Tool::Eraser => egui::Key::E,
-            Tool::Hand => egui::Key::H,
-            Tool::Entity => egui::Key::T,
-            Tool::Note => egui::Key::N,
-            Tool::Measure => egui::Key::M,
-            Tool::Shape => return None,
-        })
-    }
+    // A tool's key lives in the keymap (`Cmd::Tool`), so a remap shows
+    // everywhere it is printed.
 
     /// The Paint group's modes, in the mode strip's order. The toolbar shows
     /// them as one button, Paint; each is still its own tool everywhere else

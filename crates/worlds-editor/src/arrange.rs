@@ -162,23 +162,25 @@ pub fn turn_buttons(
     ui: &mut egui::Ui,
     flip: Option<worlds_core::Flip>,
     actions: &mut Vec<crate::app::actions::Action>,
+    km: &crate::keymap::Keymap,
 ) {
     use crate::app::actions::Action;
+    use crate::keymap::Cmd;
     use worlds_core::Flip;
     ui.separator();
     ui.weak("Turn");
     for (label, op, tip) in [
-        ("↔", Flip::X, "Mirror the tile stamp left-right (X)"),
-        ("↕", Flip::Y, "Mirror the tile stamp top-bottom (Y)"),
+        ("↔", Flip::X, "Mirror the tile stamp left-right"),
+        ("↕", Flip::Y, "Mirror the tile stamp top-bottom"),
         (
             "↻",
             Flip::XT,
-            "Rotate the tile stamp 90° clockwise (R; square tiles only)",
+            "Rotate the tile stamp 90° clockwise (square tiles only)",
         ),
     ] {
         if ui
             .add(egui::Button::new(label).small())
-            .on_hover_text(tip)
+            .on_hover_text(km.hint(tip, Cmd::Turn(op)))
             .clicked()
         {
             actions.push(Action::Turn(op));
@@ -273,6 +275,7 @@ pub fn context_menu(
     doc: &Document,
     view: &ViewState,
     actions: &mut Vec<crate::app::actions::Action>,
+    km: &crate::keymap::Keymap,
 ) {
     use crate::app::actions::Action;
     let items = view
@@ -284,7 +287,10 @@ pub fn context_menu(
     if items {
         ui.separator();
         if ui
-            .button("Save selection as assembly…  Ctrl+Shift+S")
+            .button(match km.label(crate::keymap::Cmd::SaveAssembly) {
+                k if k.is_empty() => "Save selection as assembly…".to_string(),
+                k => format!("Save selection as assembly…  {k}"),
+            })
             .clicked()
         {
             actions.push(Action::OpenSaveAssembly);

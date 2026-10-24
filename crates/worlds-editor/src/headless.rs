@@ -65,6 +65,9 @@ pub struct ScreenshotOptions {
     pub recover_conflicts: bool,
     /// `--recover-report <file>`.
     pub recover_report: Option<PathBuf>,
+    /// The user's preferences file, read but never written (`None`, the
+    /// default and what tests use: the default shortcuts).
+    pub preferences: Option<PathBuf>,
 }
 
 impl ScreenshotOptions {
@@ -93,6 +96,7 @@ impl ScreenshotOptions {
             recover: None,
             recover_conflicts: false,
             recover_report: None,
+            preferences: None,
         }
     }
 }
@@ -446,6 +450,8 @@ pub fn screenshot(opts: &ScreenshotOptions) -> anyhow::Result<Report> {
             recover: opts.recover,
             recover_conflicts: opts.recover_conflicts,
             recover_report: opts.recover_report.clone(),
+            preferences: opts.preferences.clone(),
+            preferences_read_only: true,
         },
     );
     app.set_commands(Box::new(crate::edit::Editing::new()));

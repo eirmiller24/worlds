@@ -106,6 +106,10 @@ Shipped: `layout` in [format.md](format.md#world-layouts) (the lattice check is 
 
 Shipped: one thumbnail system for levels and assemblies (`src/thumbs/`, one cache shared by the Library, the Levels pane and every map tab, levels in memory keyed per level, assemblies in `.worlds/thumbs/`) and levels drawn as their thumbnails on the map below 4 screen px per cell, void transparent, names on top, in the [editor README](../crates/worlds-editor/README.md#thumbnails); the threading note and the viewport section of [DESIGN.md](DESIGN.md) now describe it.
 
+### 3.11 Preferences and remappable shortcuts
+
+Shipped: one keymap for every shortcut (`src/keymap.rs`: command ids, default chords, contexts, conflicts; tooltips and the command palette read it), the Preferences window with its Shortcuts table, and the per-user `preferences.json` (only non-default bindings, `WORLDS_CONFIG_DIR` to override) in the [editor README](../crates/worlds-editor/README.md#preferences).
+
 ## Phase 4: content and the game loop
 
 ### 4.1 Non-rectangular levels

@@ -22,6 +22,7 @@ pub mod levels;
 pub mod note_inspector;
 pub mod notes;
 pub mod panels;
+pub mod preferences;
 pub mod problems;
 pub mod project_pane;
 pub mod recovery;
@@ -526,6 +527,9 @@ pub struct EditorState {
     /// Every thumbnail (assemblies, levels): the Library, the Levels pane
     /// and the zoomed-out map share it ([`crate::thumbs`]).
     pub thumbs: crate::thumbs::Thumbs,
+    /// The shortcuts as the user has them ([`crate::keymap`]): what a key
+    /// press means, and what tooltips print.
+    pub keymap: crate::keymap::Keymap,
 }
 
 impl Default for EditorState {
@@ -564,6 +568,7 @@ impl Default for EditorState {
             library: crate::library::LibraryState::default(),
             levels: levels::LevelsState::default(),
             thumbs: crate::thumbs::Thumbs::default(),
+            keymap: crate::keymap::Keymap::defaults(),
         }
     }
 }
@@ -642,6 +647,12 @@ pub struct AppOptions {
     pub recover_conflicts: bool,
     /// `--recover-report <file>`: write what was found as JSON.
     pub recover_report: Option<PathBuf>,
+    /// The user's preferences file ([`crate::prefs`]; the binary passes
+    /// [`crate::prefs::default_path`]). `None` (tests, the default): the
+    /// default shortcuts and nothing read or written.
+    pub preferences: Option<PathBuf>,
+    /// Read the preferences file but never write it (`--screenshot`).
+    pub preferences_read_only: bool,
 }
 
 impl AppOptions {
@@ -870,6 +881,10 @@ pub struct EditorApp {
     link_prev: Option<[Camera; 2]>,
     /// Where the toolbar's ★ was drawn (the bookmark window hangs from it).
     bookmarks_anchor: Option<egui::Rect>,
+    /// The preferences file ([`crate::prefs`]).
+    prefs: crate::prefs::Store,
+    /// The Preferences window ([`preferences`]).
+    prefs_win: preferences::PrefsWindow,
 }
 
 impl EditorApp {
@@ -890,13 +905,18 @@ impl EditorApp {
             thumbs.headless = true;
             thumbs.budget = crate::thumbs::Budget::UNLIMITED;
         }
+        let (prefs, keymap) =
+            crate::prefs::Store::load(opts.preferences.clone(), opts.preferences_read_only);
         EditorApp {
             st: EditorState {
                 viewport,
                 log,
                 thumbs,
+                keymap,
                 ..Default::default()
             },
+            prefs,
+            prefs_win: preferences::PrefsWindow::default(),
             problems,
             dock: default_dock(),
             gpu,
@@ -1344,6 +1364,7 @@ impl EditorApp {
             UiStep::SaveAssembly(s) => self.save_assembly_step(s),
             UiStep::Library(l) => self.library_step(l),
             UiStep::Levels(l) => self.levels_step(l),
+            UiStep::Preferences(p) => self.preferences_step(p),
         }
     }
 
@@ -2525,6 +2546,11 @@ impl EditorApp {
         if let Some(doc) = &self.st.doc {
             self.st.view.sync_world(doc);
         }
+        // A rebind in the Preferences window takes the key press before
+        // the prompts and the shortcuts can.
+        if self.prefs_win.take_capture(&ctx, &mut self.st.keymap) {
+            self.save_preferences();
+        }
         self.modal_keys = modal_keys(&ctx, self.top_modal());
         self.shortcuts(&ctx);
 
@@ -2598,6 +2624,7 @@ impl EditorApp {
         self.sync_linked_cameras();
         self.bookmarks_window(&ctx);
         self.command_palette(&ctx);
+        self.preferences_window(&ctx);
         self.recovery_window(&ctx);
         self.locked_window(&ctx);
         self.reload_prompt(&ctx);
@@ -3443,130 +3470,33 @@ impl EditorApp {
         doc.start_bakes(move || ctx.request_repaint());
     }
 
+    /// This frame's shortcut presses, as actions. Which command a press
+    /// means is the keymap's call ([`crate::keymap::Keymap::take`]); this
+    /// only says which contexts are live right now.
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        use egui::{Key, Modifiers};
-        let mut acts = Vec::new();
+        use crate::keymap::Context;
         let on_map = !ctx.egui_wants_keyboard_input() && !self.palette.open;
         let turnable = self.turnable().is_some();
-        ctx.input_mut(|i| {
-            let cmd = Modifiers::COMMAND;
-            if i.consume_key(cmd, Key::P) {
-                acts.push(Action::CommandPalette);
-            }
-            if i.consume_key(cmd, Key::O) {
-                acts.push(Action::OpenDialog);
-            }
-            if i.consume_key(cmd, Key::R) || i.consume_key(Modifiers::NONE, Key::F5) {
-                acts.push(Action::Reload);
-            }
-            // Before Ctrl+S, which a held Shift would also match.
-            if on_map && i.consume_key(cmd | Modifiers::SHIFT, Key::S) {
-                acts.push(Action::OpenSaveAssembly);
-            }
-            if i.consume_key(cmd, Key::S) {
-                acts.push(Action::Save);
-            }
-            if i.consume_key(cmd | Modifiers::SHIFT, Key::Z) || i.consume_key(cmd, Key::Y) {
-                acts.push(Action::Redo);
-            }
-            if i.consume_key(cmd, Key::Z) {
-                acts.push(Action::Undo);
-            }
-            if i.consume_key(cmd | Modifiers::SHIFT, Key::G) {
-                acts.push(Action::UngroupSelection);
-            }
-            // Ctrl+G groups (as in Figma or Illustrator); the grid toggle
-            // is Ctrl+M (m for map), so one key never means two things.
-            if i.consume_key(cmd, Key::G) {
-                acts.push(Action::GroupSelection);
-            }
-            if i.consume_key(cmd, Key::M) {
-                acts.push(Action::ToggleGrid);
-            }
-            if i.consume_key(cmd, Key::F) {
-                acts.push(Action::ShowFind);
-            }
-            for (n, k) in [
-                Key::Num1,
-                Key::Num2,
-                Key::Num3,
-                Key::Num4,
-                Key::Num5,
-                Key::Num6,
-                Key::Num7,
-                Key::Num8,
-                Key::Num9,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                if i.consume_key(cmd | Modifiers::SHIFT, k) {
-                    acts.push(Action::JumpBookmark(n));
-                }
-            }
-            if i.consume_key(cmd, Key::L) {
-                acts.push(Action::ShowLevels);
-            }
-        });
-        if !ctx.egui_wants_keyboard_input() && !self.palette.open {
-            ctx.input_mut(|i| {
-                use egui::Modifiers as M;
-                // With a paste ghost or a tile stamp to turn, X and Y
-                // mirror it and R rotates it (instead of the Rectangle
-                // mode).
-                if turnable {
-                    for (key, op) in [
-                        (Key::X, worlds_core::Flip::X),
-                        (Key::Y, worlds_core::Flip::Y),
-                        (Key::R, worlds_core::Flip::XT),
-                    ] {
-                        if i.consume_key(M::NONE, key) {
-                            acts.push(Action::Turn(op));
-                        }
-                    }
-                }
-                for t in Tool::ALL {
-                    if let Some(k) = t.key()
-                        && i.consume_key(M::NONE, k)
-                    {
-                        acts.push(Action::SetTool(t));
-                    }
-                }
-                if i.consume_key(M::NONE, Key::P) {
-                    acts.push(Action::PaintTool);
-                }
-                if i.consume_key(M::SHIFT, Key::F) || i.consume_key(M::NONE, Key::Home) {
-                    acts.push(Action::FitWorld);
-                }
-                if i.consume_key(M::NONE, Key::F) {
-                    acts.push(Action::FitLevel);
-                }
-                if i.consume_key(M::NONE, Key::PageDown) {
-                    acts.push(Action::NextLevel);
-                }
-                if i.consume_key(M::NONE, Key::PageUp) {
-                    acts.push(Action::PrevLevel);
-                }
-                if i.consume_key(M::NONE, Key::Plus) || i.consume_key(M::NONE, Key::Equals) {
-                    acts.push(Action::ZoomIn);
-                }
-                if i.consume_key(M::NONE, Key::Minus) {
-                    acts.push(Action::ZoomOut);
-                }
-                if i.consume_key(M::NONE, Key::Num1) {
-                    acts.push(Action::ZoomActual);
-                }
-                if i.consume_key(M::NONE, Key::Delete) {
-                    acts.push(actions::delete_action(&self.st.view));
-                }
-                if i.consume_key(M::COMMAND, Key::D) {
-                    acts.push(Action::DuplicateSelection);
-                }
-                if i.consume_key(M::COMMAND, Key::A) {
-                    acts.push(Action::SelectAll);
-                }
-                // The clipboard keys arrive as events, not keys (the
-                // windowing layer reads the system clipboard for a paste).
+        let view = &self.st.view;
+        let selection = !view.selection.is_empty();
+        let entity_tool = view.tool == Tool::Entity;
+        let drawing = view.drawing.as_ref().is_some_and(|d| !d.done);
+        let active = |c: Context| match c {
+            Context::Global => true,
+            Context::Map => on_map,
+            Context::Turn => on_map && turnable,
+            Context::Selection => on_map && selection,
+            Context::EntityTool => on_map && entity_tool,
+            Context::Drawing => on_map && drawing,
+        };
+        let km = &self.st.keymap;
+        let cmds = ctx.input_mut(|i| km.take(i, active));
+        let mut acts: Vec<Action> = cmds.into_iter().map(|c| c.action(view)).collect();
+        if on_map {
+            // The clipboard keys arrive as events, not keys (the windowing
+            // layer reads the system clipboard for a paste), so they are
+            // fixed: see the keymap's module docs.
+            ctx.input(|i| {
                 for e in &i.events {
                     match e {
                         egui::Event::Copy => acts.push(Action::Copy),
@@ -3576,32 +3506,6 @@ impl EditorApp {
                             in_place: i.modifiers.shift,
                         }),
                         _ => {}
-                    }
-                }
-                if !self.st.view.selection.is_empty() {
-                    for (key, d) in [
-                        (Key::ArrowLeft, [-1, 0]),
-                        (Key::ArrowRight, [1, 0]),
-                        (Key::ArrowUp, [0, -1]),
-                        (Key::ArrowDown, [0, 1]),
-                    ] {
-                        if i.consume_key(M::NONE, key) {
-                            acts.push(Action::Nudge { d, pixel: false });
-                        }
-                        if i.consume_key(M::SHIFT, key) {
-                            acts.push(Action::Nudge { d, pixel: true });
-                        }
-                    }
-                }
-                if self.st.view.tool == Tool::Entity && i.consume_key(M::NONE, Key::Enter) {
-                    acts.push(Action::PlaceEntity);
-                }
-                if self.st.view.drawing.as_ref().is_some_and(|d| !d.done) {
-                    if i.consume_key(M::NONE, Key::Enter) {
-                        acts.push(Action::FinishDrawing);
-                    }
-                    if i.consume_key(M::NONE, Key::Backspace) {
-                        acts.push(Action::DrawingBackspace);
                     }
                 }
             });
@@ -3637,6 +3541,7 @@ impl EditorApp {
                 self.dialog = Some(rx);
             }
             Action::Reload => self.reload(),
+            Action::OpenPreferences => self.prefs_win.show(),
             Action::Save => {
                 let _ = self.save();
             }
@@ -3981,6 +3886,10 @@ impl EditorApp {
         let can_redo = self.commands.can_redo();
         let dirty = self.commands.has_unsaved();
         let open = self.st.doc.is_some();
+        // The keys as the user has them ([`crate::keymap`]).
+        use crate::keymap::Cmd;
+        let km = &self.st.keymap;
+        let k = |c: Cmd| km.label(c);
         let entry = |ui: &mut egui::Ui, enabled: bool, label: String, key: &str| -> bool {
             ui.add_enabled(
                 enabled,
@@ -3991,14 +3900,14 @@ impl EditorApp {
             .clicked()
         };
         let mut acts = Vec::new();
-        ui.menu_button(egui::RichText::new("Worlds").strong(), |ui| {
-            if entry(ui, true, "Open project…".into(), "Ctrl+O") {
+        let menu = ui.menu_button(egui::RichText::new("Worlds").strong(), |ui| {
+            if entry(ui, true, "Open project…".into(), &k(Cmd::Open)) {
                 acts.push(Action::OpenDialog);
             }
             if entry(ui, open, "Import from Worlds project…".into(), "") {
                 acts.push(Action::ImportProject);
             }
-            if entry(ui, open, "Reload from disk".into(), "Ctrl+R") {
+            if entry(ui, open, "Reload from disk".into(), &k(Cmd::Reload)) {
                 acts.push(Action::Reload);
             }
             if entry(
@@ -4009,7 +3918,7 @@ impl EditorApp {
                 } else {
                     "Save".into()
                 },
-                "Ctrl+S",
+                &k(Cmd::Save),
             ) {
                 acts.push(Action::Save);
             }
@@ -4019,24 +3928,35 @@ impl EditorApp {
                 None if can_undo => "Undo the stroke in progress".into(),
                 None => "Undo".into(),
             };
-            if entry(ui, can_undo, undo_label, "Ctrl+Z") {
+            if entry(ui, can_undo, undo_label, &k(Cmd::Undo)) {
                 acts.push(Action::Undo);
             }
             let redo_label = match &redo {
                 Some(l) => format!("Redo {l}"),
                 None => "Redo".into(),
             };
-            if entry(ui, can_redo, redo_label, "Ctrl+Shift+Z") {
+            if entry(ui, can_redo, redo_label, &k(Cmd::Redo)) {
                 acts.push(Action::Redo);
             }
             ui.separator();
-            if entry(ui, true, "Commands…".into(), "Ctrl+P") {
+            if entry(ui, true, "Commands…".into(), &k(Cmd::CommandPalette)) {
                 acts.push(Action::CommandPalette);
+            }
+            ui.separator();
+            let r = ui.add(
+                egui::Button::new("Preferences…")
+                    .shortcut_text(k(Cmd::Preferences))
+                    .min_size(egui::vec2(260.0, 0.0)),
+            );
+            fields::mark(ui, "menu:preferences", r.rect);
+            if r.clicked() {
+                acts.push(Action::OpenPreferences);
             }
             if !acts.is_empty() {
                 ui.close();
             }
         });
+        fields::mark(ui, "menu:worlds", menu.response.rect);
         self.st.actions.extend(acts);
     }
 
@@ -4050,25 +3970,34 @@ impl EditorApp {
                 self.bookmarks_button(ui);
                 ui.separator();
             }
+            use crate::keymap::Cmd;
+            let km = &self.st.keymap;
             for b in ToolButton::ALL {
                 let sel = b.shows(self.st.view.tool);
                 let (name, tip, act) = match b {
                     ToolButton::Paint => (
                         "Paint",
                         format!(
-                            "Paint (P): {} now; Brush (B), Line (L), Rectangle (R), Fill (G)",
-                            self.st.view.paint_tool().name()
+                            "{}: {} now; {}",
+                            km.hint("Paint", Cmd::PaintTool),
+                            self.st.view.paint_tool().name(),
+                            Tool::PAINT_MODES
+                                .map(|t| km.hint(t.name(), Cmd::Tool(t)))
+                                .join(", ")
                         ),
                         Action::PaintTool,
                     ),
                     ToolButton::Tool(Tool::Hand) => (
                         "Hand",
-                        "Hand: drag to pan (hold Space for it with any tool)".into(),
+                        format!(
+                            "{}: drag to pan (hold Space for it with any tool)",
+                            km.hint("Hand", Cmd::Tool(Tool::Hand))
+                        ),
                         Action::SetTool(Tool::Hand),
                     ),
                     ToolButton::Tool(t) => (
                         t.name(),
-                        format!("{} ({})", t.name(), t.shortcut()),
+                        km.hint(t.name(), Cmd::Tool(t)),
                         Action::SetTool(t),
                     ),
                 };
@@ -4195,8 +4124,11 @@ impl EditorApp {
         if !self.palette.open {
             return;
         }
-        let mut catalog = Action::catalog();
-        catalog.extend(actions::bookmark_entries(&self.st.view.bookmarks));
+        let mut catalog = Action::catalog(&self.st.keymap);
+        catalog.extend(actions::bookmark_entries(
+            &self.st.view.bookmarks,
+            &self.st.keymap,
+        ));
         let mut hits: Vec<(i32, usize)> = catalog
             .iter()
             .enumerate()
@@ -4251,7 +4183,7 @@ impl EditorApp {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        ui.weak(*key);
+                                        ui.weak(key.as_str());
                                     },
                                 );
                                 r
@@ -4813,6 +4745,7 @@ impl TabViewer for Tabs<'_> {
                     atlas: Some(&st.atlas),
                     focused,
                     thumbs: Some(&mut st.thumbs),
+                    keymap: &st.keymap,
                 };
                 st.viewport.ui(ui, &mut cx);
                 let f = st.view.focused;
