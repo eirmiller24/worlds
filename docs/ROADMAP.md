@@ -20,15 +20,7 @@ Shipped. The spec now lives in [format.md](format.md) (`project.json` `worlds`, 
 
 ### 1.2 Multiple viewport tabs
 
-**What.** Open any number of map views as dock tabs (or side by side). Each tab looks at one world at its own camera position and active level: the overworld in one tab, the dungeon in another, or two ends of the same world. Dragging a tab out of the center splits the view.
-
-**Format.** Nothing on disk in the project. `.worlds/ui.json` stores the tabs: `viewports: [{ id, world, camera, active_level }]` and which one is focused.
-
-**Editor.** `Pane::Viewport` becomes `Pane::Viewport(ViewportId)`. Per tab: camera, world, active level, selection framing. Global (shared by every tab): tool, Paint mode, brush, active layer, layer visibility, lock and opacity, annotation visibility, selection. The focused tab is where keyboard shortcuts and single-key tools apply; the status bar reads from the tab under the pointer. "New viewport" and "Duplicate viewport" in the command palette and the tab's context menu; closing the last tab is refused. The GPU chunk cache is camera-independent and shared, so the cost of a second tab is one more set of draw calls. Optional: "Link cameras" between two tabs (same zoom and relative pan) for comparing areas.
-
-**API / MCP.** `view.focus`, `view.select` and `view.snapshot` take an optional `viewport` (id); default is the focused tab. `view.list_viewports`. `view.open_viewport { world, focus? }` returns the id. MCP `screenshot` takes the same optional argument; `focus` opens nothing on its own.
-
-**Decisions.** Tool, brush and active layer are global so switching tabs never changes what the next click paints (the Blender and Photoshop convention). Selection is global so a copy in one tab and a paste in another work (2.1). Camera bookmarks (3.6) are the natural companion.
+Shipped: the editor README's "Map tabs and bookmarks" (per-tab camera, world and level; focus, New / Duplicate / Close, Link cameras, `ui.json` `viewports`), `view.list_viewports`, `view.open_viewport` and the `viewport` argument of `view.focus`, `view.select` and `view.snapshot` in [api.md](api.md#view), MCP `screenshot`'s `viewport` in [mcp.md](mcp.md#screenshot).
 
 ### 1.3 Import from another Worlds project
 
@@ -133,7 +125,7 @@ Shipped: the editor README's Wheel row (steps 1/256 to 16, fits below them) and 
 
 ### 3.6 Camera bookmarks
 
-**What.** Save the current view (world, camera) under a name and jump back to it from the command palette, a list in the Levels pane, or Ctrl+Shift+1..9. Per project, in `.worlds/ui.json` (view state, not design intent; a shared landmark is a pin).
+Shipped: the editor README's "Map tabs and bookmarks" (the toolbar's ★ list, the command palette, Ctrl+Shift+1..9, `ui.json` `bookmarks`, the `"ui": "bookmark"` script step).
 
 ### 3.7 Connectors between rooms
 
