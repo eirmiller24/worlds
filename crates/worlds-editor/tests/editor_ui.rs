@@ -1,7 +1,8 @@
 //! The editor's own UI driven offscreen through the real app (keys, clicks,
 //! frames): a note's title takes the keyboard when the Note tool adds it, so
 //! typing never fires tool shortcuts; the Paint and Note strips never cover
-//! the active level's name tab; zoomed out, every level shows its name.
+//! the active level's name tab; zoomed out, every level shows its name;
+//! the `vertex` and connector script gestures edit geometry.
 //! Need a GPU (or a software driver), so they only run with
 //! `WORLDS_GPU_TESTS=1`. They work on temp copies of the `game` fixture.
 
@@ -346,4 +347,75 @@ fn rules_pane_renames_a_rule_inline() {
     keep(&r.hl, "ui_rules_renamed.png");
     r.steps(r#"[{ "undo": 1 }]"#);
     assert_eq!(slugs(&r), before);
+}
+
+/// Geometry editing and connectors through the real app and `--script`:
+/// the `vertex` gesture drags a path's point, Alt+clicks a new one in and
+/// deletes it again; a `note` gesture of kind
+/// `connector` joins two rooms through a waypoint. Pictures (with
+/// `WORLDS_TEST_OUT`): `geometry_handles.png` (the path selected, its
+/// handles), `geometry_connector.png` (the connector selected).
+#[test]
+fn vertex_and_connector_script_gestures() {
+    if !gpu_tests() {
+        return;
+    }
+    let mut r = Rig::new([1280, 800]);
+    r.steps(
+        r#"[
+          { "op": "add_note", "scope": { "world": "main" },
+            "note": { "id": "pathgeoaaa", "kind": "path", "title": "Route",
+                      "points": [[2100, -1200], [2400, -1000], [2600, -1200]] } },
+          { "ui": "focus", "world_rect": [1900, -1500, 2700, 1100] }
+        ]"#,
+    );
+    let points = |r: &Rig| {
+        let doc = r.app.document().unwrap();
+        let id = worlds_core::Id::new("pathgeoaaa").unwrap();
+        worlds_editor::annot::find_note(doc, &id)
+            .unwrap()
+            .note
+            .shape
+            .points()
+    };
+    r.steps(r#"[{ "gesture": "vertex", "note": "pathgeoaaa", "vertex": 1, "world_px": [[2400, -900]] }]"#);
+    assert_eq!(points(&r), [[2100, -1200], [2400, -896], [2600, -1200]]);
+    r.steps(r#"[{ "gesture": "vertex", "note": "pathgeoaaa", "insert": [2250, -1048] }]"#);
+    assert_eq!(
+        points(&r),
+        [[2100, -1200], [2256, -1056], [2400, -896], [2600, -1200]]
+    );
+    keep(&r.hl, "geometry_handles.png");
+    r.steps(r#"[{ "gesture": "vertex", "note": "pathgeoaaa", "vertex": 1, "delete": true }]"#);
+    assert_eq!(points(&r), [[2100, -1200], [2400, -896], [2600, -1200]]);
+    r.steps(
+        r#"[{ "gesture": "note", "kind": "connector",
+              "world_px": [[2100, -900], [3136, -1400], [4400, -600]] }]"#,
+    );
+    let doc = r.app.document().unwrap();
+    let c = worlds_editor::annot::all_notes(doc)
+        .into_iter()
+        .find(|n| matches!(n.note.shape, worlds_core::Shape::Connector { .. }))
+        .expect("a connector");
+    let worlds_core::Shape::Connector {
+        from,
+        to,
+        waypoints,
+        ..
+    } = &c.note.shape
+    else {
+        unreachable!()
+    };
+    assert_eq!(*waypoints, [[3136, -1408]]);
+    assert_eq!(
+        worlds_editor::annot::end_level(doc, from),
+        doc.level_ix("level_1")
+    );
+    assert_eq!(
+        worlds_editor::annot::end_level(doc, to),
+        doc.level_ix("level_4")
+    );
+    let id = c.note.id.to_string();
+    r.steps(&format!(r#"[{{ "ui": "select", "notes": ["{id}"] }}]"#));
+    keep(&r.hl, "geometry_connector.png");
 }

@@ -372,3 +372,55 @@ fn world_json_is_a_resource() {
         assert!(e.read_resource(bad).is_err(), "{bad}");
     }
 }
+
+/// add_note makes a connector (geometry from, to, waypoints; its label and
+/// style); list_notes lists it by default; update_note changes its ends,
+/// label and style; the per-kind arguments are refused on other kinds.
+#[test]
+fn connectors_through_the_tools() {
+    let (_t, dir) = setup();
+    let mut e = engine(&dir, true);
+    let r = ok(
+        &mut e,
+        "add_note",
+        json!({ "scope": { "world": "main" }, "kind": "connector",
+            "geometry": { "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" },
+                          "waypoints": [[360, 40]] },
+            "text": "Back up", "connector_label": "needs double jump", "style": "double" }),
+    );
+    assert_eq!(r["undo_label"], "Agent: add_note connector in world main");
+    let cid = r["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        world_note(&dir, &cid),
+        json!({ "id": cid, "kind": "connector", "title": "Back up", "label": "needs double jump",
+                "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" },
+                "waypoints": [[360, 40]], "style": "double" })
+    );
+    let l = ok(&mut e, "list_notes", json!({}));
+    assert!(ids(&l).contains(&cid), "{l}");
+    ok(
+        &mut e,
+        "update_note",
+        json!({ "id": cid, "patch": { "geometry": { "to": { "level": "shaft" } },
+            "connector_label": null, "style": "line" } }),
+    );
+    let n = world_note(&dir, &cid);
+    assert_eq!(n["to"], json!({ "level": "shaft" }));
+    assert_eq!(n["waypoints"], json!([[360, 40]]));
+    assert_eq!(n.get("label"), None);
+    assert_eq!(n["style"], "line");
+    let msg = err(
+        &mut e,
+        "add_note",
+        json!({ "scope": { "world": "main" }, "kind": "path", "geometry": { "points": [[0, 0], [9, 9]] },
+            "text": "x", "style": "double" }),
+    );
+    assert!(msg.contains("style is only for a connector"), "{msg}");
+    let msg = err(
+        &mut e,
+        "add_note",
+        json!({ "scope": { "world": "main" }, "kind": "connector",
+            "geometry": { "from": { "level": "crevasse" }, "points": [[0, 0]] }, "text": "x" }),
+    );
+    assert!(msg.contains("don't go with px, points or rect"), "{msg}");
+}
