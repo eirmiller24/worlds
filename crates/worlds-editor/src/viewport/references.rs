@@ -278,6 +278,7 @@ fn load(doc: &Document, path: &str, max: u32) -> Option<image::RgbaImage> {
 /// Make sure every visible reference's image is loaded, write this frame's
 /// quads and draws into `vg`'s slot `slot` (this tab's), and note image sizes in `view` (for hit
 /// tests). With the pseudo-layer hidden there are no draws.
+#[allow(clippy::too_many_arguments)]
 pub fn sync(
     vg: &mut ViewportGpu,
     gpu: &Gpu,
