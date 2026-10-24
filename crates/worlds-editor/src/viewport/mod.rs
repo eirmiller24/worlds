@@ -749,6 +749,21 @@ impl Viewport {
                 draw_grid(&painter, &level_wrect(doc, ix), &view, g, &to_screen);
             }
         }
+        // A grid-vania world: its lattice, from the world origin.
+        if let Some(cell) = doc
+            .project
+            .worlds
+            .get(cx.view.world_ix(doc))
+            .and_then(|w| w.layout.lattice(doc.project.grid_size))
+        {
+            draw_lattice(
+                &painter,
+                &view,
+                [cell[0] as f64, cell[1] as f64],
+                cam.zoom,
+                &to_screen,
+            );
+        }
         let outline = Stroke::new(1.0, Color32::from_black_alpha(160));
         // A level's outline: its box, or the polygon of a non-rectangular
         // level's cells.
@@ -3826,6 +3841,40 @@ fn draw_grid(
         y += g;
     }
 }
+
+/// A grid-vania world's lattice over the visible rect: lines every `cell`
+/// world px from the origin, every 2nd, 4th, ... when cells are under
+/// [`LATTICE_MIN_PX`] screen px apart.
+fn draw_lattice(
+    painter: &egui::Painter,
+    visible: &WRect,
+    cell: [f64; 2],
+    zoom: f64,
+    to_screen: &dyn Fn([f64; 2]) -> Pos2,
+) {
+    let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 170, 255, 70));
+    for axis in 0..2 {
+        let mut step = cell[axis].max(1.0);
+        while step * zoom < LATTICE_MIN_PX {
+            step *= 2.0;
+        }
+        let (lo, hi) = (visible.min[axis], visible.max[axis]);
+        let (olo, ohi) = (visible.min[1 - axis], visible.max[1 - axis]);
+        let mut v = (lo / step).ceil() * step;
+        while v <= hi {
+            let (a, b) = if axis == 0 {
+                ([v, olo], [v, ohi])
+            } else {
+                ([olo, v], [ohi, v])
+            };
+            painter.line_segment([to_screen(a), to_screen(b)], stroke);
+            v += step;
+        }
+    }
+}
+
+/// The least screen distance between two lattice lines drawn.
+const LATTICE_MIN_PX: f64 = 12.0;
 
 #[cfg(test)]
 mod label_tests {

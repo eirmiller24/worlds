@@ -128,6 +128,9 @@ pub struct ProjectState {
     pub follow: Option<Follow>,
     confirm: Option<Confirm>,
     picker: Option<(Receiver<Option<PathBuf>>, PickFor)>,
+    /// The Worlds part's Layout being edited: the world and the gap and
+    /// cell as typed, sent when a field is left.
+    pub layout: Option<(Slug, worlds_core::WorldLayout)>,
     /// Where parts of the pane were drawn last frame (tests), by key.
     #[doc(hidden)]
     pub rects: HashMap<String, egui::Rect>,

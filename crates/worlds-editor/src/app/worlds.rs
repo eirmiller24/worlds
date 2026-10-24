@@ -389,6 +389,114 @@ pub fn section(
                 ui.end_row();
             }
         });
+    ui.add_space(8.0);
+    layout_section(ui, doc, view, ps);
+}
+
+/// The Worlds part's Layout of the world shown: the mode (Free,
+/// Horizontal, Vertical, Grid vania), a strip's gap and the lattice cell.
+/// A mode is set at once; the gap and the cell when their field is left.
+/// Each is one `set_world_layout` entry.
+fn layout_section(ui: &mut egui::Ui, doc: &Document, view: &ViewState, ps: &mut ProjectState) {
+    use worlds_core::{LayoutMode, WorldLayout};
+    let w = &doc.project.worlds[view.world_ix(doc)];
+    ui.label(RichText::new(format!("Layout of {}", world_label(w))).strong());
+    // The fields edit a copy until they are left.
+    let fresh = ps.layout.as_ref().is_none_or(|(s, _)| *s != w.slug);
+    if fresh {
+        ps.layout = Some((w.slug.clone(), w.layout.clone()));
+    }
+    let Some((_, edit)) = ps.layout.as_mut() else {
+        return;
+    };
+    let grid = doc.project.grid_size;
+    let send = |layout: WorldLayout, pending: &mut Vec<Command>| {
+        pending.push(Command::SetWorldLayout {
+            world: w.slug.clone(),
+            layout,
+            restore: false,
+        });
+    };
+    let mut out = None;
+    egui::Grid::new("world layout")
+        .num_columns(2)
+        .show(ui, |ui| {
+            ui.label("Mode");
+            let c = egui::ComboBox::from_id_salt("world layout mode")
+                .selected_text(w.layout.mode.label())
+                .show_ui(ui, |ui| {
+                    for m in LayoutMode::ALL {
+                        if ui.selectable_label(w.layout.mode == m, m.label()).clicked()
+                            && m != w.layout.mode
+                        {
+                            let mut l = w.layout.clone();
+                            l.mode = m;
+                            out = Some(l);
+                        }
+                    }
+                });
+            ps.rects.insert("layout:mode".into(), c.response.rect);
+            ui.end_row();
+            ui.label("Gap")
+                .on_hover_text("Strips: pixels between neighbours");
+            let mut gap = edit.gap.unwrap_or(0);
+            let r = ui.add_enabled(
+                w.layout.is_strip(),
+                egui::DragValue::new(&mut gap)
+                    .range(0..=100_000)
+                    .suffix(" px"),
+            );
+            ps.rects.insert("layout:gap".into(), r.rect);
+            edit.gap = (gap > 0).then_some(gap);
+            if (r.lost_focus() || r.drag_stopped()) && edit.gap != w.layout.gap {
+                let mut l = w.layout.clone();
+                l.gap = edit.gap;
+                out = Some(l);
+            }
+            ui.end_row();
+            ui.label("Cell").on_hover_text(format!(
+                "Grid vania: the lattice cell in pixels, whole {grid} px cells"
+            ));
+            let mut cell = edit.cell.unwrap_or_else(|| w.layout.cell_px(grid));
+            let mut done = false;
+            ui.horizontal(|ui| {
+                for (k, key) in [(0, "layout:cell_w"), (1, "layout:cell_h")] {
+                    let r = ui.add_enabled(
+                        w.layout.mode == LayoutMode::GridVania,
+                        egui::DragValue::new(&mut cell[k])
+                            .range(grid.max(1)..=1_000_000)
+                            .speed(grid as f64)
+                            .suffix(" px"),
+                    );
+                    ps.rects.insert(key.into(), r.rect);
+                    done |= r.lost_focus() || r.drag_stopped();
+                }
+            });
+            let default = w.layout.cell_px(grid) == cell && w.layout.cell.is_none();
+            edit.cell = (!default).then_some(cell);
+            if done && edit.cell != w.layout.cell {
+                let mut l = w.layout.clone();
+                l.cell = edit.cell;
+                out = Some(l);
+            }
+            ui.end_row();
+        });
+    ui.weak(match w.layout.mode {
+        LayoutMode::Free => "Levels go where you put them.",
+        LayoutMode::Horizontal => {
+            "Levels sit left to right in the level order (Levels pane): reorder them there."
+        }
+        LayoutMode::Vertical => {
+            "Levels sit top to bottom in the level order (Levels pane): reorder them there."
+        }
+        LayoutMode::GridVania => {
+            "Levels snap to the lattice drawn on the map and must be whole cells."
+        }
+    });
+    if let Some(l) = out {
+        ps.layout = None;
+        send(l, &mut ps.pending);
+    }
 }
 
 #[cfg(test)]

@@ -1039,6 +1039,15 @@ impl Editing {
                     | Grab::InsertVertex => {
                         return;
                     }
+                    Grab::Level
+                        if let Some(why) = cx
+                            .doc
+                            .level_ix(level.slug.as_str())
+                            .and_then(|ix| crate::annot::strip_refusal(cx.doc, ix)) =>
+                    {
+                        cx.view.set_status(why, true);
+                        return;
+                    }
                     Grab::Level => (
                         Kind::MoveLevel {
                             px: level.world_px,

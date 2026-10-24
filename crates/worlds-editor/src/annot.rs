@@ -1082,7 +1082,63 @@ pub struct SnapHit {
 /// only, and (with guide snapping on or off) to the edges of the other
 /// levels of their world ([`crate::arrange::level_edges`]). Also returns
 /// what it snapped to.
+///
+/// In a grid-vania world a separate step then puts the moving levels'
+/// top-left corner on the lattice ([`lattice_delta`]); a snap (guide or
+/// level edge) on an axis the lattice moved is dropped.
 pub fn drag_delta(
+    doc: &Document,
+    view: &ViewState,
+    levels: &[LevelIx],
+    d_raw: [f64; 2],
+    pixel: bool,
+) -> ([i64; 2], Vec<SnapHit>) {
+    let (d, mut hits) = guide_delta(doc, view, levels, d_raw, pixel);
+    match lattice_delta(doc, levels, d) {
+        Some(l) => {
+            hits.retain(|h| l[h.axis] == d[h.axis]);
+            (l, hits)
+        }
+        None => (d, hits),
+    }
+}
+
+/// In a grid-vania world (that of the first of `levels`), the delta that
+/// puts the moving levels' top-left corner (the least `world_px`) on the
+/// nearest lattice point after moving by `d`; `None` in any other layout.
+pub fn lattice_delta(doc: &Document, levels: &[LevelIx], d: [i64; 2]) -> Option<[i64; 2]> {
+    let first = *levels.first()?;
+    let w = &doc.project.worlds[doc.levels[first].world];
+    w.layout.lattice(doc.project.grid_size)?;
+    let min = levels
+        .iter()
+        .map(|&ix| doc.level(ix).world_px)
+        .fold([i64::MAX, i64::MAX], |a, p| {
+            [a[0].min(p[0]), a[1].min(p[1])]
+        });
+    let to = w
+        .layout
+        .snap(doc.project.grid_size, [min[0] + d[0], min[1] + d[1]]);
+    Some([to[0] - min[0], to[1] - min[1]])
+}
+
+/// Why level `ix` can't be dragged or nudged: its world lays its levels
+/// out in a strip, in the level order.
+pub fn strip_refusal(doc: &Document, ix: LevelIx) -> Option<String> {
+    let w = &doc.project.worlds[doc.levels[ix].world];
+    w.layout.is_strip().then(|| {
+        format!(
+            "World {} has a {} layout: its levels sit in the level order. Reorder them in \
+             the Levels pane (Ctrl+L), or switch the layout to free in the Project pane",
+            w.slug,
+            w.layout.mode.name()
+        )
+    })
+}
+
+/// [`drag_delta`] before the layout's step: the grid (or pixels), the
+/// guides and the other levels' edges.
+fn guide_delta(
     doc: &Document,
     view: &ViewState,
     levels: &[LevelIx],
@@ -1238,6 +1294,9 @@ pub fn plan_move(
             });
         }
         for &ix in &r.levels {
+            if strip_refusal(doc, ix).is_some() {
+                continue;
+            }
             let l = doc.level(ix);
             commands.push(Command::MoveLevel {
                 world: doc.project.worlds[world_of(doc, ix)].slug.clone(),
@@ -1246,7 +1305,15 @@ pub fn plan_move(
             });
         }
     }
-    let n_levels = if d != [0, 0] { r.levels.len() } else { 0 };
+    let strip = r.levels.iter().find_map(|&ix| strip_refusal(doc, ix));
+    let n_levels = if d != [0, 0] {
+        r.levels
+            .iter()
+            .filter(|&&ix| strip_refusal(doc, ix).is_none())
+            .count()
+    } else {
+        0
+    };
     let one_entity = r.entities.first().map(|i| i.to_string());
     let one_note = r.notes.first().map(|n| n.note.id.to_string());
     let one_level = r.levels.first().map(|&ix| doc.level(ix).slug.to_string());
@@ -1262,7 +1329,7 @@ pub fn plan_move(
     Ok(MovePlan {
         commands,
         label,
-        left_alone: left_alone(&r),
+        left_alone: strip.or_else(|| left_alone(&r)),
         d,
         snaps,
         selection: shift_moved_tiles(doc, &view.selection.items, &moved),
@@ -1369,7 +1436,11 @@ pub fn plan_nudge(
         doc.project.grid_size as i64
     };
     let dp = [d[0] as i64 * step, d[1] as i64 * step];
+    let strip = r.levels.iter().find_map(|&ix| strip_refusal(doc, ix));
     for &ix in &r.levels {
+        if strip_refusal(doc, ix).is_some() {
+            continue;
+        }
         let l = doc.level(ix);
         commands.push(Command::MoveLevel {
             world: doc.project.worlds[world_of(doc, ix)].slug.clone(),
@@ -1409,7 +1480,7 @@ pub fn plan_nudge(
     Ok(NudgePlan {
         commands,
         label,
-        left_alone: left_alone(&r),
+        left_alone: strip.or_else(|| left_alone(&r)),
         selection: shift_moved_tiles(doc, &view.selection.items, &moved),
     })
 }

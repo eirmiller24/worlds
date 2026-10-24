@@ -4312,8 +4312,13 @@ impl EditorApp {
             vp.camera
                 .screen_to_world([vp.size_px[0] * 0.5, vp.size_px[1] * 0.5])
         });
-        let g = doc.project.grid_size.max(1) as f64;
-        let snap = |v: f64| ((v / g).floor() * g) as i64;
+        // On the project grid, or in a grid-vania world on the lattice
+        // cell under the point.
+        let w = &doc.project.worlds[self.st.view.world_ix(doc)];
+        let lattice = w.layout.lattice(doc.project.grid_size);
+        let gx = lattice.map_or(doc.project.grid_size, |c| c[0]).max(1) as f64;
+        let gy = lattice.map_or(doc.project.grid_size, |c| c[1]).max(1) as f64;
+        let snap = |v: f64, g: f64| ((v / g).floor() * g) as i64;
         let mut n = doc.levels.len() + 1;
         let slug = loop {
             let s = format!("level_{n}");
@@ -4324,7 +4329,7 @@ impl EditorApp {
         };
         self.new_level = Some(NewLevelDialog {
             world,
-            at: [snap(at[0]), snap(at[1])],
+            at: [snap(at[0], gx), snap(at[1], gy)],
             slug,
             error: None,
             just_opened: true,
@@ -4388,6 +4393,19 @@ impl EditorApp {
                 d.error = Some(e.to_string());
                 return;
             }
+        };
+        // A grid-vania world's levels are whole lattice cells.
+        let size = match doc
+            .project
+            .world(d.world.as_str())
+            .and_then(|w| w.layout.lattice(doc.project.grid_size))
+        {
+            Some(c) if c[0] % doc.project.grid_size == 0 && c[1] % doc.project.grid_size == 0 => {
+                let g = doc.project.grid_size.max(1);
+                let (cw, ch) = (c[0] / g, c[1] / g);
+                [size[0].div_ceil(cw) * cw, size[1].div_ceil(ch) * ch]
+            }
+            _ => size,
         };
         let mut level = Level::new(slug.clone(), slug.as_str(), size);
         level.world_px = d.at;
