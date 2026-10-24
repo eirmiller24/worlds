@@ -11,6 +11,7 @@ mod references;
 mod resize;
 mod rules;
 mod worlds;
+mod void;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -71,10 +72,16 @@ impl Project {
                 let size = self.layer_cells(&def, self.level_at(at));
                 check_rect(&def.slug, rect, size)?;
                 let v = value_index(&def, &value)?;
+                // A value never goes into the level's void (clearing does).
+                let void = (v != 0)
+                    .then(|| self.layer_void(&def, self.level_at(at)))
+                    .flatten();
                 let mut writes = BTreeMap::new();
                 for y in rect.y..rect.y + rect.h {
                     for x in rect.x..rect.x + rect.w {
-                        writes.insert((y, x), v);
+                        if !void_at(&void, size, x, y) {
+                            writes.insert((y, x), v);
+                        }
                     }
                 }
                 self.write_cells(level, def, writes, false)
@@ -91,7 +98,9 @@ impl Project {
                 let size = self.layer_cells(&def, self.level_at(la));
                 check_cell(&def.slug, [at[0] as i64, at[1] as i64], size)?;
                 let cells = self.grid_cells(la, &def, size)?;
-                let writes = flood(&cells, size, at, v);
+                // The level's void is a wall the fill doesn't cross.
+                let void = self.layer_void(&def, self.level_at(la));
+                let writes = flood(&cells, size, at, v, void.as_deref());
                 self.write_cells(level, def, writes, false)
             }
             ReplaceValue {
@@ -105,10 +114,13 @@ impl Project {
                 let la = self.find_level(&level)?;
                 let size = self.layer_cells(&def, self.level_at(la));
                 let cells = self.grid_cells(la, &def, size)?;
+                let void = (t != 0)
+                    .then(|| self.layer_void(&def, self.level_at(la)))
+                    .flatten();
                 let mut writes = BTreeMap::new();
                 if f != t {
                     for (i, &c) in cells.iter().enumerate() {
-                        if c == f {
+                        if c == f && !void.as_ref().is_some_and(|v| v[i]) {
                             let (x, y) = (i as u32 % size[0], i as u32 / size[0]);
                             writes.insert((y, x), t);
                         }
@@ -293,7 +305,10 @@ impl Project {
                 let size = self.layer_cells(def, self.level_at(at));
                 if !allow_outside {
                     check_cell(&layer, [cell[0] as i64, cell[1] as i64], size)?;
+                    self.check_not_void(def, at, &layer, cell)?;
                 }
+                let old_cell = self.level_at(at).entities[li].entities[ei].cell;
+                let old_void = self.entity_cell_void(&layer, at, old_cell);
                 let e = &mut self.level_at_mut(at).entities[li].entities[ei];
                 let old = (
                     std::mem::replace(&mut e.cell, cell),
@@ -308,8 +323,8 @@ impl Project {
                         cell: old.0,
                         offset_px: old.1,
                         // Put back where it was, even if a resize left
-                        // that outside.
-                        allow_outside: !cell_inside(old.0, size),
+                        // that outside (or a file put it in the void).
+                        allow_outside: !cell_inside(old.0, size) || old_void,
                     },
                     id,
                 ))
@@ -555,6 +570,11 @@ impl Project {
             } => self.add_reference(scope, reference, index),
             UpdateReference { id, reference } => self.update_reference(id, reference),
             RemoveReference { id } => self.remove_reference(id),
+            SetLevelVoid {
+                level,
+                void,
+                restore,
+            } => self.set_level_void(level, void, restore),
         }
     }
 
@@ -1054,6 +1074,13 @@ impl Project {
             }
         }
         level.normalize();
+        if !restore && level.has_void() {
+            // The shape is checked like `set_level_void`'s, and content
+            // that falls in the void is dropped (entities there refused).
+            void::check_void(level.size, &level.void)?;
+            self.check_entities_out_of(&level, &level.void)?;
+            self.clip_to_shape(&mut level);
+        }
         Ok(level)
     }
 
@@ -1287,6 +1314,15 @@ impl Project {
         let mut new = old.clone();
         new.size = size;
         new.world_px = [old.world_px[0] - shift_px[0], old.world_px[1] - shift_px[1]];
+        // Non-rectangular levels (ROADMAP 4.1): the void rects move with the
+        // content and are clipped to the new box; a rect left with no cells
+        // goes. Refused when no cell of the level would be left.
+        new.void = shift_void(&old.void, shift, size);
+        if !old.void.is_empty() && !crate::model::cell_mask_of(size, &new.void).contains(&true) {
+            return Err(CommandError::Invalid(format!(
+                "resizing level {level} to {size:?} leaves only void; pick another size or anchor"
+            )));
+        }
         // Shift in a layer's own cells; must be whole cells.
         let layer_shift = |def: &LayerDef| -> Result<[i64; 2]> {
             let lg = self.layer_grid(def) as i64;
@@ -1501,6 +1537,7 @@ impl Project {
         let size = self.layer_cells(def, self.level_at(at));
         if !allow_outside {
             check_cell(&layer, [entity.cell[0] as i64, entity.cell[1] as i64], size)?;
+            self.check_not_void(def, at, &layer, entity.cell)?;
         }
         if self.entity_def(entity.ty.as_str()).is_none() {
             return Err(CommandError::UnknownEntityType(entity.ty.clone()));
@@ -1551,11 +1588,14 @@ impl Project {
         let size = self
             .layer(layer.as_str())
             .map(|def| self.layer_cells(def, self.level_at(at)));
+        let cell = self.level_at(at).entities[li].entities[ei].cell;
+        let in_void = self.entity_cell_void(&layer, at, cell);
         let lvl = self.level_at_mut(at);
         let level = lvl.slug.clone();
         let entity = lvl.entities[li].entities.remove(ei);
-        // An entity a resize left outside must still come back on undo.
-        let allow_outside = size.is_none_or(|s| !cell_inside(entity.cell, s));
+        // An entity a resize left outside (or a file put in the void) must
+        // still come back on undo.
+        let allow_outside = size.is_none_or(|s| !cell_inside(entity.cell, s)) || in_void;
         if lvl.entities[li].entities.is_empty() && !keep_empty {
             lvl.entities.remove(li);
         }
@@ -1987,6 +2027,28 @@ fn shift_plane<P: Plane>(p: &P, def: &LayerDef, [sx, sy]: [i64; 2], ns: [u32; 2]
     out
 }
 
+/// Void rects moved by `shift` project cells and clipped to a `size` box;
+/// rects left empty are dropped.
+fn shift_void(void: &[Rect], shift: [i64; 2], size: [u32; 2]) -> Vec<Rect> {
+    void.iter()
+        .filter_map(|r| {
+            let x0 = (r.x as i64 + shift[0]).max(0);
+            let y0 = (r.y as i64 + shift[1]).max(0);
+            let x1 = (r.x as i64 + r.w as i64 + shift[0]).min(size[0] as i64);
+            let y1 = (r.y as i64 + r.h as i64 + shift[1]).min(size[1] as i64);
+            (x0 < x1 && y0 < y1)
+                .then(|| Rect::new(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
+        })
+        .collect()
+}
+
+/// Whether cell `[x, y]` of a `size` layer is marked in a void mask (see
+/// [`Project::layer_void`]); never without one.
+fn void_at(void: &Option<Vec<bool>>, size: [u32; 2], x: u32, y: u32) -> bool {
+    void.as_ref()
+        .is_some_and(|m| x < size[0] && m[(y * size[0] + x) as usize])
+}
+
 fn cell_inside(c: [i32; 2], size: [u32; 2]) -> bool {
     c[0] >= 0 && c[1] >= 0 && (c[0] as i64) < size[0] as i64 && (c[1] as i64) < size[1] as i64
 }
@@ -2016,16 +2078,25 @@ fn check_rect(layer: &Slug, r: Rect, size: [u32; 2]) -> Result<()> {
     )
 }
 
-/// Writes that set the 4-connected region of `at`'s value to `v`.
-fn flood(cells: &[u16], size: [u32; 2], at: [u32; 2], v: u16) -> BTreeMap<(u32, u32), u16> {
+/// Writes that set the 4-connected region of `at`'s value to `v`. Cells
+/// `void` marks are walls: never filled, never crossed (a fill starting in
+/// one writes nothing).
+fn flood(
+    cells: &[u16],
+    size: [u32; 2],
+    at: [u32; 2],
+    v: u16,
+    void: Option<&[bool]>,
+) -> BTreeMap<(u32, u32), u16> {
     let [w, h] = size;
     let idx = |x: u32, y: u32| (y * w + x) as usize;
     let from = cells[idx(at[0], at[1])];
     let mut out = BTreeMap::new();
-    if from == v {
+    if from == v || void.is_some_and(|m| m[idx(at[0], at[1])]) {
         return out;
     }
-    let mut seen = vec![false; cells.len()];
+    // Void cells start out seen, so the fill never enters them.
+    let mut seen = void.map_or_else(|| vec![false; cells.len()], <[bool]>::to_vec);
     let mut queue = VecDeque::from([at]);
     seen[idx(at[0], at[1])] = true;
     while let Some([x, y]) = queue.pop_front() {

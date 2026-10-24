@@ -152,6 +152,7 @@ fn commands_md_examples_apply_in_order() {
         "add_reference",
         "update_reference",
         "remove_reference",
+        "set_level_void",
     ];
     let missing: Vec<&str> = all.iter().copied().filter(|o| !ops.contains(*o)).collect();
     assert!(missing.is_empty(), "no example for {missing:?}");
