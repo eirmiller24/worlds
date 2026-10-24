@@ -61,6 +61,7 @@ pub fn validate(project: &Project) -> Vec<Problem> {
     v.rules();
     v.worlds();
     v.references();
+    v.assemblies();
     v.out
 }
 
@@ -1867,6 +1868,128 @@ impl<'a> Validator<'a> {
     }
 
     /// Empty tags and tags given twice in one list.
+    /// `assemblies/<slug>.json`: palette path and tags like an entity
+    /// type's, the project grid, and every layer, value, tileset and entity
+    /// type it names (placing it would skip what doesn't resolve).
+    fn assemblies(&mut self) {
+        let p = self.p;
+        for a in &p.assemblies {
+            let f = format!("assemblies/{}.json", a.slug);
+            if let Some(why) = a.category.as_deref().and_then(category_problem) {
+                self.push(
+                    &f,
+                    "category",
+                    format!("{why}; a category is a path like \"Rooms/Doorways\""),
+                );
+            }
+            self.tags(&f, "", &a.tags);
+            if a.grid_size != p.grid_size {
+                self.push(
+                    &f,
+                    "grid_size",
+                    format!(
+                        "{} px is not the project grid ({} px); placing it is refused",
+                        a.grid_size, p.grid_size
+                    ),
+                );
+            }
+            if a.size[0] == 0 || a.size[1] == 0 {
+                self.push(&f, "size", "must be at least 1x1");
+            }
+            for (layer, g) in &a.grids {
+                let at = format!("grids.{layer}");
+                match p.layer(layer.as_str()) {
+                    None => self.push(&f, &at, format!("no layer {:?}", layer.as_str())),
+                    Some(d) if !d.is_int_grid() || d.is_derived() => self.push(
+                        &f,
+                        &at,
+                        format!(
+                            "layer {:?} is not an int_grid layer that can be painted",
+                            layer.as_str()
+                        ),
+                    ),
+                    Some(d) => {
+                        for (glyph, v) in &g.legend {
+                            if let Some(v) = v
+                                && d.value(v.as_str()).is_none()
+                            {
+                                self.push(
+                                    &f,
+                                    format!("{at}.legend.{glyph}"),
+                                    format!("{v:?} is not a value of layer {:?}", layer.as_str()),
+                                );
+                            }
+                        }
+                        let unknown: BTreeSet<char> = g
+                            .rows
+                            .iter()
+                            .flat_map(|r| r.chars())
+                            .filter(|c| {
+                                *c != ' '
+                                    && *c != '.'
+                                    && !g.legend.contains_key(c)
+                                    && d.value_by_glyph(*c).is_none()
+                            })
+                            .collect();
+                        if !unknown.is_empty() {
+                            self.push(
+                                &f,
+                                format!("{at}.rows"),
+                                format!(
+                                    "glyphs {} mean nothing in layer {:?}",
+                                    unknown
+                                        .iter()
+                                        .map(|c| format!("{c:?}"))
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                    layer.as_str()
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+            for (layer, tiles) in &a.tiles {
+                let at = format!("tiles.{layer}");
+                match p.layer(layer.as_str()) {
+                    None => self.push(&f, &at, format!("no layer {:?}", layer.as_str())),
+                    Some(d) if !d.is_tiles() => self.push(
+                        &f,
+                        &at,
+                        format!("layer {:?} is not a tiles layer", layer.as_str()),
+                    ),
+                    Some(_) => {}
+                }
+                for t in tiles {
+                    self.tileset_ref(
+                        &f,
+                        &format!("{at}[{},{}].tileset", t.cell[0], t.cell[1]),
+                        &t.tileset,
+                    );
+                }
+            }
+            for e in &a.entities {
+                let at = format!("entities[{}]", e.id);
+                if p.entity_def(e.ty.as_str()).is_none() {
+                    self.push(
+                        &f,
+                        format!("{at}.type"),
+                        format!("no entity type {:?}", e.ty.as_str()),
+                    );
+                }
+                if let Some(l) = &e.layer
+                    && !p.layer(l.as_str()).is_some_and(|d| d.is_entities())
+                {
+                    self.push(
+                        &f,
+                        format!("{at}.layer"),
+                        format!("no entities layer {:?}", l.as_str()),
+                    );
+                }
+            }
+        }
+    }
+
     fn tags(&mut self, f: &str, at: &str, tags: &[String]) {
         let mut seen = BTreeSet::new();
         for (i, t) in tags.iter().enumerate() {

@@ -24,6 +24,7 @@ mygame.worlds/
   entities/<slug>.json          one entity type per file
   rules/<auto layer>.json       autotile rules for one auto layer
   rules/macros.json             shared patterns, legends and templates (optional)
+  assemblies/<slug>.json        one assembly (a reusable piece of a level) per file (optional)
   worlds/<world>/world.json     world name, guide groups and world-scope notes and guides
   worlds/<world>/levels/<level>/
     level.json                  level placement, size, tags, fields, per-layer rule state
@@ -39,6 +40,7 @@ mygame.worlds/
     autosave/g<N>/<path>        the autosaved bytes of each modified file, generation N
     autosave.discarded/         the last autosave discarded (one kept)
     server.json, server.lock    the live API's discovery file and its lock (api.md)
+    thumbs/assembly-<slug>-<hash>.png  assembly thumbnails the editor renders for its Library
     ui.json                     the editor's view state (active world, level and layer, layer visibility, tool, annotation options)
 ```
 
@@ -59,6 +61,7 @@ The `$schema` value is the path from the file to `schema/<kind>.json`:
 | `entities/x.json` | `../schema/entity.json` |
 | `rules/x.json` | `../schema/rules.json` |
 | `rules/macros.json` | `../schema/macros.json` |
+| `assemblies/x.json` | `../schema/assembly.json` |
 | `worlds/w/world.json` | `../../schema/world.json` |
 | `worlds/w/levels/l/level.json` | `../../../../schema/level.json` |
 | `worlds/w/levels/l/<int_grid layer>.json` | `../../../../schema/intgrid.json` |
@@ -1301,6 +1304,7 @@ Line by line:
 - annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); a connector end (`notes[<id>].from`, `notes[<id>].to`) naming no level or entity ("level "x" does not exist: the connector's end dangles"), or one in another world than the connector's; an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;
 - reference images (`references[<id>]`, in `world.json` or `level.json`): `image` is not empty, is a `/`-separated path inside the project (no `..`, not absolute), and the file exists (`image`: "image file "art/sketch.png" doesn't exist"; checked when the project was loaded from a directory); `scale` above 0; `opacity` in 0..1; ids unique across the project's references;
 - entity types: a `category` is a path of non-empty segments separated by `/`, with no `/` at either end and no whitespace around a segment (`Puzzle/Doors`, not `/Puzzle`, `Puzzle//Doors` or `Puzzle / Doors`); no tag appears twice in one type's `tags`;
+- assemblies (`assemblies/<slug>.json`): `category` and `tags` as for entity types; a `grid_size` other than the project's (placing it is refused); a `size` below 1x1; a grid layer that isn't a paintable `int_grid` layer (`grids.<layer>`), a legend value it doesn't have (`grids.<layer>.legend.<glyph>`), row glyphs that mean nothing in it (`grids.<layer>.rows`); a tiles layer that isn't one (`tiles.<layer>`), an unknown tileset (`tiles.<layer>[x,y].tileset`); an unknown entity type or entities layer (`entities[<id>].type`, `.layer`). Placing such an assembly skips what doesn't resolve, as a paste does;
 - layer slugs that collide with file names (`level`, `entities`, `notes`, `macros` for `int_grid`/`tiles` layers, `macros` for `auto` layers);
 - shape rules: at most one `@` per pattern, odd pattern sizes unless the pattern has `@`, rows of one length, at least one tile alternative with weights of 1 or more, `pivot` only in stamp mode, `rotate` only with square tiles (the output's tileset and every level substitute for it), annotation point counts, guides only at world scope, entity `limit`s, numbers that must be in 0..1;
 - enum sources (only when asked): `--enum-source theme=data/themes.json` compares a project enum with the game data file it mirrors. The values are the keys of the object at the JSON pointer (`#/tracks`; the whole file without one; keys starting with `_` are comments and skipped) or the strings of an array there. Each value the enum has and the file doesn't (`enums.json` `enums[<i>].values[<j>]`: "enum theme has "none", which data/themes.json doesn't (enum source drift)"), and each the file has and the enum doesn't (`enums[<i>]`: "enum theme lacks "jungle", which data/themes.json has (enum source drift)"), is a problem. `--enum-extra theme=none` names values only the enum may have (for example a "no theme" value). The file is relative to the current directory. Repeatable; an unknown enum, an unreadable file, a pointer that finds nothing, any other shape, or an `--enum-extra` for an enum no `--enum-source` compares is a usage error. A typical game check: `--enum-source theme=data/themes.json --enum-extra theme=none --enum-source music=data/music.json#/tracks`.
@@ -1309,7 +1313,7 @@ Load errors stop the load and name the file and JSON path: bad JSON, unknown key
 
 ## Clipboard fragments
 
-A **fragment** is a piece of a level as one JSON object: grid cells, tile stacks, entities and annotations, cut loose from where they came from. It is what Copy puts on the system clipboard (as text, so it pastes into a second editor, a file or a chat with an agent), what `edit.copy` returns and `edit.paste` takes, and the shape assemblies will store. It is not a project file (no `$schema`, no `format`); its JSON Schema is the MCP resource `worlds://schema/fragment.json` (`worlds_core::fragment::schema()`), and in Rust it is `worlds_core::fragment::Fragment`.
+A **fragment** is a piece of a level as one JSON object: grid cells, tile stacks, entities and annotations, cut loose from where they came from. It is what Copy puts on the system clipboard (as text, so it pastes into a second editor, a file or a chat with an agent), what `edit.copy` returns and `edit.paste` takes, and the shape [assemblies](#assembliesslugjson) store. It is not a project file (no `$schema`, no `format`); its JSON Schema is the MCP resource `worlds://schema/fragment.json` (`worlds_core::fragment::schema()`), and in Rust it is `worlds_core::fragment::Fragment`.
 
 ```json
 { "worlds_fragment": 1, "grid_size": 16, "size": [7, 2],
@@ -1341,3 +1345,52 @@ A **fragment** is a piece of a level as one JSON object: grid cells, tile stacks
 - **References outside the fragment** are kept when the destination resolves them: an `entity_ref` whose target is in the destination level, or anywhere in the project when the field is `cross_level`; a link to an entity, annotation or level the project has. Otherwise an `entity_ref` is set to `null` (dropped from an array) and a link is dropped, each with a problem.
 - **Clipping.** Grid cells and tile stacks that fall outside the level are left out (one problem counts them). An entity whose cell would be outside the level is not pasted, with a problem naming it. Annotations are pasted wherever they land.
 - **Skipped, with a problem:** a layer the destination doesn't have, or has with another kind; a glyph or value slug the layer doesn't define; a tile of a tileset the project doesn't have; an entity of a type it doesn't have; a guide's group the destination world doesn't have (the guide is pasted with no group).
+
+## assemblies/&lt;slug&gt;.json
+
+An **assembly** is a named, reusable piece of a level: a doorway with its door, switch and wiring, a furnished room corner, an encounter. It is a [fragment](#clipboard-fragments) kept in the project, one per file, committed with it so a team shares them. The file name must be `<slug>.json`. A project without an `assemblies/` directory has none; nothing else changes.
+
+```json
+{
+  "$schema": "../schema/assembly.json",
+  "format": 1,
+  "slug": "doorway",
+  "name": "Doorway",
+  "category": "Puzzle/Doors",
+  "tags": ["door", "puzzle"],
+  "doc": "A locked door with its button, wired together.",
+  "grid_size": 16,
+  "size": [7, 3],
+  "grids": {
+    "collision": {
+      "legend": { "#": "solid" },
+      "rows": [
+        "       ",
+        "       ",
+        "#######"
+      ]
+    }
+  },
+  "entities": [
+    { "id": "btncrev222", "type": "floor_button", "layer": "objects", "cell": [0, 1],
+      "fields": { "channel": 3, "target": "doorcrev22" } },
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [6, 1], "size": [1, 2] }
+  ]
+}
+```
+
+| Key | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `slug` | slug | yes | Must match the file name |
+| `name` | string | yes | Display name in the Library |
+| `category` | string | no | `/`-separated palette path, like an entity type's (`Puzzle/Doors`) |
+| `tags` | array of strings | no | Free tags, for the Library's search |
+| `doc` | string | no | Shown on hover |
+| `grid_size`, `size`, `grids`, `tiles`, `entities`, `notes` | | `grid_size` and `size` | Exactly as in a [fragment](#clipboard-fragments): the project grid it was saved in, its size in cells of it, then the content with coordinates from its top-left corner |
+
+A fragment's `worlds_fragment` and `source` aren't in the file: `format` versions it, and an assembly belongs nowhere. Ids in it are the ids of what it was saved from; placing it gives everything new ids, exactly like a paste, and references inside it follow (the button above still opens the door it is placed with).
+
+**Placing** an assembly is a [paste](#what-a-paste-does) of its fragment, optionally turned first (mirrored or rotated, the turn written like a tile's [`flip`](#common-value-types); [commands.md](commands.md#transforms)): one batch, one undo entry, labelled `Place assembly <slug>`. Copies are independent: editing a placed copy doesn't touch the assembly, and changing the assembly doesn't touch copies placed before.
+
+**Thumbnails** are not stored in the project. The editor renders one per assembly into `.worlds/thumbs/assembly-<slug>-<hash>.png` (`<hash>` is of the file's content, so an edited assembly gets a new picture) and shows it in its Library.
+
