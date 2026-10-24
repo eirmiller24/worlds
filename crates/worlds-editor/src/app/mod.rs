@@ -27,6 +27,7 @@ pub mod rules;
 #[cfg(test)]
 pub(crate) mod testkit;
 pub mod theme;
+pub mod viewports;
 pub mod watch;
 pub mod worlds;
 
@@ -46,7 +47,7 @@ use crate::tools::{
     CommandContext, EditorCommands, EntityBrush, EntityPalette, Invalidation, NoCommands,
     PaletteSelection, PaletteView, Tool, ToolButton, ToolEvent,
 };
-use crate::view::{LayerView, ViewState};
+use crate::view::{LayerView, ViewState, ViewportId};
 use crate::viewport::camera::Camera;
 use crate::viewport::gpu::Gpu;
 use crate::viewport::{Fit, Viewport, ViewportCx};
@@ -57,7 +58,9 @@ use worlds_core::{Command, Level, Slug};
 /// Dock tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Pane {
-    Viewport,
+    /// A map tab ([`viewports`]); a `ui.json` from before map tabs has a
+    /// bare `"Viewport"`, read as tab 1 ([`legacy_dock`]).
+    Viewport(ViewportId),
     Layers,
     Palette,
     Inspector,
@@ -83,7 +86,7 @@ pub enum Pane {
 /// the Types and Project panes are tabs next to the Inspector, Notes and
 /// Find next to the Problems.
 pub fn default_dock() -> DockState<Pane> {
-    let mut dock = DockState::new(vec![Pane::Viewport]);
+    let mut dock = DockState::new(vec![Pane::Viewport(ViewportId::FIRST)]);
     let s = dock.main_surface_mut();
     let [center, _left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
     let [_layers, _palette] = s.split_below(_left, 0.45, vec![Pane::Palette]);
@@ -110,7 +113,7 @@ pub fn add_rules_pane(dock: &mut DockState<Pane>) {
         leaf.append_tab(Pane::Rules);
         return;
     }
-    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+    if let Some((node, _)) = main_viewport(dock) {
         dock.main_surface_mut()
             .split_below(node, 0.62, vec![Pane::Rules]);
     }
@@ -130,7 +133,7 @@ pub fn add_types_pane(dock: &mut DockState<Pane>) {
             return;
         }
     }
-    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+    if let Some((node, _)) = main_viewport(dock) {
         dock.main_surface_mut()
             .split_right(node, 0.75, vec![Pane::EntityDefs]);
     }
@@ -150,7 +153,7 @@ pub fn add_notes_pane(dock: &mut DockState<Pane>) {
             return;
         }
     }
-    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+    if let Some((node, _)) = main_viewport(dock) {
         dock.main_surface_mut()
             .split_right(node, 0.75, vec![Pane::Notes]);
     }
@@ -170,7 +173,7 @@ pub fn add_project_pane(dock: &mut DockState<Pane>) {
             return;
         }
     }
-    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+    if let Some((node, _)) = main_viewport(dock) {
         dock.main_surface_mut()
             .split_right(node, 0.75, vec![Pane::Project]);
     }
@@ -191,7 +194,7 @@ pub fn add_find_pane(dock: &mut DockState<Pane>) {
             return;
         }
     }
-    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+    if let Some((node, _)) = main_viewport(dock) {
         dock.main_surface_mut()
             .split_right(node, 0.75, vec![Pane::Find]);
     }
@@ -211,10 +214,38 @@ pub fn add_history_pane(dock: &mut DockState<Pane>) {
             return;
         }
     }
-    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+    if let Some((node, _)) = main_viewport(dock) {
         dock.main_surface_mut()
             .split_below(node, 0.62, vec![Pane::History]);
     }
+}
+
+/// The first map tab on the main surface.
+fn main_viewport(dock: &DockState<Pane>) -> Option<(NodeIndex, egui_dock::TabIndex)> {
+    dock.main_surface()
+        .find_tab_from(|t| matches!(t, Pane::Viewport(_)))
+}
+
+/// A `ui.json` dock from before map tabs had ids: every bare
+/// `"Viewport"` tab becomes `{ "Viewport": 1 }`.
+fn legacy_dock(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::String(s) if s == "Viewport" => {
+            *v = serde_json::json!({ "Viewport": ViewportId::FIRST.0 });
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(legacy_dock),
+        serde_json::Value::Object(o) => o.values_mut().for_each(legacy_dock),
+        _ => {}
+    }
+}
+
+/// Read a `ui.json` (an old dock's bare `"Viewport"` tabs included).
+fn parse_ui_file(text: &str) -> serde_json::Result<UiFile> {
+    let mut v: serde_json::Value = serde_json::from_str(text)?;
+    if let Some(d) = v.get_mut("dock") {
+        legacy_dock(d);
+    }
+    serde_json::from_value(v)
 }
 
 /// Bring `pane` to the front of its tab group.
@@ -228,6 +259,9 @@ pub fn show_pane(dock: &mut DockState<Pane>, pane: Pane) {
 #[derive(Serialize, Deserialize)]
 struct UiFile {
     dock: DockState<Pane>,
+    /// The focused map tab's camera (what an older editor reads; see
+    /// `viewports`).
+    #[serde(default)]
     camera: Camera,
     #[serde(default)]
     active_level: Option<String>,
@@ -258,6 +292,77 @@ struct UiFile {
     /// The References pseudo-layer's eye and lock.
     #[serde(default)]
     references: crate::viewport::references::RefsUi,
+    /// Every map tab. A file without them (from before map tabs) opens as
+    /// one tab holding `camera`, `active_world` and `active_level`.
+    #[serde(default)]
+    viewports: Vec<UiViewport>,
+    /// The focused map tab.
+    #[serde(default)]
+    focused_viewport: Option<ViewportId>,
+    /// Two map tabs whose cameras are linked.
+    #[serde(default)]
+    linked_viewports: Option<[ViewportId; 2]>,
+    /// Camera bookmarks, in order.
+    #[serde(default)]
+    bookmarks: Vec<crate::view::Bookmark>,
+}
+
+/// The map tabs of `f`: one per map tab in the dock (`docked`), with the
+/// saved world, camera and active level (an old file without `viewports`:
+/// its single camera, world and level for tab 1; a tab the file doesn't
+/// know: the first world, fitted), parked; and the focused one.
+fn ui_viewports(
+    doc: &Document,
+    docked: &[ViewportId],
+    f: &UiFile,
+) -> (Vec<crate::view::ViewportTab>, ViewportId) {
+    let world_slug = |s: &Option<String>| {
+        s.as_ref()
+            .and_then(|s| Slug::new(s).ok())
+            .filter(|s| doc.project.world(s.as_str()).is_some())
+    };
+    let legacy = [UiViewport {
+        id: ViewportId::FIRST,
+        world: f.active_world.clone(),
+        camera: f.camera,
+        active_level: f.active_level.clone(),
+    }];
+    let saved: &[UiViewport] = if f.viewports.is_empty() {
+        &legacy
+    } else {
+        &f.viewports
+    };
+    let mut tabs = Vec::new();
+    for id in docked {
+        let mut t = crate::view::ViewportTab::new(*id);
+        match saved.iter().find(|v| v.id == *id) {
+            Some(v) => {
+                t.active_world = world_slug(&v.world);
+                t.active_level = v.active_level.as_deref().and_then(|s| doc.level_ix(s));
+                t.zoom = v.camera.zoom;
+                t.cam = crate::viewport::TabCam::new(v.camera, None);
+            }
+            None => t.cam.request_fit(Fit::World),
+        }
+        tabs.push(t);
+    }
+    let focused = f
+        .focused_viewport
+        .filter(|id| docked.contains(id))
+        .unwrap_or(docked[0]);
+    (tabs, focused)
+}
+
+/// `ui.json`'s `viewports`: one map tab.
+#[derive(Serialize, Deserialize)]
+struct UiViewport {
+    id: ViewportId,
+    #[serde(default)]
+    world: Option<String>,
+    #[serde(default)]
+    camera: Camera,
+    #[serde(default)]
+    active_level: Option<String>,
 }
 
 fn default_paint_mode() -> Tool {
@@ -375,6 +480,12 @@ pub struct EditorState {
     pub history: history::HistoryState,
     /// "Add reference image…": the file dialog, while it is open.
     pub ref_picker: Option<references::Picker>,
+    /// The bookmark window is open (the toolbar's ★).
+    pub bookmarks_open: bool,
+    /// The bookmark list's name field.
+    pub bookmark_name: String,
+    /// Focus that name field next frame.
+    pub bookmark_focus: bool,
 }
 
 impl Default for EditorState {
@@ -407,6 +518,9 @@ impl Default for EditorState {
             find: find::FindState::default(),
             history: history::HistoryState::default(),
             ref_picker: None,
+            bookmarks_open: false,
+            bookmark_name: String::new(),
+            bookmark_focus: false,
         }
     }
 }
@@ -706,6 +820,12 @@ pub struct EditorApp {
     import_pick: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
     /// The Import from Worlds project dialog.
     import: Option<import::ImportDialog>,
+    /// The focused map tab last brought to the front of its tab group.
+    shown_focus: Option<ViewportId>,
+    /// The linked cameras as of the last frame ([`Self::sync_linked_cameras`]).
+    link_prev: Option<[Camera; 2]>,
+    /// Where the toolbar's ★ was drawn (the bookmark window hangs from it).
+    bookmarks_anchor: Option<egui::Rect>,
 }
 
 impl EditorApp {
@@ -767,6 +887,9 @@ impl EditorApp {
             world_dialog: None,
             import_pick: None,
             import: None,
+            shown_focus: None,
+            link_prev: None,
+            bookmarks_anchor: None,
         }
     }
 
@@ -1160,6 +1283,8 @@ impl EditorApp {
             UiStep::History(h) => self.history_step(h),
             UiStep::Reference(r) => self.reference_step(r),
             UiStep::ImportProject(s) => self.import_step(s),
+            UiStep::Viewport(v) => self.viewport_step(v),
+            UiStep::Bookmark(b) => self.bookmark_step(b),
         }
     }
 
@@ -1466,6 +1591,21 @@ impl EditorApp {
     /// `"ui": "focus"`: frame a level, a world rect or an annotation
     /// (exactly one), as `view.focus` does.
     fn focus_step(&mut self, f: &crate::script::FocusStep) -> Result<(), String> {
+        let Some(id) = f.viewport.map(ViewportId) else {
+            return self.focus_step_here(f);
+        };
+        if !self.st.view.has_tab(id) {
+            return Err(format!("no viewport {id}"));
+        }
+        self.st.swap_live(id);
+        let r = self.focus_step_here(f);
+        let focused = self.st.view.focused;
+        self.st.swap_live(focused);
+        r
+    }
+
+    /// A focus step in the live map tab.
+    fn focus_step_here(&mut self, f: &crate::script::FocusStep) -> Result<(), String> {
         let doc = self.st.doc.as_ref().ok_or("no project open")?;
         if let Some(w) = &f.world {
             let wi = doc
@@ -2019,6 +2159,9 @@ impl EditorApp {
         self.st.notes = notes::NotesState::default();
         self.st.find = find::FindState::default();
         self.dock = default_dock();
+        self.shown_focus = None;
+        self.link_prev = None;
+        self.st.bookmarks_open = false;
         let restored = if self.opts.headless {
             false
         } else {
@@ -2101,16 +2244,16 @@ impl EditorApp {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return false;
         };
-        let f: UiFile = match serde_json::from_str(&text) {
+        let f: UiFile = match parse_ui_file(&text) {
             Ok(f) => f,
             Err(e) => {
                 tracing::warn!("ignoring {}: {e}", path.display());
                 return false;
             }
         };
-        self.dock = f.dock;
-        // A layout without the viewport would be unusable.
-        if self.dock.find_tab(&Pane::Viewport).is_none() {
+        self.dock = f.dock.clone();
+        // A layout without a map would be unusable.
+        if viewports::dock_viewports(&self.dock).is_empty() {
             self.dock = default_dock();
         }
         add_rules_pane(&mut self.dock);
@@ -2119,8 +2262,7 @@ impl EditorApp {
         add_project_pane(&mut self.dock);
         add_find_pane(&mut self.dock);
         add_history_pane(&mut self.dock);
-        self.st.viewport.camera = f.camera;
-        self.st.view.active_level = f.active_level.and_then(|s| doc.level_ix(&s));
+        self.restore_viewports(doc, &f);
         if let Some(i) = f
             .active_layer
             .and_then(|s| doc.project.layers.iter().position(|l| l.slug == s.as_str()))
@@ -2142,13 +2284,32 @@ impl EditorApp {
         self.st.view.entities = f.entity_palette.to_palette(&doc.project);
         self.st.view.annotations = f.annotations;
         self.st.view.note_tool = f.note_tool;
-        self.st.view.active_world = f
-            .active_world
-            .and_then(|s| Slug::new(s).ok())
-            .filter(|s| doc.project.world(s.as_str()).is_some());
         self.st.view.references.ui = f.references;
+        self.st.view.bookmarks = f.bookmarks;
         self.last_ui_json = text;
         true
+    }
+
+    /// The map tabs of `f` (see [`ui_viewports`]), the focused one live.
+    fn restore_viewports(&mut self, doc: &Document, f: &UiFile) {
+        let docked = viewports::dock_viewports(&self.dock);
+        let (mut tabs, focused) = ui_viewports(doc, &docked, f);
+        // The focused tab goes live: its state into the live slots.
+        let live = tabs
+            .iter_mut()
+            .find(|t| t.id == focused)
+            .expect("focused is docked");
+        let view = &mut self.st.view;
+        view.active_level = live.active_level.take();
+        view.active_world = live.active_world.take();
+        view.zoom = live.zoom;
+        self.st.viewport.swap_tab(&mut live.cam);
+        view.tabs = tabs;
+        view.focused = focused;
+        view.live = focused;
+        view.link = f
+            .linked_viewports
+            .filter(|l| l[0] != l[1] && l.iter().all(|id| docked.contains(id)));
     }
 
     /// Write `.worlds/ui.json` if it changed.
@@ -2171,6 +2332,23 @@ impl EditorApp {
         let Some(doc) = &self.st.doc else {
             return;
         };
+        let view = &self.st.view;
+        let slug_of_world = |w: usize| doc.project.worlds.get(w).map(|w| w.slug.to_string());
+        let viewports = view
+            .tabs
+            .iter()
+            .map(|t| UiViewport {
+                id: t.id,
+                world: slug_of_world(view.tab_world_ix(doc, t.id)),
+                camera: view
+                    .tab_camera(&self.st.viewport, t.id)
+                    .map_or_else(Camera::default, |c| c.0),
+                active_level: view
+                    .tab_active_level(t.id)
+                    .filter(|&i| i < doc.levels.len())
+                    .map(|i| doc.level(i).slug.to_string()),
+            })
+            .collect();
         let f = UiFile {
             dock: self.dock.clone(),
             camera: self.st.viewport.camera,
@@ -2204,6 +2382,10 @@ impl EditorApp {
                 .get(self.st.view.world_ix(doc))
                 .map(|w| w.slug.to_string()),
             references: self.st.view.references.ui,
+            viewports,
+            focused_viewport: Some(view.focused),
+            linked_viewports: view.link,
+            bookmarks: view.bookmarks.clone(),
         };
         let Ok(json) = serde_json::to_string_pretty(&f) else {
             return;
@@ -2275,6 +2457,7 @@ impl EditorApp {
             rev,
             self.commands.editing_ref().map(|e| e.history()),
         );
+        self.sync_viewport_tabs();
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
@@ -2282,12 +2465,18 @@ impl EditorApp {
                     st: &mut self.st,
                     gpu: &self.gpu,
                 };
+                // Close buttons show on map tabs only (the last one has
+                // none: `is_closeable`).
                 DockArea::new(&mut self.dock)
                     .id(egui::Id::new("worlds dock"))
-                    .show_close_buttons(false)
+                    .show_close_buttons(true)
                     .show_leaf_close_all_buttons(false)
                     .show_inside(ui, &mut tabs);
             });
+        let focused = self.st.view.focused;
+        self.st.swap_live(focused);
+        self.sync_linked_cameras();
+        self.bookmarks_window(&ctx);
         self.command_palette(&ctx);
         self.recovery_window(&ctx);
         self.locked_window(&ctx);
@@ -3151,6 +3340,24 @@ impl EditorApp {
             if i.consume_key(cmd, Key::F) {
                 acts.push(Action::ShowFind);
             }
+            for (n, k) in [
+                Key::Num1,
+                Key::Num2,
+                Key::Num3,
+                Key::Num4,
+                Key::Num5,
+                Key::Num6,
+                Key::Num7,
+                Key::Num8,
+                Key::Num9,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if i.consume_key(cmd | Modifiers::SHIFT, k) {
+                    acts.push(Action::JumpBookmark(n));
+                }
+            }
         });
         if !ctx.egui_wants_keyboard_input() && !self.palette.open {
             ctx.input_mut(|i| {
@@ -3351,6 +3558,45 @@ impl EditorApp {
             Action::MoveSelectionToLayer(l) => self.move_selection_to_layer(l),
             Action::AddReference(scope) => self.add_reference_dialog(scope),
             Action::ShowInspector => show_pane(&mut self.dock, Pane::Inspector),
+            Action::NewViewport => {
+                self.open_viewport(None, None, false);
+            }
+            Action::DuplicateViewport(id) => {
+                let src = id.unwrap_or(self.st.view.focused);
+                self.open_viewport(None, Some(src), false);
+            }
+            Action::CloseViewport(id) => {
+                if let Err(e) = self.close_viewport(id) {
+                    self.st.view.set_status(e, true);
+                }
+            }
+            Action::LinkCameras(pair) => {
+                if let Err(e) = self.link_cameras(pair) {
+                    self.st.view.set_status(e, true);
+                }
+            }
+            Action::SaveBookmark => {
+                self.st.bookmarks_open = true;
+                self.st.bookmark_focus = true;
+            }
+            Action::SaveBookmarkAs(name) => {
+                if let Err(e) = self.save_bookmark(&name) {
+                    self.st.view.set_status(e, true);
+                }
+            }
+            Action::JumpBookmark(i) => {
+                if let Err(e) = self.jump_bookmark(i) {
+                    self.st.view.set_status(e, true);
+                }
+            }
+            Action::DeleteBookmark(i) => {
+                if i < self.st.view.bookmarks.len() {
+                    let b = self.st.view.bookmarks.remove(i);
+                    self.st
+                        .view
+                        .set_status(format!("Forgot bookmark {}", b.name), false);
+                }
+            }
             Action::DeleteSelection => self.delete_selection(),
             Action::DuplicateSelection => self.duplicate_selection(),
             Action::DuplicateLevel(ix) => self.duplicate_level(ix),
@@ -3528,6 +3774,7 @@ impl EditorApp {
             ui.strong("Worlds");
             ui.separator();
             if self.world_switcher(ui) {
+                self.bookmarks_button(ui);
                 ui.separator();
             }
             for b in ToolButton::ALL {
@@ -3636,8 +3883,9 @@ impl EditorApp {
                 ui.label(RichText::new(&m.text).color(c));
                 ui.separator();
             }
-            let vp = &self.st.viewport;
-            match &vp.hover {
+            // The tab under the pointer's readout.
+            let (hover, readout, stats, zoom) = self.st.pointer_hover();
+            match hover {
                 Some(h) => {
                     if let Some(l) = &h.level {
                         ui.strong(l);
@@ -3649,7 +3897,7 @@ impl EditorApp {
                     if !h.what.is_empty() {
                         ui.label(&h.what);
                     }
-                    if let Some(r) = &vp.readout {
+                    if let Some(r) = readout {
                         ui.label(RichText::new(r).color(self.st.accent));
                     }
                     if let Some(fired) = self.fired_under_pointer() {
@@ -3661,12 +3909,12 @@ impl EditorApp {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let s = vp.stats;
+                let s = stats;
                 ui.weak(format!(
                     "{:.1} ms · {} chunks · {} draws · {} tiles",
                     self.frame_ms, s.chunks, s.draws, s.instances
                 ));
-                ui.label(crate::viewport::camera::zoom_label(vp.camera.zoom));
+                ui.label(crate::viewport::camera::zoom_label(zoom));
                 if let Some(doc) = &self.st.doc
                     && doc.bakes_pending > 0
                 {
@@ -3697,7 +3945,7 @@ impl EditorApp {
         let doc = self.st.doc.as_ref()?;
         let layer = self.st.view.active_layer?;
         let def = doc.project.layers.get(layer).filter(|d| d.is_auto())?;
-        let h = self.st.viewport.hover.as_ref()?;
+        let h = self.st.pointer_hover().0?;
         let cell = h.cell?;
         let ix = doc.level_ix(h.level.as_deref()?)?;
         let level = doc.level(ix).slug.as_str();
@@ -3727,7 +3975,8 @@ impl EditorApp {
         if !self.palette.open {
             return;
         }
-        let catalog = Action::catalog();
+        let mut catalog = Action::catalog();
+        catalog.extend(actions::bookmark_entries(&self.st.view.bookmarks));
         let mut hits: Vec<(i32, usize)> = catalog
             .iter()
             .enumerate()
@@ -4267,7 +4516,7 @@ impl TabViewer for Tabs<'_> {
 
     fn title(&mut self, tab: &mut Pane) -> egui::WidgetText {
         match tab {
-            Pane::Viewport => "Map".into(),
+            Pane::Viewport(id) => viewports::tab_title(self.st, *id).into(),
             Pane::Layers => "Layers".into(),
             Pane::Palette => "Palette".into(),
             Pane::Inspector => "Inspector".into(),
@@ -4292,9 +4541,27 @@ impl TabViewer for Tabs<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Pane) {
         self.st.pane_rects.insert(*tab, ui.max_rect());
         match tab {
-            Pane::Viewport => {
+            Pane::Viewport(id) => {
+                let id = *id;
                 let st = &mut *self.st;
-                st.map_rect = Some(ui.max_rect());
+                let rect = ui.max_rect();
+                // A press in a tab focuses it before it draws, so the
+                // gesture and the keys after it are this tab's.
+                let pressed_here = ui.input(|i| {
+                    i.pointer.any_pressed()
+                        && i.pointer.press_origin().is_some_and(|p| rect.contains(p))
+                }) && ui
+                    .input(|i| i.pointer.press_origin())
+                    .and_then(|p| ui.ctx().layer_id_at(p))
+                    == Some(ui.layer_id());
+                if pressed_here && st.view.focused != id {
+                    st.focus_tab(id);
+                }
+                let focused = st.view.focused == id;
+                st.swap_live(id);
+                if focused {
+                    st.map_rect = Some(rect);
+                }
                 let mut cx = ViewportCx {
                     doc: st.doc.as_ref(),
                     gpu: self.gpu,
@@ -4305,8 +4572,11 @@ impl TabViewer for Tabs<'_> {
                     ghosts: &st.ghosts,
                     highlight: st.rules.highlight.as_ref(),
                     atlas: Some(&st.atlas),
+                    focused,
                 };
                 st.viewport.ui(ui, &mut cx);
+                let f = st.view.focused;
+                st.swap_live(f);
             }
             Pane::Layers => panels::layers(ui, self.st),
             Pane::Palette => panels::palette(ui, self.st),
@@ -4327,19 +4597,80 @@ impl TabViewer for Tabs<'_> {
         tab: &Pane,
         global: &egui_dock::TabStyle,
     ) -> Option<egui_dock::TabStyle> {
-        (*tab == Pane::Viewport).then(|| {
+        matches!(tab, Pane::Viewport(_)).then(|| {
             let mut s = global.clone();
             s.tab_body.inner_margin = egui::Margin::ZERO;
             s
         })
     }
 
-    fn is_closeable(&self, _tab: &Pane) -> bool {
-        false
+    /// Map tabs close while there is another; other panes never.
+    fn is_closeable(&self, tab: &Pane) -> bool {
+        matches!(tab, Pane::Viewport(_)) && self.st.view.tabs.len() > 1
+    }
+
+    fn on_close(&mut self, tab: &mut Pane) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
+        use egui_dock::widgets::tab_viewer::OnCloseResponse;
+        match tab {
+            Pane::Viewport(id) => match self.st.view.close_tab(&mut self.st.viewport, *id) {
+                Ok(()) => OnCloseResponse::Close,
+                Err(e) => {
+                    self.st.view.set_status(e, true);
+                    OnCloseResponse::Ignore
+                }
+            },
+            _ => OnCloseResponse::Ignore,
+        }
+    }
+
+    fn on_tab_button(&mut self, tab: &mut Pane, response: &egui::Response) {
+        if let Pane::Viewport(id) = tab
+            && response.clicked()
+        {
+            self.st.focus_tab(*id);
+        }
+    }
+
+    /// A map tab's right-click menu (egui_dock adds Eject and Close).
+    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Pane, _path: egui_dock::NodePath) {
+        let Pane::Viewport(id) = *tab else {
+            return;
+        };
+        let st = &mut *self.st;
+        if ui.button("New viewport").clicked() {
+            st.focus_tab(id);
+            st.actions.push(Action::NewViewport);
+            ui.close();
+        }
+        if ui.button("Duplicate viewport").clicked() {
+            st.actions.push(Action::DuplicateViewport(Some(id)));
+            ui.close();
+        }
+        let others: Vec<ViewportId> = st
+            .view
+            .tabs
+            .iter()
+            .map(|t| t.id)
+            .filter(|&o| o != id)
+            .collect();
+        if !others.is_empty() {
+            ui.menu_button("Link cameras with", |ui| {
+                for o in others {
+                    let linked = st.view.link.is_some_and(|l| l == [id, o] || l == [o, id]);
+                    if ui
+                        .selectable_label(linked, viewports::tab_title(st, o))
+                        .clicked()
+                    {
+                        st.actions.push(Action::LinkCameras(Some([id, o])));
+                        ui.close();
+                    }
+                }
+            });
+        }
     }
 
     fn clear_background(&self, tab: &Pane) -> bool {
-        *tab != Pane::Viewport
+        !matches!(tab, Pane::Viewport(_))
     }
 
     fn scroll_bars(&self, _tab: &Pane) -> [bool; 2] {
@@ -4428,7 +4759,7 @@ mod tests {
     #[test]
     fn old_layouts_get_the_rules_pane() {
         // A layout saved before the Rules pane: Log under the viewport, no Rules.
-        let mut old = DockState::new(vec![Pane::Viewport]);
+        let mut old = DockState::new(vec![Pane::Viewport(ViewportId::FIRST)]);
         let s = old.main_surface_mut();
         let [center, _] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
         s.split_below(center, 0.8, vec![Pane::Log]);
@@ -4445,9 +4776,9 @@ mod tests {
             1
         );
         // No Log: a split under the viewport.
-        let mut bare = DockState::new(vec![Pane::Viewport]);
+        let mut bare = DockState::new(vec![Pane::Viewport(ViewportId::FIRST)]);
         add_rules_pane(&mut bare);
-        let v = bare.find_tab(&Pane::Viewport).unwrap();
+        let v = bare.find_tab(&Pane::Viewport(ViewportId::FIRST)).unwrap();
         let r = bare.find_tab(&Pane::Rules).unwrap();
         assert_ne!(v.node_path(), r.node_path());
         // The default layout has it, and showing it makes it the active tab.
@@ -4458,10 +4789,116 @@ mod tests {
         assert_eq!(leaf.tabs()[leaf.active.0], Pane::Rules);
     }
 
+    /// A `ui.json` from before map tabs (a bare `"Viewport"` tab, one
+    /// camera, world and level) opens as tab 1 holding them; a new one
+    /// round-trips every tab, the focus and the bookmarks.
+    #[test]
+    fn old_ui_files_open_as_one_map_tab() {
+        let (_tmp, st) = testkit::state();
+        let doc = st.doc.as_ref().unwrap();
+        let mut old = DockState::new(vec![Pane::Viewport(ViewportId::FIRST)]);
+        old.main_surface_mut()
+            .split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
+        // A dock never drawn has infinite rects (null in JSON); a drawn
+        // one has numbers.
+        fn finite(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Array(a) => a.iter_mut().for_each(finite),
+                serde_json::Value::Object(o) => {
+                    for (k, x) in o.iter_mut() {
+                        if (k == "x" || k == "y") && x.is_null() {
+                            *x = serde_json::json!(0.0);
+                        }
+                        finite(x);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut dock = serde_json::to_value(&old).unwrap();
+        finite(&mut dock);
+        // How the old editor wrote the tab: a unit variant.
+        fn unit(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(o) if o.len() == 1 && o.contains_key("Viewport") => {
+                    *v = serde_json::json!("Viewport");
+                }
+                serde_json::Value::Array(a) => a.iter_mut().for_each(unit),
+                serde_json::Value::Object(o) => o.values_mut().for_each(unit),
+                _ => {}
+            }
+        }
+        unit(&mut dock);
+        assert!(dock.to_string().contains("\"Viewport\""), "{dock}");
+        let text = serde_json::json!({
+            "dock": dock,
+            "camera": { "origin": [100.0, 50.0], "zoom": 3.0 },
+            "active_level": "shaft",
+            "active_world": "main",
+        })
+        .to_string();
+        let f = parse_ui_file(&text).unwrap();
+        let docked = viewports::dock_viewports(&f.dock);
+        assert_eq!(docked, [ViewportId::FIRST]);
+        // The pane migrations still find the (rewritten) map to split.
+        let mut migrated = f.dock.clone();
+        add_rules_pane(&mut migrated);
+        add_types_pane(&mut migrated);
+        add_notes_pane(&mut migrated);
+        add_project_pane(&mut migrated);
+        add_find_pane(&mut migrated);
+        add_history_pane(&mut migrated);
+        for p in [Pane::Rules, Pane::Find, Pane::History, Pane::Notes] {
+            assert!(migrated.find_tab(&p).is_some(), "{p:?}");
+        }
+        assert_eq!(viewports::dock_viewports(&migrated), [ViewportId::FIRST]);
+        let (tabs, focused) = ui_viewports(doc, &docked, &f);
+        assert_eq!(focused, ViewportId::FIRST);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].active_level, doc.level_ix("shaft"));
+        assert_eq!(
+            tabs[0].active_world.as_ref().map(|s| s.as_str()),
+            Some("main")
+        );
+        assert_eq!(tabs[0].cam.camera.origin, [100.0, 50.0]);
+        assert_eq!(tabs[0].cam.camera.zoom, 3.0);
+
+        // A file with tabs: each keeps its own; a docked tab the file
+        // doesn't list gets fitted; the focus is kept.
+        let mut d = default_dock();
+        viewports::dock_tab(&mut d, ViewportId(2), ViewportId::FIRST, true);
+        viewports::dock_tab(&mut d, ViewportId(5), ViewportId(2), false);
+        let mut d = serde_json::to_value(&d).unwrap();
+        finite(&mut d);
+        let text = serde_json::json!({
+            "dock": d,
+            "viewports": [
+                { "id": 1, "world": "main", "camera": { "origin": [0.0, 0.0], "zoom": 1.0 }, "active_level": "crevasse" },
+                { "id": 2, "world": "main", "camera": { "origin": [7.0, 8.0], "zoom": 4.0 }, "active_level": "shaft" }
+            ],
+            "focused_viewport": 2,
+            "linked_viewports": [1, 2],
+            "bookmarks": [ { "name": "hall", "world": "main", "camera": { "center": [10.0, 20.0], "zoom": 2.0 } } ]
+        })
+        .to_string();
+        let f = parse_ui_file(&text).unwrap();
+        let docked = viewports::dock_viewports(&f.dock);
+        assert_eq!(docked.len(), 3);
+        let (tabs, focused) = ui_viewports(doc, &docked, &f);
+        assert_eq!(focused, ViewportId(2));
+        let two = tabs.iter().find(|t| t.id == ViewportId(2)).unwrap();
+        assert_eq!(two.active_level, doc.level_ix("shaft"));
+        assert_eq!(two.cam.camera.zoom, 4.0);
+        let five = tabs.iter().find(|t| t.id == ViewportId(5)).unwrap();
+        assert_eq!(five.cam.pending_fit(), Some(Fit::World));
+        assert_eq!(f.linked_viewports, Some([ViewportId::FIRST, ViewportId(2)]));
+        assert_eq!(f.bookmarks[0].camera.center, [10.0, 20.0]);
+    }
+
     #[test]
     fn old_layouts_get_the_find_pane_next_to_the_notes() {
         // The default layout before Find: Problems and Notes as tabs.
-        let mut old = DockState::new(vec![Pane::Viewport]);
+        let mut old = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
         let s = old.main_surface_mut();
         let [_, right] = s.split_right(NodeIndex::root(), 0.7, vec![Pane::Inspector]);
         s.split_below(right, 0.7, vec![Pane::Problems, Pane::Notes]);
@@ -4477,7 +4914,7 @@ mod tests {
             1
         );
         // No Notes, Problems or Inspector: a split right of the map.
-        let mut bare = DockState::new(vec![Pane::Viewport]);
+        let mut bare = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
         add_find_pane(&mut bare);
         assert!(bare.find_tab(&Pane::Find).is_some());
         // The default layout has it beside the Notes.

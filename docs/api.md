@@ -1393,9 +1393,14 @@ How it is recorded: the editor's undo history has one gesture slot, and it belon
 
 Editor only: in headless mode every `view.*` method is `unsupported` (`-32005`). They change what the editor shows, never the project, so they need no `expect_rev` and don't bump `rev`.
 
-- **`view.focus { level }`**, **`{ world_rect: [x, y, w, h], world? }`** (world pixels), **`{ note: id }`** or **`{ world }`**: makes the level active and frames it, frames the rect, frames an annotation (at the largest zoom step that fits, or, for a rect too big for the smallest step, 1/256, the exact zoom that fits it): its bounding box as built (a grouped guide moved by its group's offset, a level note in world pixels), grown by 15 % of its size on each side and to at least 8 project cells each way (a pin is a point), or fits a whole world. The editor shows one world at a time: focusing a world makes it the active world, a level or note switches to the world it is in, and a `world_rect` with `world` switches to that world (without `world`, the active one). A level-scope note's level becomes active. → `{ rev }`. An unknown note is `command_error` `unknown_note`, an unknown world `unknown_world`.
-- **`view.select { entities?, notes?, levels? }`** or **`{ level }`**: replaces the selection. The lists add up: give any of them, in any combination (empty lists are fine, and all of them empty clears the selection), and the selection holds every listed entity (by id), annotation (by id) and level (by slug); the editor's inspector edits a set of entities together. The active level becomes the first entity's level, else the first level-scope note's level, else the first of `levels`, else it stays. `{ level }` alone makes that level active and clears the selection; `level` with any list is `invalid params`. Every id and slug must exist, or nothing changes and the error is `command_error` (`unknown_entity`, `unknown_note`, `unknown_level`). → `{ rev }`. Sends `selection`.
-- **`view.snapshot { level }`** or **`{ world_rect, world? }`**, plus `size?: [w, h]` (the largest image allowed, default `[1024, 1024]`), `layers?` (default all visible), `overlays?` (entity boxes and annotations: open notes, pins, paths and regions, and every guide, default `true`; a snapshot shows the data, so the editor's hidden tags don't apply) → `{ rev, png, width, height, scale }`. `png` is base64 (no `data:` prefix). The map is drawn alone, without the UI, at the largest scale that fits `size` (an integer scale when it is 1 or more). Rendered by the editor's offscreen renderer on the UI thread.
+The editor can show several **map tabs** (viewports), each with its own camera, world and active level; the tool, brush, layers and the selection are shared. Each tab has an id (1 is the first; the tab's title says "Map 2" once there are several). `view.focus`, `view.select` and `view.snapshot` take an optional `viewport` (id): the tab to act in, default the focused one (the one the user last clicked). An unknown id is `invalid params`. Nothing opens a tab but `view.open_viewport`.
+
+- **`view.focus { level }`**, **`{ world_rect: [x, y, w, h], world? }`** (world pixels), **`{ note: id }`** or **`{ world }`**: makes the level active and frames it, frames the rect, frames an annotation (at the largest zoom step that fits, or, for a rect too big for the smallest step, 1/256, the exact zoom that fits it): its bounding box as built (a grouped guide moved by its group's offset, a level note in world pixels), grown by 15 % of its size on each side and to at least 8 project cells each way (a pin is a point), or fits a whole world. The editor shows one world at a time: focusing a world makes it the active world, a level or note switches to the world it is in, and a `world_rect` with `world` switches to that world (without `world`, the active one). A level-scope note's level becomes active. `viewport?` picks the map tab that frames it (its world and active level change, not the other tabs'). → `{ rev }`. An unknown note is `command_error` `unknown_note`, an unknown world `unknown_world`.
+- **`view.select { entities?, notes?, levels? }`** or **`{ level }`**: replaces the selection. The lists add up: give any of them, in any combination (empty lists are fine, and all of them empty clears the selection), and the selection holds every listed entity (by id), annotation (by id) and level (by slug); the editor's inspector edits a set of entities together. The active level becomes the first entity's level, else the first level-scope note's level, else the first of `levels`, else it stays. `{ level }` alone makes that level active and clears the selection; `level` with any list is `invalid params`. `viewport?` is the tab whose active level follows (the selection itself is shared by every tab). Every id and slug must exist, or nothing changes and the error is `command_error` (`unknown_entity`, `unknown_note`, `unknown_level`). → `{ rev }`. Sends `selection`.
+- **`view.snapshot { level }`**, **`{ world_rect, world? }`** or **`{ viewport? }`** alone (what that tab, default the focused one, shows now: its world and visible rect; with `world_rect`, `viewport` names the rect's world), plus `size?: [w, h]` (the largest image allowed, default `[1024, 1024]`), `layers?` (default all visible), `overlays?` (entity boxes and annotations: open notes, pins, paths and regions, and every guide, default `true`; a snapshot shows the data, so the editor's hidden tags don't apply) → `{ rev, png, width, height, scale }`. `png` is base64 (no `data:` prefix). The map is drawn alone, without the UI, at the largest scale that fits `size` (an integer scale when it is 1 or more). Rendered by the editor's offscreen renderer on the UI thread.
+
+- **`view.list_viewports {}`** → `{ rev, focused, viewports: [{ id, world, level, focused, world_rect: [x, y, w, h], zoom }] }`: every map tab in the order opened, with the world it shows, its active level (or `null`), what it shows in world pixels (rounded out to whole pixels) and its zoom (screen pixels per world pixel).
+- **`view.open_viewport { world, focus? }`**: a new map tab next to the focused one, showing `world`, fitted → `{ rev, viewport }` (its id). `focus` (default `false`) makes it the focused tab; otherwise the user's focus stays where it was. An unknown world is `command_error` `unknown_world`.
 
 ```json norun
 { "jsonrpc": "2.0", "id": 51, "method": "view.focus", "params": { "level": "crevasse" } }
@@ -1437,6 +1442,40 @@ Editor only: in headless mode every `view.*` method is `unsupported` (`-32005`).
 { "jsonrpc": "2.0", "id": 53, "result": { "rev": 46, "png": "iVBORw0KGgoAAAANSUhEUgAAAoAAAACgCAYAAAA=", "width": 640, "height": 160, "scale": 2 } }
 ```
 
+```json norun
+{ "jsonrpc": "2.0", "id": 104, "method": "view.open_viewport", "params": { "world": "main" } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 104, "result": { "rev": 46, "viewport": 2 } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 105, "method": "view.focus", "params": { "level": "shaft", "viewport": 2 } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 105, "result": { "rev": 46 } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 106, "method": "view.list_viewports", "params": {} }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 106, "result": { "rev": 46, "focused": 1, "viewports": [
+  { "id": 1, "world": "main", "level": "crevasse", "focused": true, "world_rect": [-24, -95, 1121, 452], "zoom": 2 },
+  { "id": 2, "world": "main", "level": "shaft", "focused": false, "world_rect": [1012, -34, 302, 238], "zoom": 3 } ] } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 107, "method": "view.snapshot", "params": { "viewport": 2, "size": [512, 512] } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 107, "result": { "rev": 46, "png": "iVBORw0KGgoAAAANSUhEUgAAAoAAAACgCAYAAAA=", "width": 302, "height": 238, "scale": 1 } }
+```
+
 In headless mode:
 
 ```json
@@ -1445,6 +1484,14 @@ In headless mode:
 
 ```json
 { "jsonrpc": "2.0", "id": 54, "error": { "code": -32005, "message": "view.snapshot needs the editor; open the project with `worlds <dir>`" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 108, "method": "view.list_viewports", "params": {} }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 108, "error": { "code": -32005, "message": "view.list_viewports needs the editor; open the project with `worlds <dir>`" } }
 ```
 
 ### events

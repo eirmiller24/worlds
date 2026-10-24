@@ -39,7 +39,7 @@ mygame.worlds/
     autosave/g<N>/<path>        the autosaved bytes of each modified file, generation N
     autosave.discarded/         the last autosave discarded (one kept)
     server.json, server.lock    the live API's discovery file and its lock (api.md)
-    ui.json                     the editor's view state (active world, level and layer, layer visibility, tool, annotation options)
+    ui.json                     the editor's view state (map tabs with their world, camera and level, camera bookmarks, active layer, layer visibility, tool, annotation options)
 ```
 
 Rules for the layout:

@@ -1425,6 +1425,7 @@ mod live {
         own: OwnWrites,
         snaps: Option<SnapshotRenderer>,
         fx: HostEffects,
+        vp: worlds_editor::viewport::Viewport,
     }
 
     impl LiveRig {
@@ -1443,6 +1444,7 @@ mod live {
                 own: OwnWrites::default(),
                 snaps: None,
                 fx: HostEffects::default(),
+                vp: worlds_editor::viewport::Viewport::new(),
             }
         }
 
@@ -1452,6 +1454,7 @@ mod live {
                 doc: &mut self.rig.doc,
                 editing: &mut self.rig.ed,
                 view: &mut self.rig.view,
+                viewport: &mut self.vp,
                 invalidate: &mut self.rig.inv,
                 own_writes: &mut self.own,
                 snapshots: &mut self.snaps,
@@ -1471,6 +1474,7 @@ mod live {
                     doc: &mut self.rig.doc,
                     editing: &mut self.rig.ed,
                     view: &mut self.rig.view,
+                    viewport: &mut self.vp,
                     invalidate: &mut self.rig.inv,
                     own_writes: &mut self.own,
                     snapshots: &mut self.snaps,
@@ -1872,6 +1876,81 @@ mod live {
         assert!(a.server.pending().is_empty());
     }
 
+    /// Map tabs over the API: `view.open_viewport` adds a tab (focused
+    /// only when asked), `view.list_viewports` lists them, `view.focus` and
+    /// `view.select` with `viewport` act in that tab and leave the focused
+    /// one alone, an unknown id is `invalid params`.
+    #[test]
+    fn view_methods_act_in_the_named_map_tab() {
+        use worlds_editor::view::ViewportId;
+        let mut a = LiveRig::new();
+        let mut agent = Agent::connect(&a.server, "claude-code");
+        a.rig.view.active_level = a.rig.doc.level_ix("crevasse");
+        let r = a.call(&mut agent, "view.open_viewport", json!({ "world": "main" }));
+        assert_eq!(r["result"]["viewport"], 2, "{r}");
+        assert_eq!(
+            a.rig.view.focused,
+            ViewportId::FIRST,
+            "not focused unless asked"
+        );
+        let r = a.call(&mut agent, "view.list_viewports", json!({}));
+        let tabs = r["result"]["viewports"].as_array().unwrap().clone();
+        assert_eq!(tabs.len(), 2, "{r}");
+        assert_eq!(r["result"]["focused"], 1);
+        assert_eq!(tabs[0]["level"], "crevasse");
+        assert_eq!(tabs[1]["world"], "main");
+        assert_eq!(tabs[1]["level"], Value::Null);
+
+        let r = a.call(
+            &mut agent,
+            "view.focus",
+            json!({ "level": "shaft", "viewport": 2 }),
+        );
+        assert!(r.get("result").is_some(), "{r}");
+        assert_eq!(a.rig.view.active_level, a.rig.doc.level_ix("crevasse"));
+        assert_eq!(
+            a.rig.view.tab_active_level(ViewportId(2)),
+            a.rig.doc.level_ix("shaft")
+        );
+        // The fit waits in tab 2, not in the focused tab.
+        assert_eq!(a.vp.pending_fit(), None);
+        assert!(matches!(
+            a.rig.view.tabs[1].cam.pending_fit(),
+            Some(worlds_editor::viewport::Fit::Level(_))
+        ));
+        let r = a.call(
+            &mut agent,
+            "view.select",
+            json!({ "entities": ["doorcrev22"], "viewport": 2 }),
+        );
+        assert!(r.get("result").is_some(), "{r}");
+        assert_eq!(
+            a.rig.view.tab_active_level(ViewportId(2)),
+            a.rig.doc.level_ix("crevasse")
+        );
+        assert_eq!(a.rig.view.selection.entity_ids().len(), 1, "shared");
+        let r = a.call(
+            &mut agent,
+            "view.focus",
+            json!({ "level": "shaft", "viewport": 9 }),
+        );
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+        let r = a.call(
+            &mut agent,
+            "view.open_viewport",
+            json!({ "world": "nowhere" }),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "unknown_world", "{r}");
+        let r = a.call(
+            &mut agent,
+            "view.open_viewport",
+            json!({ "world": "main", "focus": true }),
+        );
+        assert_eq!(r["result"]["viewport"], 3, "{r}");
+        assert_eq!(a.rig.view.focused, ViewportId(3));
+        assert_eq!(a.rig.view.live, ViewportId(3));
+    }
+
     /// The editor's events: a user edit is `changed` with origin user, a
     /// user save is `saved` with the files, `view.select` moves the view
     /// and the selection is reported; an agent's `project.save` goes
@@ -1947,7 +2026,7 @@ mod live {
             Some("crevasse")
         );
         assert!(matches!(
-            a.fx.focus,
+            a.vp.pending_fit(),
             Some(worlds_editor::viewport::Fit::Rect(_))
         ));
 

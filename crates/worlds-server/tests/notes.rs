@@ -434,11 +434,11 @@ impl Host for ViewHost {
     fn reload(&mut self) -> Result<(), RpcError> {
         self.inner.reload()
     }
-    fn focus(&mut self, target: &ViewTarget) -> Result<(), RpcError> {
+    fn focus(&mut self, target: &ViewTarget, _: Option<u32>) -> Result<(), RpcError> {
         self.focused.push(target.clone());
         Ok(())
     }
-    fn select(&mut self, selection: &Selection) -> Result<(), RpcError> {
+    fn select(&mut self, selection: &Selection, _: Option<u32>) -> Result<(), RpcError> {
         self.selected.push(selection.clone());
         Ok(())
     }

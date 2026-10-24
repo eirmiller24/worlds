@@ -276,8 +276,9 @@ fn load(doc: &Document, path: &str, max: u32) -> Option<image::RgbaImage> {
 }
 
 /// Make sure every visible reference's image is loaded, write this frame's
-/// quads and draws into `vg`, and note image sizes in `view` (for hit
+/// quads and draws into `vg`'s slot `slot` (this tab's), and note image sizes in `view` (for hit
 /// tests). With the pseudo-layer hidden there are no draws.
+#[allow(clippy::too_many_arguments)]
 pub fn sync(
     vg: &mut ViewportGpu,
     gpu: &Gpu,
@@ -286,8 +287,9 @@ pub fn sync(
     view: &mut RefsView,
     order: &[LevelIx],
     visible: &WRect,
+    slot: usize,
 ) {
-    vg.ref_draws.clear();
+    vg.slot(&gpu.device, slot).ref_draws.clear();
     if !view.ui.visible {
         return;
     }
@@ -359,14 +361,14 @@ pub fn sync(
             // A slot of the opacity table the layers don't use (1.0).
             layer: (gpu::MAX_LAYERS - 1) as u32,
         });
-        vg.ref_draws.push(DrawCmd {
+        vg.slot(&gpu.device, slot).ref_draws.push(DrawCmd {
             chunk: 0,
             tex,
             start,
             end: start + 1,
         });
     }
-    vg.set_refs(&gpu.device, &gpu.queue, &inst);
+    vg.set_refs(&gpu.device, &gpu.queue, slot, &inst);
     vg.ref_images = images;
 }
 

@@ -293,10 +293,7 @@ impl Editing {
     /// cache and redraw everything.
     pub fn reset_caches(&mut self, cx: &mut CommandContext<'_>) {
         let map = cx.doc.reindex();
-        cx.view.active_level = cx
-            .view
-            .active_level
-            .and_then(|i| map.get(i).copied().flatten());
+        cx.view.remap_levels(&map);
         self.cache.clear();
         self.unsaved = cx.doc.project.is_dirty();
         cx.invalidate.push(Invalidation::All);
@@ -423,10 +420,7 @@ impl Editing {
             tracing::error!("{e}");
             let doc = &mut *cx.doc;
             let map = doc.reindex();
-            cx.view.active_level = cx
-                .view
-                .active_level
-                .and_then(|i| map.get(i).copied().flatten());
+            cx.view.remap_levels(&map);
             self.cache.clear();
             self.unsaved = doc.project.is_dirty();
             cx.invalidate.push(Invalidation::All);
@@ -468,10 +462,8 @@ impl Editing {
         let doc = &mut *cx.doc;
         // A renamed world stays the one shown.
         for c in changes {
-            if let Change::WorldRenamed { from, to } = c
-                && cx.view.active_world.as_ref() == Some(from)
-            {
-                cx.view.active_world = Some(to.clone());
+            if let Change::WorldRenamed { from, to } = c {
+                cx.view.rename_world(from, to);
             }
         }
         // World commands move levels between worlds or change the worlds'
@@ -491,10 +483,7 @@ impl Editing {
             )
         }) {
             let map = doc.reindex();
-            cx.view.active_level = cx
-                .view
-                .active_level
-                .and_then(|i| map.get(i).copied().flatten());
+            cx.view.remap_levels(&map);
             cx.invalidate.push(Invalidation::All);
         }
         let mut levels: Vec<Slug> = Vec::new();

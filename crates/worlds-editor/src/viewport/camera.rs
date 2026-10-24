@@ -131,6 +131,27 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// A camera at `zoom` with world point `center` in the middle of a
+    /// viewport of `size` physical px.
+    pub fn centered(center: [f64; 2], zoom: f64, size: [f64; 2]) -> Camera {
+        let zoom = zoom.max(MIN_ZOOM);
+        Camera {
+            origin: [
+                center[0] - size[0] * 0.5 / zoom,
+                center[1] - size[1] * 0.5 / zoom,
+            ],
+            zoom,
+        }
+    }
+
+    /// The world point in the middle of a viewport of `size` physical px.
+    pub fn center(&self, size: [f64; 2]) -> [f64; 2] {
+        [
+            self.origin[0] + size[0] * 0.5 / self.zoom,
+            self.origin[1] + size[1] * 0.5 / self.zoom,
+        ]
+    }
+
     pub fn world_to_screen(&self, w: [f64; 2]) -> [f64; 2] {
         [
             (w[0] - self.origin[0]) * self.zoom,

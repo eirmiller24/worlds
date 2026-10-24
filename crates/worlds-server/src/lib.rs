@@ -33,7 +33,10 @@ pub use discovery::ServerInfo;
 pub use handler::{
     ChangeKind, Client, ConnId, Handler, HandlerConfig, Out, Outcome, UserChange, is_write,
 };
-pub use host::{Doc, Host, Selection, Snapshot, SnapshotRequest, ViewTarget, needs_editor};
+pub use host::{
+    Doc, Host, Selection, Snapshot, SnapshotRequest, ViewTarget, ViewportInfo, needs_editor,
+    unknown_viewport,
+};
 pub use rpc::RpcError;
 pub use server::{ClientInfo, Handled, Server, ServerConfig, ServerError, ServerHandle};
 

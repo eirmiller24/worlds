@@ -116,6 +116,26 @@ pub enum Action {
     ShowInspector,
     /// Import from Worlds project…: pick a project, then the import dialog.
     ImportProject,
+    /// A new map tab next to the focused one, on the world it shows,
+    /// fitted, and focused.
+    NewViewport,
+    /// A new map tab with the same world, level and camera as this one
+    /// (`None`: the focused one), focused.
+    DuplicateViewport(Option<crate::view::ViewportId>),
+    /// Close a map tab (`None`: the focused one); the last one stays.
+    CloseViewport(Option<crate::view::ViewportId>),
+    /// Link two map tabs' cameras (`None`: the focused tab and the next
+    /// one), or with the same pair linked, unlink them.
+    LinkCameras(Option<[crate::view::ViewportId; 2]>),
+    /// Open the bookmark list with its name field focused, to save the
+    /// focused tab's view.
+    SaveBookmark,
+    /// Show bookmark `n` (its index) in the focused tab.
+    JumpBookmark(usize),
+    /// Forget bookmark `n`.
+    DeleteBookmark(usize),
+    /// Save the focused tab's view as this bookmark (empty: "View n").
+    SaveBookmarkAs(String),
 }
 
 impl Action {
@@ -210,6 +230,19 @@ impl Action {
                 "",
                 Action::ImportProject,
             ),
+            ("New viewport".into(), "", Action::NewViewport),
+            (
+                "Duplicate viewport".into(),
+                "",
+                Action::DuplicateViewport(None),
+            ),
+            ("Close viewport".into(), "", Action::CloseViewport(None)),
+            (
+                "Link cameras (focused and next viewport)".into(),
+                "",
+                Action::LinkCameras(None),
+            ),
+            ("Bookmark this view…".into(), "", Action::SaveBookmark),
         ];
         use super::project_pane::Section;
         for (name, s) in [
@@ -230,6 +263,39 @@ impl Action {
         }
         v
     }
+}
+
+/// The shortcut of bookmark `n` (Ctrl+Shift+1..9 for the first nine).
+pub fn bookmark_key(n: usize) -> &'static str {
+    const KEYS: [&str; 9] = [
+        "Ctrl+Shift+1",
+        "Ctrl+Shift+2",
+        "Ctrl+Shift+3",
+        "Ctrl+Shift+4",
+        "Ctrl+Shift+5",
+        "Ctrl+Shift+6",
+        "Ctrl+Shift+7",
+        "Ctrl+Shift+8",
+        "Ctrl+Shift+9",
+    ];
+    KEYS.get(n).copied().unwrap_or("")
+}
+
+/// The command palette's entries for the bookmarks: "Bookmark: <name>".
+pub fn bookmark_entries(
+    bookmarks: &[crate::view::Bookmark],
+) -> Vec<(String, &'static str, Action)> {
+    bookmarks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            (
+                format!("Bookmark: {}", b.name),
+                bookmark_key(i),
+                Action::JumpBookmark(i),
+            )
+        })
+        .collect()
 }
 
 /// What Delete does: remove the selected entities when there are any,

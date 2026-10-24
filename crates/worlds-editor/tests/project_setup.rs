@@ -92,7 +92,7 @@ fn a_fresh_project_is_set_up_in_the_project_pane() {
     let out = tmp.path().join("setup_empty_map.png");
     img.save(&out).unwrap();
     keep(&out);
-    let map = app.st.pane_rects[&Pane::Viewport];
+    let map = app.st.pane_rects[&Pane::Viewport(worlds_editor::view::ViewportId::FIRST)];
     let mid = egui::Rect::from_center_size(map.center(), egui::vec2(300.0, 100.0));
     assert!(
         not_bg(&img, mid, [24, 24, 24]) > 2000,

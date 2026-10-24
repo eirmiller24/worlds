@@ -249,6 +249,10 @@ pub enum UiStep {
     Reference(ReferenceStep),
     /// `"ui": "import_project"`: the Import from Worlds project dialog.
     ImportProject(Box<ImportStep>),
+    /// `"ui": "viewport"`: open, close, focus or link map tabs.
+    Viewport(ViewportStep),
+    /// `"ui": "bookmark"`: save or jump to a camera bookmark.
+    Bookmark(BookmarkStep),
 }
 
 /// `{ "ui": "import_project", "source": dir, "selection"?, "policy"?,
@@ -298,6 +302,43 @@ pub struct FindStep {
 pub struct ReplaceStep {
     pub field: String,
     pub value: String,
+}
+
+/// `{ "ui": "viewport", "open"?: { "world"? }, "focus"?: id, "close"?: id,
+/// "link"?: [a, b] }`, applied in that order: `open` adds a map tab beside
+/// the focused one (on `world`, default the focused tab's), fitted, and
+/// focuses it; `focus` makes tab `id` the one later steps act in; `link`
+/// links two tabs' cameras (`[]` unlinks).
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewportStep {
+    #[serde(default)]
+    pub open: Option<OpenViewport>,
+    #[serde(default)]
+    pub focus: Option<u32>,
+    #[serde(default)]
+    pub close: Option<u32>,
+    #[serde(default)]
+    pub link: Option<Vec<u32>>,
+}
+
+/// A viewport step's `open`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenViewport {
+    #[serde(default)]
+    pub world: Option<String>,
+}
+
+/// `{ "ui": "bookmark", "save"?: name, "jump"?: name }`: save the focused
+/// tab's view (world, camera) as `save`, then show bookmark `jump` in it.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BookmarkStep {
+    #[serde(default)]
+    pub save: Option<String>,
+    #[serde(default)]
+    pub jump: Option<String>,
 }
 
 /// `{ "ui": "copy" }` / `{ "ui": "cut" }`: the key, exactly as pressed
@@ -477,6 +518,9 @@ pub struct FocusStep {
     pub note: Option<String>,
     #[serde(default)]
     pub world: Option<String>,
+    /// The map tab to frame it in (default: the focused one).
+    #[serde(default)]
+    pub viewport: Option<u32>,
 }
 
 /// `"tiles"` of a select step: stacks of one tiles layer of one level.

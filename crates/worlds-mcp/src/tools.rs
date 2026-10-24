@@ -594,6 +594,9 @@ pub(crate) struct Screenshot {
     pub world_rect: Option<[i64; 4]>,
     pub layers: Option<Vec<String>>,
     pub size: Option<[u32; 2]>,
+    /// The editor's map tab: alone, what it shows; with world_rect, the
+    /// rect in its world.
+    pub viewport: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -1683,7 +1686,7 @@ impl Engine {
 
     pub(crate) fn screenshot(&mut self, a: Value) -> ToolResult {
         let a: Screenshot = args("screenshot", a)?;
-        if a.level.is_some() == a.world_rect.is_some() {
+        if a.level.is_some() && a.world_rect.is_some() {
             return Err("screenshot needs exactly one of level or world_rect".into());
         }
         let shot = if self.mode()? == Mode::Editor {
@@ -1692,8 +1695,15 @@ impl Engine {
             put(&mut p, "world_rect", &a.world_rect);
             put(&mut p, "layers", &a.layers);
             put(&mut p, "size", &a.size);
+            put(&mut p, "viewport", &a.viewport);
             self.read("view.snapshot", p)?
         } else {
+            if a.viewport.is_some() {
+                return Err("viewport names a map tab of the Worlds editor, which isn't running: open the project in the editor, or give level or world_rect".into());
+            }
+            if a.level.is_none() && a.world_rect.is_none() {
+                return Err("screenshot needs exactly one of level or world_rect".into());
+            }
             crate::screenshot::headless(self, &a)?
         };
         let png = shot["png"].as_str().unwrap_or_default().to_string();

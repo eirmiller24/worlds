@@ -78,7 +78,7 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `find_regions` | `rules.regions` |
 | `expand_rules` | `rules.expand` |
 | `bake_and_validate` | `project.bake`, `project.validate`, `project.export` |
-| `screenshot` | `view.snapshot`; headless: `worlds --screenshot` on the saved project |
+| `screenshot` | `view.snapshot` (`viewport` passed through); headless: `worlds --screenshot` on the saved project |
 | `undo` | `history.undo` |
 | `resize_level` | `level.resize` |
 | `crop_level` | `level.crop` |
@@ -625,7 +625,7 @@ Check the project: regenerate the auto layers (reporting levels whose bake fails
 ### screenshot
 
 ```text
-Render a level, or a rectangle of the world in world pixels ([x, y, width, height]), to a PNG image so you can see it as the game will roughly look: all visible layers including generated tiles, with entity boxes and open notes drawn on top. Give level or world_rect. size is the largest image wanted, default [1024, 1024]. Works with or without the Worlds editor open.
+Render a level, or a rectangle of the world in world pixels ([x, y, width, height]), to a PNG image so you can see it as the game will roughly look: all visible layers including generated tiles, with entity boxes and open notes drawn on top. Give level or world_rect. size is the largest image wanted, default [1024, 1024]. Works with or without the Worlds editor open. With the editor open you can also see what the user sees: give neither level nor world_rect for what the focused map tab shows, or viewport (a map tab's number, as in its title "Map 2") for that tab; with world_rect, viewport says the rect is in that tab's world.
 ```
 
 ```json
@@ -634,7 +634,8 @@ Render a level, or a rectangle of the world in world pixels ([x, y, width, heigh
     "level": { "type": "string" },
     "world_rect": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 },
     "layers": { "type": "array", "items": { "type": "string" }, "description": "Only these layers. Default: all visible." },
-    "size": { "type": "array", "items": { "type": "integer", "minimum": 16, "maximum": 4096 }, "minItems": 2, "maxItems": 2 } },
+    "size": { "type": "array", "items": { "type": "integer", "minimum": 16, "maximum": 4096 }, "minItems": 2, "maxItems": 2 },
+    "viewport": { "type": "integer", "minimum": 1, "description": "Editor only: the map tab (1 is the first). Default: the focused one." } },
   "additionalProperties": false }
 ```
 
@@ -939,7 +940,7 @@ Bring definitions, worlds or levels of another Worlds project into this one, as 
 | `import_project` | with `dry_run`: the `project.import_plan` result (`{ rev, plan_id, empty, source, label, summary, items, ids, dropped, problems, assets }`). Otherwise the write result above plus `plan` (that result, without `rev` and `plan_id`) and `copied` (the files written under `art/`). A plan that imports nothing is a tool error naming its summary |
 | `find` | `{ rev, kind, total, entities \| levels \| notes \| tiles }`: the method's list (the key is `kind`), cut to `limit`; `total` counts every match |
 
-**`screenshot` in headless mode** is not an error. Headless `worlds-mcp` saves after every write, so the files on disk are the project; it runs the editor binary's headless screenshot mode on them, asking for the map alone as `view.snapshot` draws it: `worlds --screenshot <tmp>.png --snapshot [--level <slug> | --world-rect x,y,w,h] --max-size WxH [--layers a,b] <project>` with the level or world rect, size (default `1024x1024`) and layers of the call (the editor's [README](../crates/worlds-editor/README.md) describes the flags), and returns that PNG. `scale` is then the image width over the drawn width in world pixels. The binary is `WORLDS_EDITOR_BIN` when set, else `worlds` next to the `worlds-mcp` executable. If it can't be found or exits non-zero, the tool error says so, names the path tried and includes its stderr.
+**`screenshot` in headless mode** is not an error. Headless `worlds-mcp` saves after every write, so the files on disk are the project; it runs the editor binary's headless screenshot mode on them, asking for the map alone as `view.snapshot` draws it: `worlds --screenshot <tmp>.png --snapshot [--level <slug> | --world-rect x,y,w,h] --max-size WxH [--layers a,b] <project>` with the level or world rect, size (default `1024x1024`) and layers of the call (the editor's [README](../crates/worlds-editor/README.md) describes the flags), and returns that PNG. `scale` is then the image width over the drawn width in world pixels. There are no map tabs then: `viewport` is a tool error, and so is leaving out both `level` and `world_rect`. The binary is `WORLDS_EDITOR_BIN` when set, else `worlds` next to the `worlds-mcp` executable. If it can't be found or exits non-zero, the tool error says so, names the path tried and includes its stderr.
 
 ## Resources
 
