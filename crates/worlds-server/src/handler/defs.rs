@@ -8,6 +8,8 @@ use worlds_core::{
     Slug, TilesetDef,
 };
 
+use worlds_core::assembly::Assembly;
+
 use super::params;
 use super::{Confirm, Write};
 use crate::rpc::RpcError;
@@ -212,7 +214,7 @@ pub(crate) fn get(project: &Project, method: &str, p: Value) -> Result<Value, Rp
             ))),
         };
     }
-    let lists: [DefList; 5] = [
+    let lists: [DefList; 6] = [
         (
             "layer",
             "layers",
@@ -258,6 +260,15 @@ pub(crate) fn get(project: &Project, method: &str, p: Value) -> Result<Value, Rp
                 .map(|d| (&d.layer, file_form(d)))
                 .collect(),
         ),
+        (
+            "assembly",
+            "assemblies",
+            project
+                .assemblies
+                .iter()
+                .map(|d| (&d.slug, file_form(d)))
+                .collect(),
+        ),
     ];
     match (p.kind, p.slug) {
         (None, Some(_)) => Err(RpcError::invalid_params(format!(
@@ -276,7 +287,7 @@ pub(crate) fn get(project: &Project, method: &str, p: Value) -> Result<Value, Rp
                 return Err(bad_kind(
                     method,
                     &kind,
-                    "layer, entity, entity_field, level_field, enum, tileset, rules, macros",
+                    "layer, entity, entity_field, level_field, enum, tileset, rules, macros, assembly",
                 ));
             };
             match slug {
@@ -305,6 +316,7 @@ fn unknown(kind: &str, slug: &Slug) -> RpcError {
         "entity" => CommandError::UnknownEntityType(slug.clone()),
         "enum" => CommandError::UnknownEnum(slug.clone()),
         "tileset" => CommandError::UnknownTileset(slug.clone()),
+        "assembly" => CommandError::UnknownAssembly(slug.clone()),
         _ => CommandError::Invalid(format!("no rule set {slug}")),
     })
 }
@@ -396,11 +408,20 @@ pub(crate) fn set(project: &Project, method: &str, p: Value) -> Result<Write, Rp
                 None,
             )
         }
+        "assembly" => {
+            if p.index.is_some() {
+                return Err(RpcError::invalid_params(format!(
+                    "{method}: assemblies have no order, so kind assembly takes no index"
+                )));
+            }
+            let assembly: Assembly = params::parse(method, p.def)?;
+            (Command::SetAssembly { assembly }, None)
+        }
         k => {
             return Err(bad_kind(
                 method,
                 k,
-                "layer, entity, entity_field, level_field, enum, tileset",
+                "layer, entity, entity_field, level_field, enum, tileset, assembly",
             ));
         }
     };
@@ -446,6 +467,10 @@ pub(crate) fn rename(_: &Project, method: &str, p: Value) -> Result<Write, RpcEr
         "entity" => Command::RenameEntityType { from, to },
         "enum" => Command::RenameEnum { from, to },
         "tileset" => Command::RenameTileset { from, to },
+        "assembly" => Command::RenameAssembly {
+            slug: from,
+            new_slug: to,
+        },
         "enum_value" => Command::RenameEnumValue {
             enum_: p.enum_.ok_or_else(|| {
                 RpcError::invalid_params(format!("{method}: kind enum_value needs enum"))
@@ -457,7 +482,7 @@ pub(crate) fn rename(_: &Project, method: &str, p: Value) -> Result<Write, RpcEr
             return Err(bad_kind(
                 method,
                 k,
-                "layer, entity, entity_field, level_field, enum, enum_value, tileset",
+                "layer, entity, entity_field, level_field, enum, enum_value, tileset, assembly",
             ));
         }
     };
@@ -529,11 +554,12 @@ pub(crate) fn remove(project: &Project, method: &str, p: Value) -> Result<Write,
             },
             "tileset",
         ),
+        "assembly" => (Command::RemoveAssembly { slug: s.clone() }, "assembly"),
         k => {
             return Err(bad_kind(
                 method,
                 k,
-                "layer, entity, entity_field, level_field, enum, tileset",
+                "layer, entity, entity_field, level_field, enum, tileset, assembly",
             ));
         }
     };
