@@ -399,3 +399,50 @@ fn load_orders_worlds_by_the_list_and_validation_reports_strays() {
             .contains("[\"main\", \"ghost\", \"zeta\"]")
     );
 }
+
+/// `duplicate_level` into another world lands in that world's space: just
+/// right of the original's place, past the levels of that world only.
+#[test]
+fn duplicate_level_into_another_world() {
+    let mut p = common::fixture();
+    p.apply(create("dungeon", None)).unwrap();
+    p.apply(Command::MoveLevelToWorld {
+        level: s("shaft"),
+        world: s("dungeon"),
+        world_px: None,
+    })
+    .unwrap();
+    let src = p.level("crevasse").unwrap().clone();
+    let g = p.grid_size as i64;
+    check(
+        &mut p,
+        Command::DuplicateLevel {
+            level: s("crevasse"),
+            slug: s("crevasse_b"),
+            name: None,
+            world: Some(s("dungeon")),
+            world_px: None,
+        },
+    );
+    let copy = p.world("dungeon").unwrap().level("crevasse_b").unwrap();
+    assert!(p.world("main").unwrap().level("crevasse_b").is_none());
+    assert_eq!(copy.world_px[1], src.world_px[1]);
+    assert!(copy.world_px[0] >= src.world_px[0] + src.size[0] as i64 * g);
+    // It overlaps no level of the dungeon.
+    let r = |l: &Level| {
+        [
+            l.world_px[0],
+            l.world_px[1],
+            l.world_px[0] + l.size[0] as i64 * g,
+            l.world_px[1] + l.size[1] as i64 * g,
+        ]
+    };
+    let c = r(copy);
+    for l in &p.world("dungeon").unwrap().levels {
+        if l.slug == "crevasse_b" {
+            continue;
+        }
+        let o = r(l);
+        assert!(c[2] <= o[0] || o[2] <= c[0] || c[3] <= o[1] || o[3] <= c[1]);
+    }
+}

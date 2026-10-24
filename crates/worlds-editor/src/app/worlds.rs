@@ -510,4 +510,45 @@ mod tests {
         d.click(&mut st, x.center());
         assert_eq!(st.actions, [Action::DeleteWorld(Some(s("main")))]);
     }
+
+    /// A connector of main whose far end names a level of the dungeon:
+    /// that end is left off main's map (validation reports it), and with
+    /// the dungeon shown the connector gets no handles.
+    #[test]
+    fn connectors_stay_on_their_world() {
+        use worlds_core::{Annotation, ConnectorStyle, Endpoint, Shape};
+        let (_tmp, mut st) = two_worlds();
+        let doc = st.doc.as_mut().unwrap();
+        let mut n = Annotation::new(Shape::Connector {
+            from: Endpoint::Level(s("crevasse")),
+            to: Endpoint::Level(s("shaft")),
+            waypoints: vec![[40, 40]],
+            label: None,
+            style: ConnectorStyle::default(),
+        });
+        let id = n.id.clone();
+        n.title = Some("across".into());
+        doc.project
+            .apply(Command::AddNote {
+                scope: worlds_core::command::NoteScope::World(s("main")),
+                note: n,
+                index: None,
+            })
+            .unwrap();
+        doc.reindex();
+        let doc = st.doc.as_ref().unwrap();
+        let r = crate::annot::find_note(doc, &id).unwrap();
+        // The crevasse end and the waypoint; no end in the dungeon.
+        assert_eq!(crate::annot::connector_line(doc, r).len(), 2);
+        st.view
+            .selection
+            .set([crate::view::SelItem::Note(id.clone())]);
+        assert!(crate::annot::edited_note(doc, &st.view).is_some());
+        st.view.set_world(doc, 1);
+        st.view
+            .selection
+            .set([crate::view::SelItem::Note(id.clone())]);
+        assert!(crate::annot::edited_note(doc, &st.view).is_none());
+        assert!(crate::annot::handle_at(doc, &st.view, [40.0, 40.0], 1.0).is_none());
+    }
 }
