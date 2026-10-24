@@ -524,6 +524,8 @@ struct DefsPatch {
     #[serde(default)]
     rename_level_fields: Vec<Rename>,
     #[serde(default)]
+    rename_assemblies: Vec<Rename>,
+    #[serde(default)]
     set_layers: Vec<SetLayer>,
     #[serde(default)]
     set_enums: Vec<Map<String, Value>>,
@@ -533,6 +535,8 @@ struct DefsPatch {
     set_entity_fields: Vec<SetEntityField>,
     #[serde(default)]
     set_level_fields: Vec<SetLevelField>,
+    #[serde(default)]
+    set_assemblies: Vec<Map<String, Value>>,
     set_project: Option<ProjectPatch>,
     #[serde(default)]
     remove_entity_fields: Vec<RemoveEntityField>,
@@ -544,6 +548,8 @@ struct DefsPatch {
     remove_entity_types: Vec<String>,
     #[serde(default)]
     remove_layers: Vec<String>,
+    #[serde(default)]
+    remove_assemblies: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -777,6 +783,13 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
             json!({ "kind": "level_field", "from": r.from, "to": r.to }),
         );
     }
+    for r in &pt.rename_assemblies {
+        touch(r.to.clone());
+        push(
+            "defs.rename",
+            json!({ "kind": "assembly", "from": r.from, "to": r.to }),
+        );
+    }
     for l in &pt.set_layers {
         touch(def_slug(&l.def, "set_layers def")?.to_string());
         let mut p = json!({ "kind": "layer", "def": l.def });
@@ -809,6 +822,13 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
         let mut p = json!({ "kind": "level_field", "def": f.def });
         put(&mut p, "index", &f.index);
         push("defs.set", p);
+    }
+    for d in &pt.set_assemblies {
+        touch(def_slug(d, "set_assemblies")?.to_string());
+        let mut d = d.clone();
+        d.remove("$schema");
+        d.remove("format");
+        push("defs.set", json!({ "kind": "assembly", "def": d }));
     }
     if let Some(s) = &pt.set_project {
         let mut p = json!({});
@@ -852,6 +872,10 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
     for l in &pt.remove_layers {
         touch(l.clone());
         push("defs.remove", json!({ "kind": "layer", "slug": l }));
+    }
+    for a in &pt.remove_assemblies {
+        touch(a.clone());
+        push("defs.remove", json!({ "kind": "assembly", "slug": a }));
     }
     let mut summary = touched.join(", ");
     if summary.chars().count() > 60 {
@@ -1467,7 +1491,7 @@ impl Engine {
         let a: EditDefinitions = args("edit_definitions", a)?;
         let (writes, summary) = plan_defs(&a.patch, a.confirm)?;
         if writes.is_empty() {
-            return Err("patch is empty: give at least one of rename_entity_types, rename_enums, rename_enum_values, rename_entity_fields, rename_level_fields, set_layers, set_enums, set_entity_types, set_entity_fields, set_level_fields, set_project, remove_entity_fields, remove_level_fields, remove_enums, remove_entity_types, remove_layers".into());
+            return Err("patch is empty: give at least one of rename_entity_types, rename_enums, rename_enum_values, rename_entity_fields, rename_level_fields, rename_assemblies, set_layers, set_enums, set_entity_types, set_entity_fields, set_level_fields, set_assemblies, set_project, remove_entity_fields, remove_level_fields, remove_enums, remove_entity_types, remove_layers, remove_assemblies".into());
         }
         let label = Self::label("edit_definitions", a.label.as_deref(), &summary);
         let r = self.write(&label, |_| Ok(writes.clone()))?;
@@ -1784,6 +1808,7 @@ impl Engine {
         );
         let mut p = json!({ "level": a.level, "origin": a.origin, "fragment": a.fragment });
         put(&mut p, "layer_map", &a.layer_map);
+        put(&mut p, "flip", &a.flip);
         let (mut out, raw) = self.write_full(&label, |_| Ok(vec![("edit.paste", p.clone())]))?;
         if let Some(raw) = raw {
             for k in ["items", "ids", "problems"] {
@@ -1793,6 +1818,77 @@ impl Engine {
             }
         }
         Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn save_assembly(&mut self, a: Value) -> ToolResult {
+        let a: SaveAssembly = args("save_assembly", a)?;
+        let label = Self::label("save_assembly", a.label.as_deref(), &a.slug);
+        let mut sel = json!({});
+        put(&mut sel, "level", &a.level);
+        put(&mut sel, "entities", &a.entities);
+        put(&mut sel, "notes", &a.notes);
+        put(&mut sel, "tiles", &a.tiles);
+        put(&mut sel, "rect", &a.rect);
+        put(&mut sel, "layers", &a.layers);
+        let has_sel = sel.as_object().is_some_and(|m| !m.is_empty());
+        let mut p = json!({ "slug": a.slug, "name": a.name });
+        match (has_sel, a.fragment) {
+            (true, None) => p["selection"] = sel,
+            (false, Some(f)) => p["fragment"] = f,
+            (true, Some(_)) => {
+                return Err("give either what to copy (level, entities, notes, tiles, rect, layers) or a fragment, not both".into());
+            }
+            (false, None) => {
+                return Err("nothing to save: give entities, notes, tiles and/or rect (as for copy_fragment), or a fragment".into());
+            }
+        }
+        put(&mut p, "category", &a.category);
+        put(&mut p, "tags", &a.tags);
+        put(&mut p, "doc", &a.doc);
+        put(&mut p, "replace", &a.replace);
+        let (mut out, raw) =
+            self.write_full(&label, |_| Ok(vec![("edit.save_assembly", p.clone())]))?;
+        if let Some(raw) = raw {
+            for k in ["items", "size"] {
+                if let Some(v) = raw.get(k) {
+                    out[k] = v.clone();
+                }
+            }
+        }
+        Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn place_assembly(&mut self, a: Value) -> ToolResult {
+        let a: PlaceAssembly = args("place_assembly", a)?;
+        let label = Self::label(
+            "place_assembly",
+            a.label.as_deref(),
+            &format!("{} in {}", a.slug, a.level),
+        );
+        let mut p = json!({ "level": a.level, "slug": a.slug, "origin": a.cell });
+        put(&mut p, "flip", &a.flip);
+        let (mut out, raw) =
+            self.write_full(&label, |_| Ok(vec![("edit.place_assembly", p.clone())]))?;
+        if let Some(raw) = raw {
+            for k in ["items", "ids", "problems"] {
+                if let Some(v) = raw.get(k) {
+                    out[k] = v.clone();
+                }
+            }
+        }
+        Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn arrange_levels(&mut self, a: Value) -> ToolResult {
+        let a: ArrangeLevels = args("arrange_levels", a)?;
+        let label = Self::label(
+            "arrange_levels",
+            a.label.as_deref(),
+            &format!("{} {}", a.op, a.levels.join(", ")),
+        );
+        let p = json!({ "levels": a.levels, "op": a.op });
+        let r = self.write(&label, |_| Ok(vec![("level.arrange", p.clone())]))?;
+        Ok(vec![json_block(&r)])
     }
 
     pub(crate) fn duplicate_level(&mut self, a: Value) -> ToolResult {
@@ -1874,6 +1970,44 @@ struct PasteFragment {
     origin: [i64; 2],
     fragment: Value,
     layer_map: Option<BTreeMap<String, String>>,
+    flip: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveAssembly {
+    level: Option<String>,
+    entities: Option<Vec<String>>,
+    notes: Option<Vec<String>>,
+    tiles: Option<BTreeMap<String, Vec<[u32; 2]>>>,
+    rect: Option<[u32; 4]>,
+    layers: Option<Vec<String>>,
+    fragment: Option<Value>,
+    slug: String,
+    name: String,
+    category: Option<String>,
+    tags: Option<Vec<String>>,
+    doc: Option<String>,
+    replace: Option<bool>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlaceAssembly {
+    level: String,
+    slug: String,
+    cell: [i64; 2],
+    flip: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArrangeLevels {
+    levels: Vec<String>,
+    op: String,
     label: Option<String>,
 }
 

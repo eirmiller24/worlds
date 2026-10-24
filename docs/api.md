@@ -232,6 +232,7 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 | `entity_types[]` | `{ slug, name, doc?, category?, tags, size, pivot, resizable, color, icon?, limit?, fields, count }`. `pivot` is the point of the entity that sits on its cell, as fractions of its size (`[0.5, 1.0]` is bottom center). `color` is the type's `#rrggbb`, `icon` its `{ tileset, tile: [col, row] }` atlas tile, `limit` `{ max, scope, behavior }` with the defaults spelled out (`scope` `level`, `behavior` `prevent_adding`). `fields` as in the entity file without `name` and `display` (with `doc` when set); `count` across the project |
 | `enums[]` | `{ slug, values: [slug] }` |
 | `tilesets[]` | `{ slug, image, tile_size, spacing?, padding?, atlas }`. `atlas` is `[columns, rows]` in tiles, `null` if the image can't be read |
+| `assemblies[]` | `{ slug, name, category?, tags, doc?, size, items }`: every [assembly](#assemblies-and-transforms), `size` in cells of the project grid, `items` how many grid cells, tile stacks, entities and notes it holds (`defs.get` kind `assembly` gives the content) |
 | `notes` | `{ open, done }` across the project. Guides are not counted in any `notes` count: they are reference lines, not work items (`worlds[].guides` counts them) |
 | `recovered`? | Only when this editor session started from a crash recovery (the editor's *Recover*): `{ files: [paths recovered], skipped: [conflicting paths left out], session: { pid, written } }`, `session` being the crashed one |
 

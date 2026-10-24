@@ -79,6 +79,26 @@ pub fn describe(project: &Project, dir: &Path, rev: u64, mode: Mode) -> Value {
             .collect(),
     );
     out.insert("tilesets".into(), tilesets(project, dir));
+    out.insert(
+        "assemblies".into(),
+        project
+            .assemblies
+            .iter()
+            .map(|a| {
+                let mut o = json!({ "slug": a.slug, "name": a.name });
+                if let Some(c) = &a.category {
+                    o["category"] = json!(c);
+                }
+                o["tags"] = json!(a.tags);
+                if let Some(d) = &a.doc {
+                    o["doc"] = json!(d);
+                }
+                o["size"] = json!(a.size);
+                o["items"] = json!(a.item_count());
+                o
+            })
+            .collect(),
+    );
     let (open, done) = notes_count(
         project
             .worlds
