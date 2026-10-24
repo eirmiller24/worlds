@@ -141,7 +141,14 @@ fn is_modifier(k: egui::Key) -> bool {
 
 /// Whether `cmd` matches every word of `query` (in its name, id or keys).
 fn matches(km: &Keymap, cmd: Cmd, query: &str) -> bool {
-    let hay = format!("{} {} {}", cmd.name(), cmd.id(), km.labels(cmd)).to_lowercase();
+    // Chords in both spellings of the primary modifier, so "ctrl+y" finds
+    // Redo on a Mac (where it shows as Cmd+Y) and "cmd+y" elsewhere.
+    let keys: Vec<String> = km
+        .chords(cmd)
+        .iter()
+        .map(|c| format!("{} {}", c.format_for(false), c.format_for(true)))
+        .collect();
+    let hay = format!("{} {} {}", cmd.name(), cmd.id(), keys.join(" ")).to_lowercase();
     query
         .split_whitespace()
         .all(|w| hay.contains(&w.to_lowercase()))
@@ -416,7 +423,9 @@ mod tests {
         assert!(matches(&km, Cmd::Undo, "undo"));
         assert!(matches(&km, Cmd::FitWorld, "fit world"));
         assert!(matches(&km, Cmd::FitWorld, "view.fit"));
+        // Either spelling of the primary modifier, on every platform.
         assert!(matches(&km, Cmd::Redo, "ctrl+y"));
+        assert!(matches(&km, Cmd::Redo, "cmd+y"));
         assert!(!matches(&km, Cmd::Undo, "redo"));
         assert!(matches(&km, Cmd::Undo, ""));
     }
