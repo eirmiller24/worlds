@@ -362,8 +362,12 @@ impl EditorApp {
         self.autosaver.blocked = None;
         let n = plan.applied.len();
         let mut msg = format!(
-            "Recovered {n} file{} from autosave; Ctrl+S to keep them",
-            if n == 1 { "" } else { "s" }
+            "Recovered {n} file{} from autosave; {} to keep them",
+            if n == 1 { "" } else { "s" },
+            match self.st.keymap.label(crate::keymap::Cmd::Save) {
+                k if k.is_empty() => "save".to_string(),
+                k => k,
+            }
         );
         if let Some(d) = &kept {
             msg.push_str(&format!(

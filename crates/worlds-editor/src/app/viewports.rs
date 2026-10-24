@@ -134,6 +134,19 @@ impl EditorState {
     }
 }
 
+/// The ★ button's tooltip: "Ctrl+Shift+1..9" while the bookmark keys are
+/// the defaults, else the first one's key.
+fn bookmark_keys_hint(km: &crate::keymap::Keymap) -> String {
+    use crate::keymap::{BOOKMARK_KEYS, Cmd};
+    let all_default = (0..BOOKMARK_KEYS as u8).all(|n| km.is_default(Cmd::JumpBookmark(n)));
+    let first = km.label(Cmd::JumpBookmark(0));
+    if all_default {
+        format!("Camera bookmarks ({first}..9)")
+    } else {
+        km.hint("Camera bookmarks", Cmd::JumpBookmark(0))
+    }
+}
+
 /// The bookmark list: each bookmark jumps on a click (its world and key
 /// beside it), × forgets it; a name field and Save view add the focused
 /// tab's view. Reusable: the toolbar's ★ window shows it, a Levels pane can
@@ -148,7 +161,7 @@ pub fn bookmarks_list(ui: &mut egui::Ui, st: &mut EditorState) {
         .striped(true)
         .show(ui, |ui| {
             for (i, b) in st.view.bookmarks.iter().enumerate() {
-                let key = super::actions::bookmark_key(i);
+                let key = super::actions::bookmark_key(&st.keymap, i);
                 let r = ui
                     .button(&b.name)
                     .on_hover_text(format!("Show {} in the focused map tab", b.name));
@@ -430,7 +443,7 @@ impl EditorApp {
             name.trim().to_string()
         };
         let i = self.st.view.save_bookmark(doc, &self.st.viewport, &name)?;
-        let key = super::actions::bookmark_key(i);
+        let key = super::actions::bookmark_key(&self.st.keymap, i);
         self.st.view.set_status(
             if key.is_empty() {
                 format!("Bookmarked {name}")
@@ -449,7 +462,7 @@ impl EditorApp {
         }
         let r = ui
             .add(egui::Button::selectable(self.st.bookmarks_open, "★"))
-            .on_hover_text("Camera bookmarks (Ctrl+Shift+1..9)");
+            .on_hover_text(bookmark_keys_hint(&self.st.keymap));
         super::fields::mark(ui, "bookmarks button", r.rect);
         if r.clicked() {
             self.st.bookmarks_open = !self.st.bookmarks_open;

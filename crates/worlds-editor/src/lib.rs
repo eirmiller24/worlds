@@ -20,6 +20,8 @@
 //! - [`signals`]: SIGINT/SIGTERM shut the editor down cleanly.
 //! - [`autosave`]: autosave timing and the writer thread (crash recovery is
 //!   in [`app::recovery`]).
+//! - [`keymap`]: every remappable shortcut, its default chord and when it
+//!   applies; [`prefs`]: the user's preferences file (the remaps).
 //! - [`live`]: hosting the live API (`worlds-server`) in the editor;
 //!   [`ghost`]: approval mode's ghost overlay; [`snapshot`]: map-only PNGs.
 //!
@@ -34,9 +36,11 @@ pub mod doc;
 pub mod edit;
 pub mod ghost;
 pub mod headless;
+pub mod keymap;
 pub mod library;
 pub mod live;
 pub mod log;
+pub mod prefs;
 pub mod script;
 pub mod signals;
 pub mod snapshot;

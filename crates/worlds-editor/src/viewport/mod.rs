@@ -120,6 +120,8 @@ pub struct ViewportCx<'a> {
     /// thumbnail ([`crate::thumbs`]); `None` (snapshots, which always draw
     /// the tiles): flat fills.
     pub thumbs: Option<&'a mut crate::thumbs::Thumbs>,
+    /// The shortcuts, for the tooltips and hints that name a key.
+    pub keymap: &'a crate::keymap::Keymap,
 }
 
 /// Tileset atlas textures by slug (`None`: the image failed to load).
@@ -429,10 +431,15 @@ impl Viewport {
         painter.rect_filled(rect, 0.0, Color32::from_gray(24));
 
         let Some(doc) = cx.doc else {
+            let open = cx.keymap.label(crate::keymap::Cmd::Open);
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "No project open. Ctrl-O to open one.",
+                if open.is_empty() {
+                    "No project open: Open… in the toolbar opens one.".to_string()
+                } else {
+                    format!("No project open. {open} to open one.")
+                },
                 FontId::proportional(16.0),
                 Color32::from_gray(140),
             );
@@ -880,7 +887,13 @@ impl Viewport {
             g.draw(&painter, &to_screen, cx.accent);
         }
         if scene.draw_order.is_empty() && cx.view.drawing.is_none() {
-            empty_map_hint(&painter, rect, doc.project.layers.is_empty(), cx.accent);
+            empty_map_hint(
+                &painter,
+                rect,
+                doc.project.layers.is_empty(),
+                cx.accent,
+                &cx.keymap.label(crate::keymap::Cmd::CommandPalette),
+            );
         }
         self.readout = None;
         if let Some(d) = &cx.view.drawing {
@@ -1717,7 +1730,7 @@ impl Viewport {
             shape_strip(ui.ctx(), rect, doc, active, cx.actions);
         }
         self.paint_strip = (tool.is_paint_mode() && cx.focused)
-            .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions, doc, cx.view));
+            .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions, doc, cx.view, cx.keymap));
 
         // Context menu (a right click; right drag pans).
         if resp.secondary_clicked() {
@@ -1789,7 +1802,7 @@ impl Viewport {
                     });
                 }
             }
-            crate::arrange::context_menu(ui, doc, cx.view, cx.actions);
+            crate::arrange::context_menu(ui, doc, cx.view, cx.actions, cx.keymap);
         });
     }
 }
@@ -2078,6 +2091,7 @@ fn paint_strip(
     actions: &mut Vec<Action>,
     doc: &Document,
     view: &mut ViewState,
+    km: &crate::keymap::Keymap,
 ) -> Rect {
     egui::Area::new(egui::Id::new("paint tool strip"))
         .fixed_pos(map.min + STRIP_OFFSET)
@@ -2092,7 +2106,7 @@ fn paint_strip(
                     for t in Tool::PAINT_MODES {
                         if ui
                             .add(egui::Button::selectable(tool == t, t.name()))
-                            .on_hover_text(format!("{} ({})", t.name(), t.shortcut()))
+                            .on_hover_text(km.hint(t.name(), crate::keymap::Cmd::Tool(t)))
                             .clicked()
                             && tool != t
                         {
@@ -2122,7 +2136,7 @@ fn paint_strip(
                         crate::app::fields::mark(ui, "paint:density", r.rect);
                         ui.label("Density").on_hover_text(tip);
                         view.palette.density = d;
-                        crate::arrange::turn_buttons(ui, view.brush_flip, actions);
+                        crate::arrange::turn_buttons(ui, view.brush_flip, actions, km);
                     }
                 });
             });
@@ -2674,7 +2688,13 @@ pub fn select_item_at(
 
 /// A map with no level says how to make one (and, with no layer either,
 /// where layers come from): a quiet card in the middle of the map.
-fn empty_map_hint(painter: &egui::Painter, rect: Rect, no_layers: bool, accent: Color32) {
+fn empty_map_hint(
+    painter: &egui::Painter,
+    rect: Rect,
+    no_layers: bool,
+    accent: Color32,
+    palette_key: &str,
+) {
     let wrap = (rect.width() - 48.0).clamp(120.0, 460.0);
     let title = painter.layout(
         "No levels yet".into(),
@@ -2682,9 +2702,12 @@ fn empty_map_hint(painter: &egui::Painter, rect: Rect, no_layers: bool, accent: 
         Color32::from_gray(225),
         wrap,
     );
-    let mut body = String::from(
-        "Right-click the map and pick New level here…\nor press Ctrl+P and run New level…",
-    );
+    let mut body = String::from("Right-click the map and pick New level here…\n");
+    if palette_key.is_empty() {
+        body.push_str("or run New level… from Commands in the toolbar");
+    } else {
+        body.push_str(&format!("or press {palette_key} and run New level…"));
+    }
     if no_layers {
         body.push_str(
             "\n\nLayers (what you paint on) and tilesets (your art)\nare set up in the Project tab.",

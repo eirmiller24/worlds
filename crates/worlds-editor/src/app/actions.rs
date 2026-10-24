@@ -1,6 +1,7 @@
 //! Named editor actions: what the toolbar, shortcuts and the command
 //! palette (Ctrl-P) trigger.
 
+use crate::keymap::{Chord, Cmd, Keymap};
 use crate::tools::Tool;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,52 +167,73 @@ pub enum Action {
     GroupSelection,
     /// Ctrl+Shift+G: remove the groups of the selected members.
     UngroupSelection,
+    /// The Preferences window (shortcuts).
+    OpenPreferences,
 }
 
 impl Action {
-    /// Everything the command palette lists: (name, shortcut, action).
-    pub fn catalog() -> Vec<(String, &'static str, Action)> {
-        let mut v: Vec<(String, &'static str, Action)> = vec![
-            ("Open project…".into(), "Ctrl+O", Action::OpenDialog),
-            ("Reload project from disk".into(), "Ctrl+R", Action::Reload),
-            ("Save".into(), "Ctrl+S", Action::Save),
-            ("Undo".into(), "Ctrl+Z", Action::Undo),
-            ("Redo".into(), "Ctrl+Shift+Z", Action::Redo),
-            ("Fit world".into(), "Shift+F", Action::FitWorld),
-            ("Fit level".into(), "F", Action::FitLevel),
-            ("Zoom in".into(), "+", Action::ZoomIn),
-            ("Zoom out".into(), "-", Action::ZoomOut),
-            ("Zoom 100%".into(), "1", Action::ZoomActual),
-            ("Toggle grid".into(), "Ctrl+M", Action::ToggleGrid),
+    /// Everything the command palette lists: (name, shortcut, action). The
+    /// shortcuts are read from `km`, so they follow a remap.
+    pub fn catalog(km: &Keymap) -> Vec<(String, String, Action)> {
+        let k = |c: Cmd| km.label(c);
+        let none = String::new;
+        let mut v: Vec<(String, String, Action)> = vec![
+            ("Open project…".into(), k(Cmd::Open), Action::OpenDialog),
+            (
+                "Reload project from disk".into(),
+                k(Cmd::Reload),
+                Action::Reload,
+            ),
+            ("Save".into(), k(Cmd::Save), Action::Save),
+            ("Undo".into(), k(Cmd::Undo), Action::Undo),
+            ("Redo".into(), k(Cmd::Redo), Action::Redo),
+            ("Fit world".into(), k(Cmd::FitWorld), Action::FitWorld),
+            ("Fit level".into(), k(Cmd::FitLevel), Action::FitLevel),
+            ("Zoom in".into(), k(Cmd::ZoomIn), Action::ZoomIn),
+            ("Zoom out".into(), k(Cmd::ZoomOut), Action::ZoomOut),
+            ("Zoom 100%".into(), k(Cmd::ZoomActual), Action::ZoomActual),
+            ("Toggle grid".into(), k(Cmd::ToggleGrid), Action::ToggleGrid),
             (
                 "Group the selection".into(),
-                "Ctrl+G",
+                k(Cmd::Group),
                 Action::GroupSelection,
             ),
             (
                 "Ungroup the selection".into(),
-                "Ctrl+Shift+G",
+                k(Cmd::Ungroup),
                 Action::UngroupSelection,
             ),
-            ("Next level".into(), "PgDn", Action::NextLevel),
-            ("Previous level".into(), "PgUp", Action::PrevLevel),
-            ("New level…".into(), "", Action::NewLevel(None)),
-            ("Delete level…".into(), "Del", Action::DeleteLevel),
-            ("Crop level to content".into(), "", Action::CropLevel),
-            ("Reset panel layout".into(), "", Action::ResetLayout),
-            ("Clear log".into(), "", Action::ClearLog),
-            ("Place entity".into(), "Enter", Action::PlaceEntity),
+            ("Next level".into(), k(Cmd::NextLevel), Action::NextLevel),
+            (
+                "Previous level".into(),
+                k(Cmd::PrevLevel),
+                Action::PrevLevel,
+            ),
+            ("New level…".into(), none(), Action::NewLevel(None)),
+            ("Delete level…".into(), k(Cmd::Delete), Action::DeleteLevel),
+            ("Crop level to content".into(), none(), Action::CropLevel),
+            ("Reset panel layout".into(), none(), Action::ResetLayout),
+            ("Clear log".into(), none(), Action::ClearLog),
+            (
+                "Place entity".into(),
+                k(Cmd::PlaceEntity),
+                Action::PlaceEntity,
+            ),
             (
                 "Duplicate selection".into(),
-                "Ctrl+D",
+                k(Cmd::Duplicate),
                 Action::DuplicateSelection,
             ),
-            ("Delete selection".into(), "Del", Action::DeleteSelection),
-            ("Copy selection".into(), "Ctrl+C", Action::Copy),
-            ("Cut selection".into(), "Ctrl+X", Action::Cut),
+            (
+                "Delete selection".into(),
+                k(Cmd::Delete),
+                Action::DeleteSelection,
+            ),
+            ("Copy selection".into(), fixed("Ctrl+C"), Action::Copy),
+            ("Cut selection".into(), fixed("Ctrl+X"), Action::Cut),
             (
                 "Paste".into(),
-                "Ctrl+V",
+                fixed("Ctrl+V"),
                 Action::Paste {
                     text: None,
                     in_place: false,
@@ -219,7 +241,7 @@ impl Action {
             ),
             (
                 "Paste in place".into(),
-                "Ctrl+Shift+V",
+                fixed("Ctrl+Shift+V"),
                 Action::Paste {
                     text: None,
                     in_place: true,
@@ -227,66 +249,75 @@ impl Action {
             ),
             (
                 "Select all entities in the level".into(),
-                "Ctrl+A",
+                k(Cmd::SelectAll),
                 Action::SelectAll,
             ),
-            ("Edit level fields".into(), "", Action::OpenTypes(None)),
-            ("Notes: show the Notes pane".into(), "", Action::ShowNotes),
-            ("New world…".into(), "", Action::NewWorld),
-            ("Rename world…".into(), "", Action::RenameWorld(None)),
-            ("Delete world…".into(), "", Action::DeleteWorld(None)),
+            ("Edit level fields".into(), none(), Action::OpenTypes(None)),
+            (
+                "Notes: show the Notes pane".into(),
+                none(),
+                Action::ShowNotes,
+            ),
+            ("New world…".into(), none(), Action::NewWorld),
+            ("Rename world…".into(), none(), Action::RenameWorld(None)),
+            ("Delete world…".into(), none(), Action::DeleteWorld(None)),
             (
                 "Find: search the whole project".into(),
-                "Ctrl+F",
+                k(Cmd::ShowFind),
                 Action::ShowFind,
             ),
             (
                 "History: show the History pane".into(),
-                "",
+                none(),
                 Action::ShowHistory,
             ),
             (
                 "Layer: duplicate the active layer".into(),
-                "",
+                none(),
                 Action::DuplicateLayer(None),
             ),
             (
                 "Layer: merge the active layer down".into(),
-                "",
+                none(),
                 Action::MergeLayerDown(None),
             ),
             (
                 "Selection: move to the active layer".into(),
-                "",
+                none(),
                 Action::MoveSelectionToLayer(None),
             ),
             (
                 "Add reference image…".into(),
-                "",
+                none(),
                 Action::AddReference(None),
             ),
             (
                 "Import from Worlds project…".into(),
-                "",
+                none(),
                 Action::ImportProject,
             ),
-            ("New viewport".into(), "", Action::NewViewport),
+            ("New viewport".into(), none(), Action::NewViewport),
             (
                 "Duplicate viewport".into(),
-                "",
+                none(),
                 Action::DuplicateViewport(None),
             ),
-            ("Close viewport".into(), "", Action::CloseViewport(None)),
+            ("Close viewport".into(), none(), Action::CloseViewport(None)),
             (
                 "Link cameras (focused and next viewport)".into(),
-                "",
+                none(),
                 Action::LinkCameras(None),
             ),
-            ("Bookmark this view…".into(), "", Action::SaveBookmark),
+            ("Bookmark this view…".into(), none(), Action::SaveBookmark),
             (
                 "Levels: show the Levels pane".into(),
-                "Ctrl+L",
+                k(Cmd::ShowLevels),
                 Action::ShowLevels,
+            ),
+            (
+                "Preferences…".into(),
+                k(Cmd::Preferences),
+                Action::OpenPreferences,
             ),
         ];
         use super::project_pane::Section;
@@ -295,25 +326,29 @@ impl Action {
             ("Project: tilesets (add an image)", Section::Tilesets),
             ("Project: settings (grid, collision)", Section::Settings),
         ] {
-            v.push((name.into(), "", Action::OpenProject(s)));
+            v.push((name.into(), none(), Action::OpenProject(s)));
         }
-        v.push(("Tool: Paint (last mode)".into(), "P", Action::PaintTool));
+        v.push((
+            "Tool: Paint (last mode)".into(),
+            k(Cmd::PaintTool),
+            Action::PaintTool,
+        ));
         for t in Tool::ALL {
             let name = if t.is_paint_mode() {
                 format!("Tool: Paint: {}", t.name())
             } else {
                 format!("Tool: {}", t.name())
             };
-            v.push((name, t.shortcut(), Action::SetTool(t)));
+            v.push((name, k(Cmd::Tool(t)), Action::SetTool(t)));
         }
         v.push((
             "Save selection as assembly…".into(),
-            "Ctrl+Shift+S",
+            k(Cmd::SaveAssembly),
             Action::OpenSaveAssembly,
         ));
         v.push((
             "Library: assemblies in the Palette".into(),
-            "",
+            none(),
             Action::ToggleLibrary,
         ));
         use worlds_core::transform::{ArrangeOp, TransformOp};
@@ -324,25 +359,25 @@ impl Action {
         ] {
             v.push((
                 crate::arrange::op_title(op).into(),
-                "",
+                none(),
                 Action::TransformSelection(op),
             ));
         }
-        for (key, flip, what) in [
-            ("X", worlds_core::Flip::X, "mirror left-right"),
-            ("Y", worlds_core::Flip::Y, "mirror top-bottom"),
-            ("R", worlds_core::Flip::XT, "rotate 90°"),
+        for (flip, what) in [
+            (worlds_core::Flip::X, "mirror left-right"),
+            (worlds_core::Flip::Y, "mirror top-bottom"),
+            (worlds_core::Flip::XT, "rotate 90°"),
         ] {
             v.push((
                 format!("Brush: {what} (the paste or the tile stamp)"),
-                key,
+                k(Cmd::Turn(flip)),
                 Action::Turn(flip),
             ));
         }
         for op in ArrangeOp::ALL {
             v.push((
                 format!("Levels: {}", op.title()),
-                "",
+                none(),
                 Action::ArrangeLevels(op),
             ));
         }
@@ -350,33 +385,34 @@ impl Action {
     }
 }
 
-/// The shortcut of bookmark `n` (Ctrl+Shift+1..9 for the first nine).
-pub fn bookmark_key(n: usize) -> &'static str {
-    const KEYS: [&str; 9] = [
-        "Ctrl+Shift+1",
-        "Ctrl+Shift+2",
-        "Ctrl+Shift+3",
-        "Ctrl+Shift+4",
-        "Ctrl+Shift+5",
-        "Ctrl+Shift+6",
-        "Ctrl+Shift+7",
-        "Ctrl+Shift+8",
-        "Ctrl+Shift+9",
-    ];
-    KEYS.get(n).copied().unwrap_or("")
+/// A key that isn't remappable (the clipboard's), printed for this
+/// platform (`Cmd+C` on a Mac).
+pub fn fixed(chord: &str) -> String {
+    Chord::parse(chord).map_or_else(|_| chord.to_string(), |c| c.to_string())
+}
+
+/// The shortcut of bookmark `n` (Ctrl+Shift+1..9 for the first nine by
+/// default), `""` past those or when unbound.
+pub fn bookmark_key(km: &Keymap, n: usize) -> String {
+    if n < crate::keymap::BOOKMARK_KEYS {
+        km.label(Cmd::JumpBookmark(n as u8))
+    } else {
+        String::new()
+    }
 }
 
 /// The command palette's entries for the bookmarks: "Bookmark: <name>".
 pub fn bookmark_entries(
     bookmarks: &[crate::view::Bookmark],
-) -> Vec<(String, &'static str, Action)> {
+    km: &Keymap,
+) -> Vec<(String, String, Action)> {
     bookmarks
         .iter()
         .enumerate()
         .map(|(i, b)| {
             (
                 format!("Bookmark: {}", b.name),
-                bookmark_key(i),
+                bookmark_key(km, i),
                 Action::JumpBookmark(i),
             )
         })
@@ -474,7 +510,7 @@ mod tests {
 
     #[test]
     fn catalog_names_unique() {
-        let c = Action::catalog();
+        let c = Action::catalog(&Keymap::defaults());
         let mut names: Vec<&str> = c.iter().map(|(n, _, _)| n.as_str()).collect();
         names.sort();
         names.dedup();

@@ -99,6 +99,7 @@ fn selection_section(ui: &mut egui::Ui, st: &mut EditorState) -> usize {
         edit_bufs,
         atlas,
         actions,
+        keymap,
         ..
     } = st;
     let Some(doc) = doc.as_ref() else {
@@ -123,7 +124,10 @@ fn selection_section(ui: &mut egui::Ui, st: &mut EditorState) -> usize {
     ui.horizontal(|ui| {
         if ui
             .small_button("Duplicate")
-            .on_hover_text("Ctrl+D: copies one cell to the right, fields kept")
+            .on_hover_text(keymap.hint(
+                "Copies one cell to the right, fields kept",
+                crate::keymap::Cmd::Duplicate,
+            ))
             .clicked()
         {
             actions.push(Action::DuplicateSelection);

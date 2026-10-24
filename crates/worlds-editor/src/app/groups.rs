@@ -154,6 +154,7 @@ pub fn inspector_section(ui: &mut egui::Ui, st: &mut EditorState) -> usize {
         view,
         pending,
         edit_bufs,
+        keymap,
         ..
     } = st;
     let Some(doc) = doc.as_ref() else {
@@ -212,16 +213,18 @@ pub fn inspector_section(ui: &mut egui::Ui, st: &mut EditorState) -> usize {
     }
     ui.horizontal(|ui| {
         if !groups.is_empty() {
-            let r = ui
-                .small_button("Ungroup")
-                .on_hover_text("Ctrl+Shift+G: the members stay, the group goes");
+            let r = ui.small_button("Ungroup").on_hover_text(keymap.hint(
+                "Ungroup: the members stay, the group goes",
+                crate::keymap::Cmd::Ungroup,
+            ));
             mark(ui, "group:ungroup", r.rect);
             ungroup = r.clicked();
         }
         if loose > 0 || groups.len() > 1 {
-            let r = ui
-                .small_button("Group")
-                .on_hover_text("Ctrl+G: one group of everything selected");
+            let r = ui.small_button("Group").on_hover_text(keymap.hint(
+                "Group: one group of everything selected",
+                crate::keymap::Cmd::Group,
+            ));
             mark(ui, "group:group", r.rect);
             group = r.clicked();
         }
