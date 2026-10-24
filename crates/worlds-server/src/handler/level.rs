@@ -78,9 +78,14 @@ pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, R
         .into_iter()
         .map(|h| {
             let l = h.level;
-            json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": h.world.slug,
+            let mut v = json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": h.world.slug,
                 "world_px": l.world_px, "size": l.size, "depth": l.depth,
-                "tags": l.tags, "fields": l.fields })
+                "tags": l.tags, "fields": l.fields });
+            // As in `level.list`: a non-rectangular level's void.
+            if l.has_void() {
+                v["void"] = json!(l.void);
+            }
+            v
         })
         .collect();
     Ok(json!({ "levels": levels }))

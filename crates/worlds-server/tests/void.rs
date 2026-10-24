@@ -54,6 +54,25 @@ fn set_void_shapes_a_level_and_reads_report_it() {
     let levels = d["levels"].as_array().unwrap();
     let c = levels.iter().find(|l| l["slug"] == "crevasse").unwrap();
     assert_eq!(c["void"], json!([[0, 3, 4, 2]]));
+    // level.find gives levels as level.list does, void included.
+    let found = s.call("level.find", json!({})).unwrap();
+    let f = found["levels"].as_array().unwrap();
+    let c = f.iter().find(|l| l["slug"] == "crevasse").unwrap();
+    assert_eq!(c["void"], json!([[0, 3, 4, 2]]));
+    assert!(
+        f.iter()
+            .filter(|l| l["slug"] != "crevasse")
+            .all(|l| l.get("void").is_none())
+    );
+    // A crop moves the void with the content (crevasse's walls fill its
+    // box, so it already fits).
+    let crop = s
+        .call("level.crop", json!({ "level": "crevasse" }))
+        .unwrap();
+    assert!(
+        crop["changes"].as_array().is_none_or(|c| c.is_empty()),
+        "{crop}"
+    );
     // Undo puts the walls back.
     s.call("history.undo", json!({})).unwrap();
     assert_eq!(&rows(&s, "crevasse")[3][..5], "#L..~");
