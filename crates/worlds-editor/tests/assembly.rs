@@ -465,3 +465,126 @@ fn thumbnails_are_rendered_once_into_the_cache() {
     assert!(!path.exists());
     assert!(worlds_editor::thumbs::file_of(&r.doc.dir, &b).exists());
 }
+
+#[test]
+fn a_random_brush_turns_each_alternative() {
+    let mut r = Rig::new();
+    // One alternative, a 2x1 block: mirrored, its right tile goes left and
+    // both tiles flip x, as for a stamp.
+    r.view.palette.brushes.insert(
+        "decor_back".into(),
+        worlds_editor::tools::Brush::Random {
+            tileset: slug("castle_main"),
+            alternatives: vec![worlds_core::TileAlt::rect(3, 4, 2, 1)],
+        },
+    );
+    r.view.brush_flip = Some(Flip::X);
+    r.gesture(
+        r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back", "path": [[0, 6]] }"#,
+    );
+    let t = &r
+        .doc
+        .project
+        .level("crevasse")
+        .unwrap()
+        .tiles_layer("decor_back")
+        .unwrap()
+        .tiles;
+    let at = |c: [u32; 2]| t.iter().find(|p| p.cell == c).cloned().unwrap();
+    assert_eq!((at([0, 6]).tile, at([0, 6]).flip), ([4, 4], Some(Flip::X)));
+    assert_eq!((at([2, 6]).tile, at([2, 6]).flip), ([3, 4], Some(Flip::X)));
+}
+
+#[test]
+fn edges_snap_only_within_the_shown_world_and_a_world_switch_drops_the_ghost() {
+    let mut r = Rig::new();
+    // Guides off: the world's wall guide has a vertex at crevasse's top-left
+    // corner, which would explain the snap on its own.
+    r.view.annotations.snap_to_guides = false;
+    let crev = r.doc.level_ix("crevasse").unwrap();
+    // Crevasse's bottom (80) moved 5 px down lands back on the shaft's top.
+    let (d, _) = worlds_editor::annot::drag_delta(&r.doc, &r.view, &[crev], [0.0, 5.0], true);
+    assert_eq!(d, [0, 0]);
+    r.apply(Command::CreateWorld {
+        slug: slug("under"),
+        name: None,
+    })
+    .unwrap();
+    r.apply(Command::MoveLevelToWorld {
+        level: slug("shaft"),
+        world: slug("under"),
+        world_px: None,
+    })
+    .unwrap();
+    let crev = r.doc.level_ix("crevasse").unwrap();
+    let (d, hits) = worlds_editor::annot::drag_delta(&r.doc, &r.view, &[crev], [0.0, 5.0], true);
+    assert_eq!(d, [0, 5], "the shaft is in another world now: {hits:?}");
+    // An armed assembly ghost belongs to the map it was armed on.
+    r.view.active_level = Some(crev);
+    r.view.paste = Some(PasteGhost::assembly(
+        slug("doorway"),
+        worlds_core::fragment::Fragment {
+            worlds_fragment: 1,
+            grid_size: 16,
+            size: [1, 1],
+            source: None,
+            grids: Default::default(),
+            tiles: Default::default(),
+            entities: vec![],
+            notes: vec![],
+        },
+    ));
+    let under = r
+        .doc
+        .project
+        .worlds
+        .iter()
+        .position(|w| w.slug == "under")
+        .unwrap();
+    r.view.set_world(&r.doc, under);
+    assert!(r.view.paste.is_none());
+}
+
+#[test]
+fn the_history_lists_a_placed_assembly_with_its_file() {
+    let mut r = Rig::new();
+    r.view.selection.set(pair());
+    let c = worlds_editor::clipboard::copy_selection(&r.doc, &r.view).unwrap();
+    let a = Assembly::new(
+        AssemblyInfo {
+            slug: slug("doorway"),
+            name: "Doorway".into(),
+            category: None,
+            tags: vec![],
+            doc: None,
+        },
+        c.fragment,
+    );
+    r.apply(Command::SetAssembly {
+        assembly: a.clone(),
+    })
+    .unwrap();
+    let g = PasteGhost::assembly(slug("doorway"), a.fragment());
+    let crev = r.doc.level_ix("crevasse").unwrap();
+    r.apply(g.plan(&r.doc, crev, [2, 1]).unwrap().command())
+        .unwrap();
+    let entries = r.ed.history().undo_entries();
+    let e = entries.last().unwrap();
+    assert_eq!(e.label, "Place assembly doorway");
+    assert!(
+        e.files
+            .iter()
+            .any(|f| f.ends_with("worlds/main/levels/crevasse/entities.json")),
+        "{:?}",
+        e.files
+    );
+    let saved = &entries[entries.len() - 2];
+    assert!(
+        saved
+            .files
+            .iter()
+            .any(|f| f.ends_with("assemblies/doorway.json")),
+        "{:?}",
+        saved.files
+    );
+}

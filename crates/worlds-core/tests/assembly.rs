@@ -435,3 +435,69 @@ fn distribute_spaces_levels_evenly() {
     assert_eq!(p.level("mid").unwrap().world_px, [320, 0]);
     assert_eq!(p.level("shaft").unwrap().world_px, [416, 80]);
 }
+
+#[test]
+fn arranging_refuses_levels_of_two_worlds() {
+    let mut p = common::fixture();
+    p.apply(Command::CreateWorld {
+        slug: s("under"),
+        name: None,
+    })
+    .unwrap();
+    p.apply(Command::MoveLevelToWorld {
+        level: s("shaft"),
+        world: s("under"),
+        world_px: None,
+    })
+    .unwrap();
+    let err = transform::arrange_levels(&p, &[s("crevasse"), s("shaft")], ArrangeOp::AlignLeft)
+        .unwrap_err();
+    assert!(err.to_string().contains("one world"), "{err}");
+}
+
+#[test]
+fn layer_operations_leave_assemblies_to_validation() {
+    let mut p = common::fixture();
+    p.apply(Command::DuplicateLayer {
+        layer: s("decor_back"),
+        slug: s("decor_back_copy"),
+    })
+    .unwrap();
+    // An assembly with tiles on the copy.
+    let mut tiles = BTreeMap::new();
+    tiles.insert(
+        s("decor_back_copy"),
+        vec![TilePlacement {
+            cell: [0, 0],
+            tileset: s("castle_main"),
+            tile: [5, 1],
+            flip: None,
+            alpha: 1.0,
+        }],
+    );
+    let mut f = tile_fragment("castle_main");
+    f.tiles = tiles;
+    let a = Assembly::new(info("copy_tiles"), f);
+    p.apply(Command::SetAssembly {
+        assembly: a.clone(),
+    })
+    .unwrap();
+    assert!(
+        !validate(&p)
+            .iter()
+            .any(|x| x.file.starts_with("assemblies/")),
+        "{:?}",
+        validate(&p)
+    );
+    let cmd = worlds_core::command::layer_ops::merge_down(&p, &s("decor_back_copy")).unwrap();
+    p.apply(cmd).unwrap();
+    // The assembly is as it was; validation names the layer it lost.
+    assert_eq!(p.assembly("copy_tiles"), Some(&a));
+    assert!(
+        validate(&p)
+            .iter()
+            .any(|x| x.file == "assemblies/copy_tiles.json" && x.path == "tiles.decor_back_copy"),
+        "{:?}",
+        validate(&p)
+    );
+}

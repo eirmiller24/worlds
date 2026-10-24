@@ -223,3 +223,80 @@ fn save_an_assembly_then_place_it_turned_from_the_library() {
         .unwrap_err();
     assert!(e.contains("nothing to turn"), "{e}");
 }
+
+/// With a random brush on a tiles layer the Paint strip carries the most it
+/// ever does (the modes, Random's Density and Turn X, Y, R): it still fits
+/// in the map and keeps clear of the level's name tab, at a wide and a
+/// narrow window.
+#[test]
+fn the_fullest_paint_strip_fits_beside_the_level_tab() {
+    if !gpu_tests() {
+        return;
+    }
+    for size in [[1600, 900], [900, 560]] {
+        let (_tmp, dir) = game_copy();
+        let hl = Headless::new(size).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::new(
+            &ctx,
+            hl.gpu.clone(),
+            worlds_editor::log::init(),
+            AppOptions {
+                headless: true,
+                ..Default::default()
+            },
+        );
+        app.set_commands(Box::new(worlds_editor::edit::Editing::new()));
+        app.open(&dir);
+        let mut t = 0.0;
+        let mut frame = |app: &mut EditorApp, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            hl.frame_with(&ctx, app, t, events);
+        };
+        for _ in 0..4 {
+            frame(&mut app, vec![]);
+        }
+        steps(&mut app, r#"[{ "ui": "focus", "level": "crevasse" }]"#);
+        let doc = app.st.doc.as_ref().unwrap();
+        app.st.view.active_layer = doc
+            .project
+            .layers
+            .iter()
+            .position(|l| l.slug == "decor_back");
+        app.st.view.palette.brushes.insert(
+            "decor_back".into(),
+            worlds_editor::tools::Brush::Random {
+                tileset: worlds_core::Slug::new("tiles").unwrap(),
+                alternatives: vec![
+                    worlds_core::TileAlt::rect(0, 0, 1, 1),
+                    worlds_core::TileAlt::rect(1, 0, 1, 1),
+                ],
+            },
+        );
+        frame(&mut app, key(egui::Key::B, egui::Modifiers::NONE));
+        frame(&mut app, key(egui::Key::X, egui::Modifiers::NONE));
+        for _ in 0..20 {
+            frame(&mut app, vec![]);
+        }
+        assert_eq!(
+            app.st.view.brush_flip,
+            Some(Flip::X),
+            "X turned the random brush"
+        );
+        if let Some(o) = std::env::var_os("WORLDS_TEST_OUT").map(PathBuf::from) {
+            std::fs::create_dir_all(&o).unwrap();
+            hl.read()
+                .unwrap()
+                .save(o.join(format!("paint_strip_random_{}.png", size[0])))
+                .unwrap();
+        }
+        let strip = app.st.viewport.paint_strip.expect("the Paint strip");
+        let map = app.st.map_rect.unwrap();
+        assert!(map.contains_rect(strip), "{size:?}: {strip:?} in {map:?}");
+        let tab = app.st.viewport.level_tab.expect("the tab");
+        assert!(
+            !tab.intersects(strip),
+            "{size:?}: tab {tab:?} under {strip:?}"
+        );
+    }
+}
