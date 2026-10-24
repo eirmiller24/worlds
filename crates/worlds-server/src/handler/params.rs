@@ -61,6 +61,37 @@ pub(crate) fn find_layer<'p>(project: &'p Project, layer: &str) -> Result<&'p La
         .ok_or_else(|| RpcError::command(&CommandError::UnknownLayer(slug_of(layer))))
 }
 
+/// The `query` parameter of the find methods ([`worlds_core::find`]),
+/// empty when not given, checked for words `kind` doesn't take.
+pub(crate) fn query(
+    method: &str,
+    query: Option<&str>,
+    kind: worlds_core::find::FindKind,
+) -> Result<worlds_core::find::Query, RpcError> {
+    let q = match query {
+        Some(s) => worlds_core::find::Query::parse(s)
+            .map_err(|e| RpcError::invalid_params(format!("{method}: query: {e}")))?,
+        None => Default::default(),
+    };
+    q.check(kind)
+        .map_err(|e| RpcError::invalid_params(format!("{method}: query: {e}")))?;
+    Ok(q)
+}
+
+/// `{ slug: value }` as equality field tests.
+pub(crate) fn field_tests(
+    fields: std::collections::BTreeMap<String, Value>,
+) -> Vec<worlds_core::find::FieldTest> {
+    fields
+        .into_iter()
+        .map(|(field, value)| worlds_core::find::FieldTest {
+            field,
+            op: worlds_core::find::Op::Eq,
+            value,
+        })
+        .collect()
+}
+
 /// A layer of the kind a method needs.
 pub(crate) fn layer_of_kind<'p>(
     project: &'p Project,

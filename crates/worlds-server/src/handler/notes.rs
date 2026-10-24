@@ -8,6 +8,7 @@
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use worlds_core::command::NoteScope;
+use worlds_core::find::{FindKind, Query};
 use worlds_core::{
     Annotation, Command, CommandError, Endpoint, GuideGroup, Id, NoteStatus, Project, Shape, Slug,
 };
@@ -118,7 +119,8 @@ enum StatusFilter {
     All,
 }
 
-/// `notes.list { scope?, tag?, status?, kind?, kinds?, group?, export? }`.
+/// `notes.list { scope?, tag?, status?, kind?, kinds?, group?, export?,
+/// text?, query? }`.
 pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -131,8 +133,12 @@ pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, R
         kinds: Option<Vec<String>>,
         group: Option<Slug>,
         export: Option<bool>,
+        text: Option<String>,
+        query: Option<String>,
     }
     let p: P = params::parse(method, p)?;
+    let mut q = params::query(method, p.query.as_deref(), FindKind::Notes)?;
+    q.text.extend(p.text.map(|t| t.to_lowercase()));
     match &p.scope {
         Some(NoteScope::World(w)) if project.world(w.as_str()).is_none() => {
             return Err(RpcError::command(&CommandError::UnknownWorld(w.clone())));
@@ -166,9 +172,22 @@ pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, R
                 .is_none_or(|g| matches!(&n.shape, Shape::Guide { group: Some(x), .. } if x == g))
         })
         .filter(|(_, n)| p.export.is_none_or(|e| n.export == e))
+        .filter(|(s, n)| q.is_empty() || note_matches(project, &q, s, n))
         .map(|(s, n)| json!({ "scope": s, "note": n }))
         .collect();
     Ok(json!({ "notes": notes }))
+}
+
+/// `q` on a note listed at `scope`.
+fn note_matches(project: &Project, q: &Query, scope: &NoteScope, n: &Annotation) -> bool {
+    let at = match scope {
+        NoteScope::World(w) => project.world(w.as_str()).map(|w| (w, None)),
+        NoteScope::Level(l) => project
+            .worlds
+            .iter()
+            .find_map(|w| w.level(l.as_str()).map(|l| (w, Some(l)))),
+    };
+    at.is_some_and(|(w, l)| q.note_matches(w, l, n))
 }
 
 /// `notes.add { scope, note, index? }` → `add_note`.

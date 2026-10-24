@@ -355,6 +355,8 @@ impl Handler {
             "entity.get" => read(host, entity::get),
             "entity.find" => read(host, entity::find),
             "notes.list" => read(host, notes::list),
+            "level.find" => read(host, level::find),
+            "tiles.find" => read(host, tiles::find),
             "rules.list" => read(host, rules::list),
             "rules.get_group" => read(host, rules::get_group),
             "rules.get_macros" => read(host, rules::get_macros),
