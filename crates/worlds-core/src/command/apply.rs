@@ -4,6 +4,7 @@
 //! commands in [`rules`].
 
 mod defs;
+mod duplicate;
 mod fields;
 mod rules;
 
@@ -526,6 +527,13 @@ impl Project {
                 keep_empty,
             } => self.remove_stamp(layer, stamp, keep_uses, keep_empty),
             Batch { label, commands } => self.batch(label, commands),
+            DuplicateLevel {
+                level,
+                slug,
+                name,
+                world,
+                world_px,
+            } => self.duplicate_level(level, slug, name, world, world_px),
         }
     }
 

@@ -80,6 +80,9 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `bake_and_validate` | `project.bake`, `project.validate`, `project.export` |
 | `screenshot` | `view.snapshot`; headless: `worlds --screenshot` on the saved project |
 | `undo` | `history.undo` |
+| `copy_fragment` | `edit.copy` (the arguments are its `selection`) |
+| `paste_fragment` | `edit.paste` |
+| `duplicate_level` | `level.duplicate` |
 
 ### describe_project
 
@@ -636,6 +639,59 @@ Undo your own last n edits (each tool call that wrote is one edit). Stops early,
   "additionalProperties": false }
 ```
 
+### copy_fragment
+
+```text
+Copy part of a level as a fragment: JSON holding grid cells, tile stacks, entities and notes, with coordinates from the fragment's top-left corner, which paste_fragment puts back anywhere (the editor's Ctrl+C copies the same thing to the clipboard). Give the ids of entities and notes, tile stacks as { "<tiles layer>": [[x, y], ...] }, and/or a rect ([x, y, width, height] in cells of the project grid) whose cells of layers (default: every int_grid layer that isn't derived) are copied, empty cells included. Everything comes from one level: level, else the level of the first entity or note. Returns { rev, fragment }; the format is worlds://schema/fragment.json. You can edit a fragment before pasting it, or write one yourself: in a grid's rows a space leaves that cell as it is.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "level": { "type": "string" },
+    "entities": { "type": "array", "items": { "type": "string" }, "description": "Entity ids." },
+    "notes": { "type": "array", "items": { "type": "string" }, "description": "Note ids: the level's, or world notes." },
+    "tiles": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 2, "maxItems": 2 } }, "description": "Tiles layer slug -> cells whose tile stacks to copy." },
+    "rect": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "minItems": 4, "maxItems": 4, "description": "[x, y, width, height] in cells of the project grid." },
+    "layers": { "type": "array", "items": { "type": "string" }, "description": "With rect: the int_grid and tiles layers to copy in it. Default: every int_grid layer that isn't derived." } },
+  "additionalProperties": false }
+```
+
+### paste_fragment
+
+```text
+Paste a fragment (from copy_fragment, from the editor's clipboard, or written by you) into a level, as one undo entry. origin is where the fragment's top-left corner goes, in cells of the project grid of that level (may be negative; what falls outside is clipped). Every entity and note gets a new id, and references inside the fragment follow (a pasted switch targets the pasted door); a reference to something outside the fragment is kept when it exists here, else set to null. Grid cells and tiles outside the level are clipped, entities that would land outside are not pasted, layers, types and tilesets this project lacks are skipped: problems lists each. layer_map pastes a fragment layer onto another layer ({ "collision": "collision_b" }). Returns the write result plus items (how many cells, tile stacks, entities and notes), ids (fragment id -> new id) and problems.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "level": { "type": "string" },
+    "origin": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "[x, y] cell of the project grid where the fragment's top-left corner goes." },
+    "fragment": { "type": "object", "description": "{ worlds_fragment: 1, grid_size, size, grids?, tiles?, entities?, notes? }, see worlds://schema/fragment.json." },
+    "layer_map": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Fragment layer slug -> layer to paste it on." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level", "origin", "fragment"], "additionalProperties": false }
+```
+
+### duplicate_level
+
+```text
+Copy a whole level under a new slug, as one undo entry: its grids, tiles, entities, notes, level fields, tags and per-level rule state. Entities and notes in the copy get new ids, and references between them follow the copies (a switch in the copy targets the copied door); references to anything outside the level are kept. name defaults to the original's name plus " copy"; world (where the copy goes) to the original's world; world_px to just right of the original, past any level already there. Returns the new level's id and world_px; then edit it like any level.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "level": { "type": "string", "description": "The level to copy." },
+    "slug": { "type": "string", "description": "The copy's slug: lowercase snake_case, unused." },
+    "name": { "type": "string" },
+    "world": { "type": "string", "description": "World slug. Default: the original's." },
+    "world_px": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "Top-left corner in world pixels. Default: just right of the original." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level", "slug"], "additionalProperties": false }
+```
+
 ## Results by tool
 
 | Tool | Result |
@@ -651,6 +707,9 @@ Undo your own last n edits (each tool call that wrote is one edit). Stops early,
 | `bake_and_validate` | `{ rev, bake: [{ level, tiles, error? }], problems, warnings, exported? }`: `warnings` from `project.bake` |
 | `screenshot` | an image content block (`image/png`) and a text block `{ rev, width, height, scale }` |
 | `undo` | `{ rev, undone: [label], stopped? }`, `stopped` a sentence naming the entry it stopped at (someone else's edit), or saying there was nothing of yours to undo |
+| `copy_fragment` | `{ rev, fragment }`, the `edit.copy` result |
+| `paste_fragment` | the write result above plus `items`, `ids` (fragment id -> new id) and `problems` (`[]` when everything went in), from `edit.paste` |
+| `duplicate_level` | the write result above plus `id` (the copy's level id) and `world_px` |
 
 **`screenshot` in headless mode** is not an error. Headless `worlds-mcp` saves after every write, so the files on disk are the project; it runs the editor binary's headless screenshot mode on them, asking for the map alone as `view.snapshot` draws it: `worlds --screenshot <tmp>.png --snapshot [--level <slug> | --world-rect x,y,w,h] --max-size WxH [--layers a,b] <project>` with the level or world rect, size (default `1024x1024`) and layers of the call (the editor's [README](../crates/worlds-editor/README.md) describes the flags), and returns that PNG. `scale` is then the image width over the drawn width in world pixels. The binary is `WORLDS_EDITOR_BIN` when set, else `worlds` next to the `worlds-mcp` executable. If it can't be found or exits non-zero, the tool error says so, names the path tried and includes its stderr.
 
@@ -665,7 +724,7 @@ Read-only, `application/json`. Project files: in editor mode the content is the 
 | `worlds://worlds/<world>/world.json` | `worlds/<world>/world.json`: the world's guide groups and world-scope annotations |
 | `worlds://levels/<slug>/<file>` | `level.json`, `<layer>.json`, `entities.json`, `notes.json` of that level |
 | `worlds://templates/<name>.json` | a built-in template (`blob47`), as a template in `rules/macros.json` would be written: what a `{ "use": "blob47" }` reference expands |
-| `worlds://schema/<name>.json` | the JSON Schema of a file kind: `project`, `layers`, `tilesets`, `enums`, `entity`, `rules`, `macros`, `world`, `level`, `intgrid`, `tiles`, `entities`, `notes`, plus `command` (the command wire format) |
+| `worlds://schema/<name>.json` | the JSON Schema of a file kind: `project`, `layers`, `tilesets`, `enums`, `entity`, `rules`, `macros`, `world`, `level`, `intgrid`, `tiles`, `entities`, `notes`, plus `command` (the command wire format) and `fragment` (a [clipboard fragment](format.md#clipboard-fragments)) |
 
 ## Using it from your game's repo
 

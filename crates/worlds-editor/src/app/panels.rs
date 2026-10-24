@@ -574,6 +574,13 @@ pub fn level_inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             bufs.remove(&key_slug);
             bufs.remove(&key_name);
         }
+        if ui
+            .button("Duplicate")
+            .on_hover_text("A copy just right of it (Ctrl+D with the level selected)")
+            .clicked()
+        {
+            actions.push(Action::DuplicateLevel(ix));
+        }
         if ui.button("Delete level…").clicked() {
             actions.push(Action::DeleteLevel);
         }

@@ -1468,16 +1468,21 @@ pub struct DupPlan {
     /// The copies: they become the selection.
     pub selection: Vec<SelItem>,
     pub message: Option<String>,
+    /// The slugs of the level copies (`duplicate_level`), in selection
+    /// order: once applied they join the selection and the first becomes
+    /// the active level.
+    pub levels: Vec<Slug>,
 }
 
 /// Ctrl-D: entities as before ([`crate::edit::duplicate_commands`]); each
 /// annotation copied one project cell to the right with a new id, not
 /// locked, links kept (locked ones too: the copy is unlocked); tile stacks
 /// copied one cell of their layer to the right (stacks that would leave
-/// the level are left out). Levels aren't duplicated, so what is selected
-/// inside a selected level is copied like anything else.
+/// the level are left out); each selected level gets a `duplicate_level`
+/// (a copy just right of it, [`crate::clipboard::duplicate_level_command`]),
+/// and what is selected inside it goes with it.
 pub fn plan_duplicate(doc: &Document, view: &ViewState) -> DupPlan {
-    let r = resolve(doc, view, false);
+    let r = resolve(doc, view, true);
     let d = crate::edit::duplicate_commands(doc, &r.entities);
     let mut commands = d.commands;
     let mut selection: Vec<SelItem> = d.ids.iter().cloned().map(SelItem::Entity).collect();
@@ -1540,6 +1545,8 @@ pub fn plan_duplicate(doc: &Document, view: &ViewState) -> DupPlan {
         used_note_ids(doc)
     };
     let g = doc.project.grid_size as i64;
+    // Notes inside a duplicated level go with it.
+    all_notes.retain(|n| n.level().is_none_or(|ix| !r.levels.contains(&ix)));
     for n in &all_notes {
         let mut note = n.note.clone();
         note.id = fresh_note_id_in(&mut used);
@@ -1556,8 +1563,11 @@ pub fn plan_duplicate(doc: &Document, view: &ViewState) -> DupPlan {
             index: None,
         });
     }
-    if !r.levels.is_empty() {
-        msgs.push("Levels aren't duplicated".into());
+    let mut levels: Vec<Slug> = Vec::new();
+    for &ix in &r.levels {
+        let (cmd, slug) = crate::clipboard::duplicate_level_command(doc, ix, &levels);
+        commands.push(cmd);
+        levels.push(slug);
     }
     let label = label_for(
         "Duplicate",
@@ -1573,6 +1583,11 @@ pub fn plan_duplicate(doc: &Document, view: &ViewState) -> DupPlan {
                 all_notes.len(),
                 all_notes.first().map(|n| n.note.id.to_string()),
             ),
+            (
+                "level",
+                r.levels.len(),
+                r.levels.first().map(|&i| doc.level(i).slug.to_string()),
+            ),
         ],
     );
     DupPlan {
@@ -1580,6 +1595,7 @@ pub fn plan_duplicate(doc: &Document, view: &ViewState) -> DupPlan {
         label,
         selection,
         message: (!msgs.is_empty()).then(|| msgs.join("; ")),
+        levels,
     }
 }
 

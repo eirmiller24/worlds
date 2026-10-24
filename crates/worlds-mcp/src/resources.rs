@@ -47,6 +47,7 @@ pub struct Listed {
 pub fn schema_names() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = FileKind::ALL.iter().map(|k| k.name()).collect();
     v.push("command");
+    v.push("fragment");
     v
 }
 
@@ -60,6 +61,8 @@ pub fn builtin_template_text(name: &str) -> Option<String> {
 pub fn schema_text(name: &str) -> Option<String> {
     let v = if name == "command" {
         serde_json::to_value(schemars::schema_for!(worlds_core::Command)).ok()?
+    } else if name == "fragment" {
+        worlds_core::fragment::schema()
     } else {
         let kind = FileKind::ALL.into_iter().find(|k| k.name() == name)?;
         worlds_core::schema::for_kind(kind)
@@ -238,7 +241,7 @@ mod tests {
 
     #[test]
     fn schemas_and_defs_paths() {
-        assert_eq!(schema_names().len(), 14);
+        assert_eq!(schema_names().len(), 15);
         for n in schema_names() {
             let t = schema_text(n).unwrap();
             assert!(serde_json::from_str::<Value>(&t).is_ok(), "{n}");

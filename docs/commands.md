@@ -253,6 +253,17 @@ Replace a level's `tags` (stored as given, order kept; an empty list removes the
 - **Inverse:** `create_level` with the full level, content included, and `restore: true`, so the level comes back byte for byte even if it held a validation problem a fresh `create_level` would refuse.
 - **Changes:** `level_deleted` (the whole level directory is dirty, and saving removes its files).
 
+### duplicate_level
+
+Copy a level under a new `slug`: its `level.json` (fields, tags, per-layer rule state and tileset substitutions, depth, background), every layer's content, its entities and its notes. The copy gets a new level id, and every entity and note in it a new id; references between them follow the copies (a button's `entity_ref` to a door in the level points at the copied door, as do level fields of type `entity_ref` and notes' `entity:` and `note:` links), while references to anything outside the level are kept as they are. `name` defaults to the original's with ` copy` added; `world` (where the copy goes) to the original's world; `world_px` to just right of the original: at its top, starting at its right edge and moved right past every level of that world it would overlap. The new ids are derived from the copy's level id and the old ids, so the same duplicate of the same project gives the same ids.
+
+```json
+{ "op": "duplicate_level", "level": "crevasse", "slug": "crevasse_b", "name": "Crevasse B" }
+```
+
+- **Inverse:** `delete_level` of the copy.
+- **Changes:** `level_created`.
+
 ## Entity commands
 
 Entities are found by id anywhere in the project.

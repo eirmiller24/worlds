@@ -376,6 +376,7 @@ Reads of derived layers take their effective grids from the host's bake cache (t
 | `level.set_fields` | `{ level, fields?: { slug: value }, unset?: [slug] }` | `batch` of `set_level_field` (`fields` stores, `unset` removes the stored value) |
 | `level.set_layer_state` | `{ level, layer, state }`; `state` is an `auto` layer's per-level rule state as in `level.json` `layers` (`{ seed?, optional_groups?, tilesets? }`), or `null` to remove it | `set_layer_state`, reporting `layer_state` (that layer rebakes in the level). `state` replaces the entry whole. Checked first: `layer` must be an `auto` layer (`wrong_layer_kind`), each of `optional_groups` an `optional` group of its rules (`unknown_rule_group`, or `invalid` for an `always` or `off` group), each tileset of `tilesets` (keys and values) defined (`unknown_tileset`) |
 | `level.replace` | `{ world?, level, content?, confirm? }`, `level` and `content` as for `level.create`; `level.slug` names the level to replace, and a left-out `level.id` keeps its id | `replace_level`: `level.json` and all content, wholesale. Content left out of `content` is removed, so it needs `confirm` when the level holds anything `content` leaves out ([Confirmation](#confirmation)); rewriting the cells of a layer `content` includes never does. Reports `level_meta` part `all`, then a `grid` or `tiles` per layer with content before or after, an `entity_layer`, `entity` or `note` per entities layer entry, entity and note before or after ([commands.md](commands.md#replace_level)). It can't rename: use `level.update` |
+| `level.duplicate` | `{ level, slug, name?, world?, world_px? }` | `duplicate_level`: a copy of the level under `slug` with new ids and its internal references remapped ([commands.md](commands.md#duplicate_level)). `world` is where the copy goes (default: the level's world), `world_px` where (default: just right of the original, past any level there). The result adds the copy's level `id` and `world_px` |
 
 ### grid
 
@@ -1873,6 +1874,66 @@ Undo puts the old level back, overrides and all:
     { "change": "level_meta", "world": "main", "level": "hall", "part": "all" },
     { "change": "grid", "world": "main", "level": "hall", "layer": "collision", "rect": [0, 0, 16, 6] },
     { "change": "grid", "world": "main", "level": "hall", "layer": "marks", "rect": [0, 0, 16, 6] } ] } }
+```
+
+### clipboard: copy and paste
+
+`edit.copy` reads a **fragment** out of the project ([format.md](format.md#clipboard-fragments)): what the editor's Ctrl+C puts on the clipboard. `edit.paste` writes one into a level as one batch and one undo entry, `Paste <n> items`. A fragment is plain JSON, so an agent can also write one itself.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `edit.copy` | `{ selection: { level?, entities?: [id], notes?: [id], tiles?: { layer: [[x, y]] }, rect?: [x, y, w, h], layers?: [slug] } }`. Everything comes from one level (`level`, else the level of the first entity or level note); world notes of its world may come along. `tiles` names tile stacks by cell; `rect` (cells of the project grid) copies the cells of `layers` inside it, empty ones included (default: every int_grid layer that isn't derived; tiles layers may be listed) | `{ rev, fragment }` (a read). Refused (`command_error`): unknown ids, levels or layers, things from two levels, a rect outside the level, a derived or auto layer |
+| `edit.paste` (write) | `{ level, origin: [x, y], fragment, layer_map?: { from: to } }`: `origin` is where the fragment's top-left corner goes, in cells of the project grid (may be negative) | `batch` of `paint_cells`, `set_tiles`, `add_entity`, `add_note`. The write result adds `items` (how many grid cells, tile stacks, entities and notes), `ids` (fragment id to new id), `entities` and `notes` (the new ids, in fragment order) and `problems` (what was clipped, refused, skipped or nulled, in words). Every entity and note gets a new id, references inside the fragment follow, references outside are kept when they resolve here (see [format.md](format.md#what-a-paste-does)). A fragment of another version or project grid size is `invalid_params`/`invalid`; a paste that would write nothing is `invalid`, naming the problems |
+
+Copy the door at the end of `crevasse` with the cells around its foot:
+
+```json
+{ "jsonrpc": "2.0", "id": 128, "method": "edit.copy", "params": { "selection": { "entities": ["doorcrev22"], "rect": [15, 3, 4, 1] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 128, "result": { "rev": 59, "fragment": { "worlds_fragment": 1, "grid_size": 16, "size": [4, 1],
+  "source": { "level": "crevasse", "origin": [15, 3] },
+  "grids": { "collision": { "legend": { "#": "solid", "f": "fortified" }, "rows": ["f###"] } },
+  "entities": [
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [3, 0], "size": [1, 2],
+      "fields": { "exit_to": "doorshaft2", "facing": "right", "needs_item": "brass_key", "script": "scripts/door.gd",
+                  "speed": 2, "sprite": { "tileset": "castle_main", "tile": [4, 4] }, "tint": "#ff8080",
+                  "waypoints": [[-14, -2], [-13, -2]] } } ] } } }
+```
+
+A fragment is plain JSON, so an agent can write one too. This one is a button, the door it opens and a strip of one-way floor, pasted at cell [2, 1] of `crevasse`. The pasted button targets the pasted door; the door's `exit_to` still finds `doorshaft2` (a `cross_level` field), so it is kept:
+
+```json
+{ "jsonrpc": "2.0", "id": 129, "method": "edit.paste", "params": { "level": "crevasse", "origin": [2, 1], "fragment": {
+  "worlds_fragment": 1, "grid_size": 16, "size": [7, 1],
+  "grids": { "collision": { "rows": ["  ooo"] } },
+  "entities": [
+    { "id": "btncrev222", "type": "floor_button", "layer": "objects", "cell": [0, 0], "fields": { "target": "doorcrev22" } },
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [6, 0], "fields": { "exit_to": "doorshaft2" } } ] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 129, "result": { "rev": 60, "status": "applied", "label": "claude-code: Paste 5 items",
+  "items": 5, "ids": { "btncrev222": "75rk7gzrhn", "doorcrev22": "5w6isso7ut" }, "entities": ["75rk7gzrhn", "5w6isso7ut"], "notes": [], "problems": [],
+  "changes": [
+    { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [4, 1, 3, 1] },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "75rk7gzrhn" },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "5w6isso7ut" } ] } }
+```
+
+The new ids are derived from the destination level, the origin and the fragment's ids, so the same paste into the same project gives the same ids; pasting it again at the same place moves on to other free ones.
+
+**`level.duplicate`** copies a whole level:
+
+```json
+{ "jsonrpc": "2.0", "id": 130, "method": "level.duplicate", "params": { "level": "shaft", "slug": "shaft_b" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 130, "result": { "rev": 61, "status": "applied", "label": "claude-code: Duplicate level shaft as shaft_b",
+  "id": "s64pc4niie", "world_px": [416, 80],
+  "changes": [ { "change": "level_created", "world": "main", "level": "shaft_b" } ] } }
 ```
 
 ## Headless mode

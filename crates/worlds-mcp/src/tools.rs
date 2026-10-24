@@ -1727,6 +1727,76 @@ impl Engine {
         }
         Ok(vec![json_block(&out)])
     }
+
+    pub(crate) fn copy_fragment(&mut self, a: Value) -> ToolResult {
+        // The arguments are `edit.copy`'s selection, checked there.
+        if !a.is_object() && !a.is_null() {
+            return Err("copy_fragment takes an object of arguments".into());
+        }
+        let selection = if a.is_null() { json!({}) } else { a };
+        let r = self.read("edit.copy", json!({ "selection": selection }))?;
+        self.json_result(r)
+    }
+
+    pub(crate) fn paste_fragment(&mut self, a: Value) -> ToolResult {
+        let a: PasteFragment = args("paste_fragment", a)?;
+        let label = Self::label(
+            "paste_fragment",
+            a.label.as_deref(),
+            &format!("into {}", a.level),
+        );
+        let mut p = json!({ "level": a.level, "origin": a.origin, "fragment": a.fragment });
+        put(&mut p, "layer_map", &a.layer_map);
+        let (mut out, raw) = self.write_full(&label, |_| Ok(vec![("edit.paste", p.clone())]))?;
+        if let Some(raw) = raw {
+            for k in ["items", "ids", "problems"] {
+                if let Some(v) = raw.get(k) {
+                    out[k] = v.clone();
+                }
+            }
+        }
+        Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn duplicate_level(&mut self, a: Value) -> ToolResult {
+        let a: DuplicateLevel = args("duplicate_level", a)?;
+        let label = Self::label(
+            "duplicate_level",
+            a.label.as_deref(),
+            &format!("{} as {}", a.level, a.slug),
+        );
+        let mut p = json!({ "level": a.level, "slug": a.slug });
+        put(&mut p, "name", &a.name);
+        put(&mut p, "world", &a.world);
+        put(&mut p, "world_px", &a.world_px);
+        let (mut out, raw) =
+            self.write_full(&label, |_| Ok(vec![("level.duplicate", p.clone())]))?;
+        if let Some(wp) = raw.as_ref().and_then(|r| r.get("world_px")) {
+            out["world_px"] = wp.clone();
+        }
+        Ok(vec![json_block(&out)])
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PasteFragment {
+    level: String,
+    origin: [i64; 2],
+    fragment: Value,
+    layer_map: Option<BTreeMap<String, String>>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DuplicateLevel {
+    level: String,
+    slug: String,
+    name: Option<String>,
+    world: Option<String>,
+    world_px: Option<[i64; 2]>,
+    label: Option<String>,
 }
 
 /// Rows with the column rulers and row numbers of the text view.

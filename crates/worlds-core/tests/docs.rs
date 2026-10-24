@@ -142,6 +142,7 @@ fn commands_md_examples_apply_in_order() {
         "set_stamp",
         "remove_stamp",
         "batch",
+        "duplicate_level",
     ];
     let missing: Vec<&str> = all.iter().copied().filter(|o| !ops.contains(*o)).collect();
     assert!(missing.is_empty(), "no example for {missing:?}");

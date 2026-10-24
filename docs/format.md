@@ -1267,3 +1267,38 @@ Line by line:
 - enum sources (only when asked): `--enum-source theme=data/themes.json` compares a project enum with the game data file it mirrors. The values are the keys of the object at the JSON pointer (`#/tracks`; the whole file without one; keys starting with `_` are comments and skipped) or the strings of an array there. Each value the enum has and the file doesn't (`enums.json` `enums[<i>].values[<j>]`: "enum theme has "none", which data/themes.json doesn't (enum source drift)"), and each the file has and the enum doesn't (`enums[<i>]`: "enum theme lacks "jungle", which data/themes.json has (enum source drift)"), is a problem. `--enum-extra theme=none` names values only the enum may have (for example a "no theme" value). The file is relative to the current directory. Repeatable; an unknown enum, an unreadable file, a pointer that finds nothing, any other shape, or an `--enum-extra` for an enum no `--enum-source` compares is a usage error. A typical game check: `--enum-source theme=data/themes.json --enum-extra theme=none --enum-source music=data/music.json#/tracks`.
 
 Load errors stop the load and name the file and JSON path: bad JSON, unknown keys, a key of another kind even at its default (`values` on a `tiles` layer, `min` on a `bool` field, `px` on a `path`, `from` on a `path`), wrong types, `format` other than 1, a reserved glyph, a malformed tile alternative, an output mixing tiles and stamp, a rule key on a template reference or a reference key on a rule, a rule with both or neither of `match` and `region`, both or neither of `out` and `write`, `place` without `region` (or `region` without `place`), a pattern-rule key on a region rule, `place` with both or neither of `along` and `across`, `[x, y]` with `along` or `min_length`/`against` with `across`, a region bound of 0, a negative or fractional `pass`, an empty `require` list, a region rule or `write` in a template, `"overrides"` missing on a derived layer's file, present on another file or `false`, `!` in a file of a layer that isn't derived or in a legend, a cell test that isn't `*`, `+`, `.`, a slug, `!slug`, `[a|b]` or `![a|b]`, an IntGrid row with an unknown glyph or a different length, an IntGrid legend that disagrees with `layers.json`, a slug that doesn't match its file name, an unknown file in a level directory.
+
+## Clipboard fragments
+
+A **fragment** is a piece of a level as one JSON object: grid cells, tile stacks, entities and annotations, cut loose from where they came from. It is what Copy puts on the system clipboard (as text, so it pastes into a second editor, a file or a chat with an agent), what `edit.copy` returns and `edit.paste` takes, and the shape assemblies will store. It is not a project file (no `$schema`, no `format`); its JSON Schema is the MCP resource `worlds://schema/fragment.json` (`worlds_core::fragment::schema()`), and in Rust it is `worlds_core::fragment::Fragment`.
+
+```json
+{ "worlds_fragment": 1, "grid_size": 16, "size": [7, 2],
+  "source": { "level": "crevasse", "origin": [12, 2] },
+  "grids": { "collision": { "legend": { "o": "oneway" }, "rows": ["ooo    ", "......."] } },
+  "tiles": { "decor_back": [ { "cell": [1, 1], "tileset": "castle_main", "tile": [3, 2] } ] },
+  "entities": [
+    { "id": "btncrev222", "type": "floor_button", "layer": "objects", "cell": [0, 1], "offset_px": [0, -2],
+      "fields": { "channel": 3, "target": "doorcrev22" } },
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [6, 1], "size": [1, 2] } ],
+  "notes": [ { "id": "notecrev22", "kind": "note", "title": "Widen the gap", "px": [8, 4],
+               "links": ["entity:btncrev222"] } ] }
+```
+
+- **`worlds_fragment`**: the version, `1`. A paste of another version is refused.
+- **`grid_size`**, **`size`**: the project grid (pixels) of the project it came from and the fragment's `[width, height]` in cells of it. A paste into a project with another grid size is refused.
+- **`source`** (optional): the level it was copied from and its top-left corner there, in cells of the project grid (without a level, the world's). Paste in place uses it.
+- **Coordinates are from the fragment's origin**, its top-left corner: grid rows, tile `cell`s and entity `cell`s in each layer's own grid (so `decor_back`, an 8 px layer, has twice the cells per axis), entity `point` field values too, and annotation geometry in pixels. A copy puts the origin at the top-left of what it copied, rounded down to a whole cell of every layer involved.
+- **`grids`**: int_grid layers by slug, each `{ legend?, rows }`. One glyph per cell; `.` is empty, a space is not part of the fragment (a paste leaves that cell as it is), rows may be short. `legend` maps a glyph to a value slug (or `null`, empty); a glyph it doesn't list means what the destination layer's definition says. A copy writes the legend of every value it uses, so a paste matches values by slug even where the glyphs differ. A rectangle copy includes its empty cells, so its paste replaces the whole rectangle.
+- **`tiles`**: tiles layers by slug, placements as in a [tiles layer file](#tiles-layerjson). A paste replaces the whole stack at each cell it writes.
+- **`entities`**: instances as in [entities.json](#entitiesjson) plus `layer` (default: the destination's first entities layer). `id` is the id where it was copied from.
+- **`notes`**: annotations as in [notes.json](#notesjson-and-annotations). World annotations copied with a level come in level pixels; a pasted annotation is a level note of the destination level, except a guide, which goes to that level's world (in world pixels).
+
+### What a paste does
+
+`worlds_core::fragment::paste(project, fragment, { level, origin, layer_map? })` works out a plan; nothing changes until its command is applied. The plan is one `batch` of existing commands, labelled `Paste <n> items` (one undo entry): a `paint_cells` per grid layer, a `set_tiles` per tiles layer, an `add_entity` per entity and an `add_note` per annotation. `origin` is where the fragment's origin goes, in cells of the destination level's project grid; a layer with a coarser grid than the project's puts it on the layer cell holding that pixel. `layer_map` sends a fragment layer to another destination layer (`{ "collision": "collision_b" }`).
+
+- **New ids.** Every pasted entity and annotation gets a new id. References inside the fragment follow together: a pasted button's `entity_ref` to a door in the fragment points at the pasted door, and annotation links `entity:<id>` and `note:<id>` to things in the fragment point at their copies.
+- **References outside the fragment** are kept when the destination resolves them: an `entity_ref` whose target is in the destination level, or anywhere in the project when the field is `cross_level`; a link to an entity, annotation or level the project has. Otherwise an `entity_ref` is set to `null` (dropped from an array) and a link is dropped, each with a problem.
+- **Clipping.** Grid cells and tile stacks that fall outside the level are left out (one problem counts them). An entity whose cell would be outside the level is not pasted, with a problem naming it. Annotations are pasted wherever they land.
+- **Skipped, with a problem:** a layer the destination doesn't have, or has with another kind; a glyph or value slug the layer doesn't define; a tile of a tileset the project doesn't have; an entity of a type it doesn't have; a guide's group the destination world doesn't have (the guide is pasted with no group).

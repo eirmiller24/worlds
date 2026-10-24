@@ -829,8 +829,8 @@ fn shift_nudge_moves_every_kind() {
 }
 
 /// C3: what is selected inside a selected level rides along when the level
-/// moves (nudge), but is copied when the level isn't (Ctrl-D: levels aren't
-/// duplicated), not silently skipped.
+/// moves (nudge) and when it is duplicated (Ctrl-D copies the level with
+/// everything in it), so it isn't copied twice.
 #[test]
 fn items_in_a_selected_level_ride_along_or_are_copied() {
     let mut r = Rig::new();
@@ -846,11 +846,16 @@ fn items_in_a_selected_level_ride_along_or_are_copied() {
     assert!(matches!(n.commands.as_slice(), [Command::MoveLevel { .. }]));
     // A3: the stack inside the moved level keeps its (level-local) cell.
     assert!(n.selection.contains(&r.stack("crevasse", [4, 1])));
-    // Ctrl-D: the note and the stack are copied, the level isn't.
+    // Ctrl-D: the level is duplicated, the note and the stack with it.
     let d = annot::plan_duplicate(&r.doc, &r.view);
-    assert_eq!(d.label, "Duplicate 2 items");
-    assert_eq!(d.message.as_deref(), Some("Levels aren't duplicated"));
-    assert_eq!(d.selection.len(), 2);
+    assert_eq!(d.label, "Duplicate level crevasse");
+    assert_eq!(d.message, None);
+    assert!(d.selection.is_empty());
+    assert_eq!(d.levels, [worlds_core::slug("crevasse_copy")]);
+    assert!(matches!(
+        d.commands.as_slice(),
+        [Command::DuplicateLevel { .. }]
+    ));
     // A drag that rounds to no level movement moves the inside items
     // instead of dropping them: 6 px moves the 8 px stack a cell while the
     // level (16 px grid) stays.

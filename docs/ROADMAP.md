@@ -66,35 +66,11 @@ The tools a designer reaches for every hour. GPT's review ranked these highest a
 
 ### 2.1 Clipboard
 
-**What.** Copy, cut and paste tiles, grid cells, entities and annotations, within a level, across levels and across worlds. Paste places a ghost that follows the pointer until a click, like entity placement, so the paste lands where you want it.
-
-**Format.** A clipboard **fragment** is JSON, also written to the system clipboard as text so it works between two editor instances, into a file, or into a chat with an agent:
-
-```json
-{ "worlds_fragment": 1, "grid_size": 16, "size": [8, 5],
-  "grids": { "collision": { "legend": { "#": "solid" }, "rows": ["########", "#......#"] } },
-  "tiles": { "decor_back": [ { "cell": [1, 1], "tileset": "castle_main", "tile": [3, 2] } ] },
-  "entities": [ { "id": "k3v7q2mzta", "type": "switch", "cell": [2, 1], "fields": { "target": "door22aaaa" } } ],
-  "notes": [ ... ] }
-```
-
-Cells are relative to the fragment's origin. The same shape is what assemblies (2.3) store on disk.
-
-**Commands.** None new: a paste is one batch of `paint_cells`, `set_tiles`, `add_entity` and `add_note`, one undo entry "Paste 14 items". On paste every instance gets a new id and references inside the fragment are remapped together (the copied switch targets the copied door); a reference to something outside the fragment is kept when the target exists in the destination (cross-level allowed) else nulled, with a problem. Content outside the level is clipped (grid cells and tiles) or refused (entities, with a message). Layers the destination lacks are skipped and reported.
-
-**API / MCP.** `edit.copy { selection }` returns a fragment; `edit.paste { level, layer_map?, origin, fragment }`. MCP `copy_fragment` and `paste_fragment`; `read_level` already gives an agent the text form, so the agent's own "copy" is a read.
-
-**Editor.** Ctrl+C, Ctrl+X, Ctrl+V on the selection (what the marquee picks today: entities, the active tiles layer's stacks, annotations), plus a Copy of a marquee rectangle on the active int_grid layer. Paste ghost with X, Y and R to mirror and rotate before placing (2.4). Paste in place (Ctrl+Shift+V) keeps the original cells.
+Shipped: the fragment format is in [format.md](format.md#clipboard-fragments), `edit.copy`/`edit.paste` in [api.md](api.md#clipboard-copy-and-paste), `copy_fragment`/`paste_fragment` in [mcp.md](mcp.md#copy_fragment), Ctrl+C/X/V, the paste ghost and Ctrl+Shift+V in the [editor README](../crates/worlds-editor/README.md) (mirror and rotate of the ghost are 2.4).
 
 ### 2.2 Duplicate level
 
-**What.** Copy a whole level: every layer's content, entities and notes with new ids and references remapped, fields, tags, per-layer rule state and tileset substitutions. Placed to the right of the original by default (the Ctrl+D convention), or where you drop it.
-
-**Commands.** `duplicate_level { level, slug, name?, world?, world_px? }`. Inverse: `delete_level`.
-
-**API / MCP.** `level.duplicate`; MCP `duplicate_level`.
-
-**Editor.** Ctrl+D with a level selected (today it leaves levels alone), the level's context menu, the Levels pane. The copy becomes the active level and is selected.
+Shipped: `duplicate_level` is in [commands.md](commands.md#duplicate_level), `level.duplicate` in [api.md](api.md#level), MCP `duplicate_level` in [mcp.md](mcp.md#duplicate_level), Ctrl+D on a level, its context menu and the level Inspector in the [editor README](../crates/worlds-editor/README.md) (the Levels pane entry comes with 3.1).
 
 ### 2.3 Assemblies (prefabs)
 

@@ -19,6 +19,7 @@ pub mod autosave;
 pub mod command;
 pub mod export;
 pub mod format;
+pub mod fragment;
 pub mod id;
 pub mod ldtk;
 pub mod model;
