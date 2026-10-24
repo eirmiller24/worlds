@@ -333,11 +333,13 @@ fn references_outside_the_imported_set_are_dropped_when_nothing_resolves_them() 
 fn placement_into_an_existing_world_at_an_offset() {
     let src = mini();
     let (_tmp, mut dst) = empty(16);
-    let mut pol = Policy::default();
-    pol.placement = Placement {
-        mode: PlacementMode::World,
-        world: Some(slug("main")),
-        offset: [1000, -16],
+    let mut pol = Policy {
+        placement: Placement {
+            mode: PlacementMode::World,
+            world: Some(slug("main")),
+            offset: [1000, -16],
+        },
+        ..Policy::default()
     };
     let sel = Selection {
         worlds: vec![slug("main")],
