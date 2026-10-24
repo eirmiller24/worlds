@@ -711,11 +711,6 @@ fn level_resize(
 /// dot marks the anchor, what stays put; arrows point where the level
 /// grows.
 pub fn anchor_picker(ui: &mut egui::Ui, anchor: &mut [i8; 2]) {
-    const ARROWS: [[&str; 3]; 3] = [
-        ["\u{2196}", "\u{2191}", "\u{2197}"],
-        ["\u{2190}", "", "\u{2192}"],
-        ["\u{2199}", "\u{2193}", "\u{2198}"],
-    ];
     let names = |a: [i8; 2]| -> String {
         let x = ["left", "center", "right"][(a[0] + 1) as usize];
         let y = ["top", "middle", "bottom"][(a[1] + 1) as usize];
@@ -726,23 +721,30 @@ pub fn anchor_picker(ui: &mut egui::Ui, anchor: &mut [i8; 2]) {
             _ => format!("the {y}-{x} corner"),
         }
     };
+    // Drawn, not glyphs: the default fonts lack some arrows.
     egui::Grid::new(ui.id().with("anchor_picker"))
         .spacing([2.0, 2.0])
         .show(ui, |ui| {
             for ay in -1i8..=1 {
                 for ax in -1i8..=1 {
                     let d = [ax - anchor[0], ay - anchor[1]];
-                    let glyph = if d == [0, 0] {
-                        "\u{25cf}"
-                    } else if d[0].abs() <= 1 && d[1].abs() <= 1 {
-                        ARROWS[(d[1] + 1) as usize][(d[0] + 1) as usize]
-                    } else {
-                        ""
-                    };
                     let on = d == [0, 0];
-                    let b = ui
-                        .add_sized([20.0, 20.0], egui::Button::selectable(on, glyph))
-                        .on_hover_text(format!("Keep {} in place", names([ax, ay])));
+                    let (rect, b) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), Sense::click());
+                    let b = b.on_hover_text(format!("Keep {} in place", names([ax, ay])));
+                    let v = ui.style().interact_selectable(&b, on);
+                    let p = ui.painter();
+                    p.rect(rect, 3.0, v.bg_fill, v.bg_stroke, StrokeKind::Inside);
+                    let c = rect.center();
+                    if on {
+                        p.circle_filled(c, 4.0, v.fg_stroke.color);
+                    } else if d[0].abs() <= 1 && d[1].abs() <= 1 {
+                        let dir = egui::vec2(d[0] as f32, d[1] as f32).normalized();
+                        p.arrow(
+                            c - dir * 5.0,
+                            dir * 10.0,
+                            Stroke::new(1.5, v.fg_stroke.color),
+                        );
+                    }
                     super::fields::mark(ui, &format!("level:anchor:{ax},{ay}"), b.rect);
                     if b.clicked() {
                         *anchor = [ax, ay];

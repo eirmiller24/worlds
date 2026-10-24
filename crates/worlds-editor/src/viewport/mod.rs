@@ -484,6 +484,17 @@ impl Viewport {
                     continue;
                 }
                 let sr = to_srect(&lr);
+                // Below the zoom steps (a fit of a huge world) a level can be
+                // under a pixel: keep a speck of at least MIN_LEVEL_PT so
+                // every level stays findable.
+                if sr.width() < MIN_LEVEL_PT || sr.height() < MIN_LEVEL_PT {
+                    let speck = Rect::from_center_size(
+                        sr.center(),
+                        egui::vec2(sr.width().max(MIN_LEVEL_PT), sr.height().max(MIN_LEVEL_PT)),
+                    );
+                    painter.rect_filled(speck, 0.0, Color32::from_gray(150));
+                    continue;
+                }
                 let level = doc.level(ix);
                 let name = if level.name.is_empty() {
                     level.slug.as_str()
@@ -1586,6 +1597,10 @@ fn random_toggle(ui: &mut egui::Ui, view: &mut ViewState, layer: &str) {
         None => view.set_status("Pick tiles in the palette first", true),
     }
 }
+
+/// The least size (screen points) a level is drawn at on the flat
+/// zoomed-out view, however far out the camera is.
+pub const MIN_LEVEL_PT: f32 = 6.0;
 
 /// The Note tool's options: kind, scope (Auto or World), the pin icon.
 fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
