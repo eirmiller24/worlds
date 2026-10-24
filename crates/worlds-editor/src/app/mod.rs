@@ -11,6 +11,7 @@ pub mod agent;
 pub mod defs;
 pub mod entities;
 pub mod fields;
+pub mod import;
 pub mod inspector;
 pub mod note_inspector;
 pub mod notes;
@@ -514,6 +515,7 @@ enum Modal {
     NewLevel,
     Recovery,
     World,
+    Import,
 }
 
 /// Enter and Escape taken from this frame's input for the topmost modal.
@@ -637,6 +639,10 @@ pub struct EditorApp {
     clipboard: Option<worlds_core::fragment::Fragment>,
     /// The New world / Rename world dialog.
     world_dialog: Option<worlds::WorldDialog>,
+    /// Import from Worlds project…: the folder picker's answer.
+    import_pick: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
+    /// The Import from Worlds project dialog.
+    import: Option<import::ImportDialog>,
 }
 
 impl EditorApp {
@@ -696,6 +702,8 @@ impl EditorApp {
             was_focused: None,
             clipboard: None,
             world_dialog: None,
+            import_pick: None,
+            import: None,
         }
     }
 
@@ -1085,6 +1093,7 @@ impl EditorApp {
             UiStep::Copy(_) => self.status_step(Action::Copy),
             UiStep::Cut(_) => self.status_step(Action::Cut),
             UiStep::Paste(p) => self.paste_step(p),
+            UiStep::ImportProject(s) => self.import_step(s),
         }
     }
 
@@ -2159,6 +2168,7 @@ impl EditorApp {
         self.open_prompt(&ctx);
         self.new_level_dialog(&ctx);
         self.world_dialog(&ctx);
+        self.import_window(&ctx);
         self.confirm(&ctx);
         self.toasts(&ctx);
         self.pending_panel(&ctx);
@@ -2889,6 +2899,7 @@ impl EditorApp {
                 self.request_open(&dir);
             }
         }
+        self.poll_import_pick();
         if let Some(doc) = &mut self.st.doc {
             for ix in doc.poll_bakes() {
                 self.st.viewport.bake_arrived(ix);
@@ -3187,6 +3198,7 @@ impl EditorApp {
             }
             Action::SwitchWorld(w) => self.switch_world(&w),
             Action::NewWorld => self.open_world_dialog(None),
+            Action::ImportProject => self.pick_import_source(),
             Action::RenameWorld(w) => self.open_world_dialog(Some(w)),
             Action::DeleteWorld(w) => self.ask_delete_world(w),
             Action::MoveLevelToWorld { level, world } => self.move_level_to_world(level, world),
@@ -3440,6 +3452,15 @@ impl EditorApp {
             if ui.button("Open…").on_hover_text("Ctrl+O").clicked() {
                 self.st.actions.push(Action::OpenDialog);
             }
+            if ui
+                .add_enabled(self.st.doc.is_some(), egui::Button::new("Import…"))
+                .on_hover_text(
+                    "Import from Worlds project…: definitions, worlds or levels of another project",
+                )
+                .clicked()
+            {
+                self.st.actions.push(Action::ImportProject);
+            }
             if ui.button("Commands").on_hover_text("Ctrl+P").clicked() {
                 self.st.actions.push(Action::CommandPalette);
             }
@@ -3659,6 +3680,8 @@ impl EditorApp {
             Some(Modal::NewLevel)
         } else if self.world_dialog.is_some() {
             Some(Modal::World)
+        } else if self.import.is_some() {
+            Some(Modal::Import)
         } else {
             None
         }

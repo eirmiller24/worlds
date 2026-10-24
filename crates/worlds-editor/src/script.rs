@@ -231,6 +231,30 @@ pub enum UiStep {
     /// `"ui": "paste"`: Ctrl+V (the ghost, pinned where the step says, and
     /// optionally placed) or Ctrl+Shift+V.
     Paste(PasteStep),
+    /// `"ui": "import_project"`: the Import from Worlds project dialog.
+    ImportProject(Box<ImportStep>),
+}
+
+/// `{ "ui": "import_project", "source": dir, "selection"?, "policy"?,
+/// "search"?, "apply"?: bool }`: the Import from Worlds project dialog on
+/// the project in `source` (relative to the current directory), with the
+/// `selection` and `policy` of `project.import_plan` and the search text,
+/// so a `--screenshot` shows it; `apply: true` then clicks Apply (one
+/// entry, `Import from <name>`; the plan's files are copied first). A
+/// source that doesn't load, this project itself, a refused plan or
+/// nothing to apply is an error.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportStep {
+    pub source: std::path::PathBuf,
+    #[serde(default)]
+    pub selection: Option<worlds_core::merge::Selection>,
+    #[serde(default)]
+    pub policy: Option<worlds_core::merge::Policy>,
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub apply: bool,
 }
 
 /// `{ "ui": "copy" }` / `{ "ui": "cut" }`: the key, exactly as pressed

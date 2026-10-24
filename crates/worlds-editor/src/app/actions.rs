@@ -94,6 +94,8 @@ pub enum Action {
         level: worlds_core::Slug,
         world: worlds_core::Slug,
     },
+    /// Import from Worlds project…: pick a project, then the import dialog.
+    ImportProject,
 }
 
 impl Action {
@@ -153,6 +155,11 @@ impl Action {
             ("New world…".into(), "", Action::NewWorld),
             ("Rename world…".into(), "", Action::RenameWorld(None)),
             ("Delete world…".into(), "", Action::DeleteWorld(None)),
+            (
+                "Import from Worlds project…".into(),
+                "",
+                Action::ImportProject,
+            ),
         ];
         use super::project_pane::Section;
         for (name, s) in [

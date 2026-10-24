@@ -76,6 +76,7 @@ This creates its own wgpu device (no window and no display, so no `xvfb-run` nee
   | `{ "gesture": "vertex", "note": id, "insert": [x, y], "ctrl"? }` | an Alt+click there: on a segment of the annotation, a point added (one entry, highlighted) |
   | `{ "ui": "copy" }`, `{ "ui": "cut" }` | Ctrl+C, Ctrl+X on the selection and the grid marquee, exactly as the keys (`clipboard::copy_selection`, `cut_selection`); the fragment becomes the editor's clipboard (and the system clipboard's text). Nothing to copy is an error |
   | `{ "ui": "paste", "fragment"?: {...}, "level"?, "origin"?: [x, y], "place"?: true, "in_place"?: true }` | Ctrl+V with `fragment` (default: the last copy): the paste ghost is armed; with `level` and `origin` (the fragment's top-left corner in cells of the project grid) it is pinned there, so a `--screenshot` shows it; `place` then lands it as a click does (one entry, the pasted things selected). `in_place` is Ctrl+Shift+V instead. An unknown level, or a refused paste, is an error |
+  | `{ "ui": "import_project", "source", "selection"?, "policy"?, "search"?, "apply"?: true }` | the Import from Worlds project dialog on the project in `source` (relative to the current directory) with `project.import_plan`'s `selection` and `policy` and the search text, so a `--screenshot` shows the plan; `apply` then clicks Apply (one entry, `Import from <name>`; the plan's files are copied into `art/` first, the one other file a run without `--save` writes). This project itself, a source that doesn't load, a refused plan or nothing to apply is an error |
 
   For example (the forms; real points depend on the project: a marquee must start in empty space, a stack under a tiles press is selected instead):
 
@@ -345,6 +346,14 @@ A project can hold several worlds (`worlds/<slug>/`, [format.md](../../docs/form
 
 Each of these is one command, so one undo entry, through the same path as any edit; an undo that removes the world shown falls back to the first world. `src/app/worlds.rs` has the switcher, the dialog, the confirmation and the pane section.
 
+## Import from Worlds project
+
+**Import…** in the toolbar (or "Import from Worlds project…" in the command palette) picks another project's directory and opens a dialog over `worlds_core::merge` ([docs/importing_worlds.md](../../docs/importing_worlds.md)); `src/app/import.rs`.
+
+- **What**: the presets *Definitions only*, *Everything* and *Pick*, a search box, and a checkbox tree of the source's definitions by kind (tilesets, enums, patterns, legends, templates, layers, level fields, entity types, project settings) and its levels by world (with a checkbox for the whole world: its guide groups and world notes too). Checking something under a preset turns it into *Pick* with the preset spelled out. What a checked item needs shows checked and greyed out; hover says what needs it.
+- **The plan**: every item shows what the import does with it (`add`, `same`, `skip: ours kept`, `overwrite`, `rename -> <slug>_2`, `refused`; hover for why and where a level goes), and each collision gets its own Skip / Overwrite / Rename menu over the default (**On a collision**). **Levels go** into a new world (named after the source; editable), into an existing world, or into the worlds of their own slugs, with an **Offset** in world pixels. Under it the summary line (`12 definitions, 3 levels, 2 renamed, 1 skipped`) and, folded, the ids re-rolled, references dropped, files copied and problems. Every change plans again; nothing changes until Apply.
+- **Apply** plans once more against the project as it is, copies the plan's files under `art/`, and applies its batch as one undo entry, `Import from <name>`; a new world is then shown. Escape or Cancel closes it.
+
 ## Crate layout
 
 ```
@@ -374,6 +383,8 @@ src/
                      project settings
     worlds.rs        several worlds: the toolbar's switcher, New / Rename world dialog,
                      Delete world confirmation, Move to world, the Project pane's Worlds
+    import.rs        Import from Worlds project: the folder pick, the dialog (tree,
+                     presets, per-collision policy, placement, summary), Apply
     problems.rs      live validation: quiet time, worker, stale results dropped
     recovery.rs      the session lock's "already open" message, the recovery prompt
                      (Recover / Discard / Later, per-file diffs), --recover, the autosave tick
@@ -428,6 +439,9 @@ tests/gpu_screenshot.rs   WORLDS_GPU_TESTS=1: render smoke test, --script paint 
                           entity palette + bench, entity gesture + save, disk entity wait,
                           multi-select inspector, Types pane, live problems pane,
                           zoomed hover readout, a broken entity file's problem
+tests/import.rs           WORLDS_GPU_TESTS=1: the import dialog on the game fixture over a fresh
+                          project (an import_project step), presets and checkboxes, Apply
+                          as one entry that makes a world and copies images, bad steps
 tests/worlds.rs           WORLDS_GPU_TESTS=1: one world on the map at a time (levels drawn,
                           labels, Fit world), the switcher, Switch world, a level made active
                           in another world, Move to world and its undo
