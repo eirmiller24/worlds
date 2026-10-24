@@ -96,6 +96,60 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Import definitions, worlds or levels from another Worlds project
+    /// (docs/importing_worlds.md). Prints the plan, then applies it as one
+    /// batch and saves; --dry-run only prints it.
+    ImportProject {
+        /// The project to import from.
+        source: PathBuf,
+        /// The project to import into (written in place).
+        #[arg(long)]
+        into: PathBuf,
+        /// Every definition and project setting, no levels.
+        #[arg(long, conflicts_with_all = ["all", "levels", "worlds"])]
+        defs_only: bool,
+        /// Every definition, setting and world with its levels.
+        #[arg(long, conflicts_with_all = ["levels", "worlds"])]
+        all: bool,
+        /// These levels (comma-separated), with what they need.
+        #[arg(long, value_delimiter = ',', value_name = "LEVEL,...")]
+        levels: Vec<String>,
+        /// These worlds (comma-separated): their levels, guide groups and
+        /// world notes.
+        #[arg(long, value_delimiter = ',', value_name = "WORLD,...")]
+        worlds: Vec<String>,
+        /// What to do with a slug this project already has (with another
+        /// definition): keep ours, take theirs, or take theirs as <slug>_2.
+        #[arg(long, value_enum, default_value_t = OnConflict::Skip)]
+        on_conflict: OnConflict,
+        /// Put imported levels into this existing world.
+        #[arg(long, conflicts_with_all = ["new_world", "keep_worlds"])]
+        world: Option<String>,
+        /// Put imported levels into a new world with this slug (default: a
+        /// new world named after the source project).
+        #[arg(long, conflicts_with = "keep_worlds")]
+        new_world: Option<String>,
+        /// Put each level into the world of its own source world's slug,
+        /// made if missing.
+        #[arg(long)]
+        keep_worlds: bool,
+        /// World pixels added to every imported level's position: x,y.
+        #[arg(long, value_name = "X,Y", allow_hyphen_values = true)]
+        offset: Option<String>,
+        /// Print the plan; change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the plan (and what was applied) as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum OnConflict {
+    Skip,
+    Overwrite,
+    Rename,
 }
 
 fn main() -> ExitCode {
@@ -113,6 +167,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
     // Worlds session that crashed left unsaved edits in its autosave.
     if let Command::Bake { dir, .. } = &cli.command {
         worlds_core::autosave::warn_pending(dir);
+    }
+    if let Command::ImportProject {
+        into,
+        dry_run: false,
+        ..
+    } = &cli.command
+    {
+        worlds_core::autosave::warn_pending(into);
     }
     match cli.command {
         Command::Validate {
@@ -134,7 +196,134 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::New { dir, name, grid } => new(&dir, name, grid),
         Command::ImportLdtk { input, out } => import_ldtk(&input, &out),
         Command::Bake { dir, level, out } => bake(&dir, level.as_deref(), out.as_deref()),
+        Command::ImportProject {
+            source,
+            into,
+            defs_only,
+            all,
+            levels,
+            worlds,
+            on_conflict,
+            world,
+            new_world,
+            keep_worlds,
+            offset,
+            dry_run,
+            json,
+        } => {
+            use worlds_core::merge::{
+                Conflict, Placement, PlacementMode, Policy, Preset, Selection,
+            };
+            let slugs = |v: Vec<String>, what: &str| -> Result<Vec<worlds_core::Slug>> {
+                v.into_iter()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        worlds_core::Slug::new(s.clone())
+                            .map_err(|_| anyhow::anyhow!("{what} {s:?} is not a slug"))
+                    })
+                    .collect()
+            };
+            let mut selection = Selection {
+                levels: slugs(levels, "level")?,
+                worlds: slugs(worlds, "world")?,
+                ..Selection::default()
+            };
+            selection.preset = if all {
+                Preset::Everything
+            } else if defs_only {
+                Preset::DefsOnly
+            } else if selection.levels.is_empty() && selection.worlds.is_empty() {
+                bail!("say what to import: --defs-only, --all, --levels or --worlds");
+            } else {
+                Preset::Pick
+            };
+            let offset = match offset {
+                None => [0, 0],
+                Some(s) => {
+                    let parts: Vec<&str> = s.split(',').map(str::trim).collect();
+                    match parts.as_slice() {
+                        [x, y] => [
+                            x.parse().context("--offset x")?,
+                            y.parse().context("--offset y")?,
+                        ],
+                        _ => bail!("--offset is x,y in world pixels, e.g. 640,0"),
+                    }
+                }
+            };
+            let slug = |s: String| {
+                worlds_core::Slug::new(s.clone())
+                    .map_err(|_| anyhow::anyhow!("world {s:?} is not a slug"))
+            };
+            let placement = match (world, new_world, keep_worlds) {
+                (Some(w), _, _) => Placement {
+                    mode: PlacementMode::World,
+                    world: Some(slug(w)?),
+                    offset,
+                },
+                (None, _, true) => Placement {
+                    mode: PlacementMode::Keep,
+                    world: None,
+                    offset,
+                },
+                (None, w, false) => Placement {
+                    mode: PlacementMode::NewWorld,
+                    world: w.map(slug).transpose()?,
+                    offset,
+                },
+            };
+            let policy = Policy {
+                on_conflict: match on_conflict {
+                    OnConflict::Skip => Conflict::Skip,
+                    OnConflict::Overwrite => Conflict::Overwrite,
+                    OnConflict::Rename => Conflict::Rename,
+                },
+                conflicts: Default::default(),
+                placement,
+            };
+            import_project(&source, &into, &selection, &policy, dry_run, json)
+        }
     }
+}
+
+fn import_project(
+    source: &Path,
+    into: &Path,
+    selection: &worlds_core::merge::Selection,
+    policy: &worlds_core::merge::Policy,
+    dry_run: bool,
+    json: bool,
+) -> Result<ExitCode> {
+    let src = worlds_core::load(source).with_context(|| source.display().to_string())?;
+    let mut dst = worlds_core::load(into).with_context(|| into.display().to_string())?;
+    let plan = worlds_core::merge::plan(&src, &dst, selection, policy)?;
+    let mut copied = Vec::new();
+    if !dry_run && !plan.is_empty() {
+        copied = worlds_core::merge::copy_assets(&plan, source, into)
+            .context("copying files into the project")?;
+        dst.apply(plan.command())?;
+        worlds_core::save_dirty(&mut dst, into)?;
+    }
+    if json {
+        let mut v = serde_json::to_value(&plan)?;
+        v["applied"] = (!dry_run && !plan.is_empty()).into();
+        v["copied"] = serde_json::to_value(&copied)?;
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else {
+        print!("{}", plan.text());
+        if dry_run {
+            println!("dry run: nothing changed");
+        } else if plan.is_empty() {
+            println!("nothing to import");
+        } else {
+            println!(
+                "imported into {}: {} ({} file(s) copied)",
+                into.display(),
+                plan.summary,
+                copied.len()
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn check_export(

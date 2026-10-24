@@ -507,7 +507,11 @@ impl Plan {
         if !self.assets.is_empty() {
             out.push_str("Files:\n");
             for a in &self.assets {
-                let mut line = format!("  {:<9} {} -> {}", a.action.name(), a.from, a.to);
+                let mut line = if a.action == Action::Refused {
+                    format!("  {:<9} {}", "missing", a.from)
+                } else {
+                    format!("  {:<9} {} -> {}", a.action.name(), a.from, a.to)
+                };
                 if let Some(r) = &a.reason {
                     line.push_str(&format!(": {r}"));
                 }
@@ -1110,9 +1114,7 @@ impl<'a> Planner<'a> {
                 from: rel.to_string(),
                 to: rel.to_string(),
                 action: Action::Refused,
-                reason: Some(
-                    "not found in the source project; the reference is kept as it is".into(),
-                ),
+                reason: Some("not in the source project; the reference is kept as it is".into()),
             });
             return None;
         }
