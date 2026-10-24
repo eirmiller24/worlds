@@ -897,6 +897,16 @@ impl Viewport {
             p.refresh(doc);
             if let Some((_, g)) = &p.ghost {
                 g.draw(&painter, &to_screen, cx.accent);
+                // Why it can't land there (another project's grid, ...).
+                if let (Some(e), Some(r)) = (&g.error, g.outlines.last()) {
+                    painter.text(
+                        to_screen(r.min) + egui::vec2(0.0, -4.0),
+                        Align2::LEFT_BOTTOM,
+                        e,
+                        FontId::proportional(13.0),
+                        Color32::from_rgb(230, 80, 80),
+                    );
+                }
             }
         }
 
