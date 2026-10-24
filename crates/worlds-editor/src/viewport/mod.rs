@@ -58,6 +58,11 @@ pub enum Fit {
     Level(LevelIx),
     /// A rect of world pixels (`view.focus { world_rect }`).
     Rect(WRect),
+    /// This world pixel in the middle at this zoom (a camera bookmark).
+    Center {
+        center: [f64; 2],
+        zoom: f64,
+    },
 }
 
 /// Status bar readout for the pointer.
@@ -99,6 +104,9 @@ pub struct ViewportCx<'a> {
     /// Tileset atlas textures by slug (the palette's cache), for entity
     /// icons; `None` (snapshots): boxes get no icon.
     pub atlas: Option<&'a Atlas>,
+    /// This is the focused map tab: it takes the keys and draws the tool
+    /// strips (snapshots: true).
+    pub focused: bool,
 }
 
 /// Tileset atlas textures by slug (`None`: the image failed to load).
@@ -144,6 +152,93 @@ pub struct Viewport {
     pub map_only: bool,
     /// Draw entity boxes (`view.snapshot`'s `overlays`).
     pub draw_entities: bool,
+    /// The egui pass [`Self::next_slot`] counts in.
+    slot_pass: u64,
+    /// The GPU slot the next map drawn this pass takes ([`gpu::Slot`]).
+    next_slot: usize,
+}
+
+/// One map tab's part of the [`Viewport`]: its camera and what its input
+/// and drawing keep between frames. The scene (the chunk cache) and the
+/// GPU buffers are shared by every tab; the app swaps a tab's `TabCam`
+/// into the viewport to draw it ([`Viewport::swap_tab`]).
+#[derive(Debug, Clone)]
+pub struct TabCam {
+    pub camera: Camera,
+    wheel_acc: f32,
+    pinch_acc: f32,
+    gesture: Option<(CellHit, CellHit, Grab)>,
+    note_press: Option<([f64; 2], Pos2, Option<LevelIx>)>,
+    pub readout: Option<String>,
+    pub paint_strip: Option<Rect>,
+    pub level_labels: Vec<(LevelIx, Rect)>,
+    pub level_tab: Option<Rect>,
+    context_at: Option<([f64; 2], Option<LevelIx>)>,
+    pending_fit: Option<Fit>,
+    pub size_px: [f64; 2],
+    pub hover: Option<HoverInfo>,
+    pub tool_input: Option<ToolInput>,
+    pub stats: ViewStats,
+}
+
+impl Default for TabCam {
+    fn default() -> Self {
+        TabCam {
+            camera: Camera::default(),
+            wheel_acc: 0.0,
+            pinch_acc: 0.0,
+            gesture: None,
+            note_press: None,
+            readout: None,
+            paint_strip: None,
+            level_labels: Vec::new(),
+            level_tab: None,
+            context_at: None,
+            pending_fit: None,
+            size_px: [0.0, 0.0],
+            hover: None,
+            tool_input: None,
+            stats: ViewStats::default(),
+        }
+    }
+}
+
+impl TabCam {
+    /// A parked tab with this camera, framing `fit` when it is next drawn.
+    pub fn new(camera: Camera, fit: Option<Fit>) -> Self {
+        TabCam {
+            camera,
+            pending_fit: fit,
+            ..Default::default()
+        }
+    }
+
+    pub fn request_fit(&mut self, fit: Fit) {
+        self.pending_fit = Some(fit);
+    }
+
+    /// Level indices changed (`map[old]` is the new index): follow them in
+    /// a pending fit, drop what a parked tab held of the old levels.
+    pub fn remap_levels(&mut self, map: &[Option<usize>]) {
+        if let Some(Fit::Level(ix)) = self.pending_fit {
+            self.pending_fit = map.get(ix).copied().flatten().map(Fit::Level);
+        }
+        self.gesture = None;
+        self.note_press = None;
+        self.context_at = None;
+        self.level_labels.clear();
+        self.hover = None;
+    }
+
+    /// The fit waiting for the tab's next frame.
+    pub fn pending_fit(&self) -> Option<Fit> {
+        self.pending_fit
+    }
+
+    /// The world rect the tab shows (its last frame's size).
+    pub fn visible(&self) -> WRect {
+        self.camera.visible(self.size_px)
+    }
 }
 
 impl Default for Viewport {
@@ -177,7 +272,35 @@ impl Viewport {
             rebuild_budget: Some(Duration::from_millis(6)),
             map_only: false,
             draw_entities: true,
+            slot_pass: u64::MAX,
+            next_slot: 0,
         }
+    }
+
+    /// Swap the per-tab state with `t`: park the tab drawn so far in `t`
+    /// and take `t`'s ([`TabCam`]).
+    pub fn swap_tab(&mut self, t: &mut TabCam) {
+        use std::mem::swap;
+        swap(&mut self.camera, &mut t.camera);
+        swap(&mut self.wheel_acc, &mut t.wheel_acc);
+        swap(&mut self.pinch_acc, &mut t.pinch_acc);
+        swap(&mut self.gesture, &mut t.gesture);
+        swap(&mut self.note_press, &mut t.note_press);
+        swap(&mut self.readout, &mut t.readout);
+        swap(&mut self.paint_strip, &mut t.paint_strip);
+        swap(&mut self.level_labels, &mut t.level_labels);
+        swap(&mut self.level_tab, &mut t.level_tab);
+        swap(&mut self.context_at, &mut t.context_at);
+        swap(&mut self.pending_fit, &mut t.pending_fit);
+        swap(&mut self.size_px, &mut t.size_px);
+        swap(&mut self.hover, &mut t.hover);
+        swap(&mut self.tool_input, &mut t.tool_input);
+        swap(&mut self.stats, &mut t.stats);
+    }
+
+    /// The fit waiting for the next frame, if any.
+    pub fn pending_fit(&self) -> Option<Fit> {
+        self.pending_fit
     }
 
     pub fn scene(&self) -> Option<&Scene> {
@@ -270,6 +393,10 @@ impl Viewport {
             Fit::Level(i) if i < doc.levels.len() => level_wrect(doc, i),
             Fit::Level(_) => return,
             Fit::Rect(r) => r,
+            Fit::Center { center, zoom } => {
+                self.camera = Camera::centered(center, zoom, self.size_px);
+                return;
+            }
         };
         self.camera.fit(rect, self.size_px, 24.0);
     }
@@ -309,13 +436,24 @@ impl Viewport {
             self.apply_fit(doc, fit, world);
         }
 
+        // The n-th map drawn this pass draws with GPU slot n (several tabs).
+        let pass = ui.ctx().cumulative_pass_nr();
+        if pass != self.slot_pass {
+            self.slot_pass = pass;
+            self.next_slot = 0;
+        }
+        let slot = self.next_slot;
+        self.next_slot += 1;
+
         if self.map_only {
-            self.map(ui, cx, rect, [left, top, w, h]);
+            self.map(ui, cx, rect, [left, top, w, h], slot);
             return;
         }
 
         // ---- input: pan and zoom ----
-        let kb_free = !ui.ctx().egui_wants_keyboard_input();
+        // Keys belong to the focused tab (another tab only takes the
+        // pointer: a press there focuses it first).
+        let kb_free = cx.focused && !ui.ctx().egui_wants_keyboard_input();
         let space = kb_free && ui.input(|i| i.key_down(egui::Key::Space));
         let hand = space || cx.view.tool == Tool::Hand;
         let ppp32 = ppp as f32;
@@ -443,13 +581,14 @@ impl Viewport {
                 for id in scene.retired.drain(..) {
                     vg.free_chunk(id);
                 }
-                vg.draws.clear();
+                vg.slot(&cx.gpu.device, slot).draws.clear();
                 for &cr in &self.visible {
                     let c = scene.chunk(cr);
                     vg.sync_chunk(&cx.gpu.device, &cx.gpu.queue, c);
                     stats.instances += c.instances.len();
+                    let draws = &mut vg.slot(&cx.gpu.device, slot).draws;
                     for run in &c.runs {
-                        vg.draws.push(DrawCmd {
+                        draws.push(DrawCmd {
                             chunk: c.id,
                             tex: run.tex,
                             start: run.start,
@@ -457,8 +596,8 @@ impl Viewport {
                         });
                     }
                 }
-                stats.draws = vg.draws.len();
                 stats.uploaded = vg.take_upload_count();
+                // This tab's world (the tab is live while it draws).
                 references::sync(
                     vg,
                     cx.gpu,
@@ -467,8 +606,11 @@ impl Viewport {
                     &mut cx.view.references,
                     &scene.draw_order,
                     &view,
+                    slot,
                 );
-                vg.viewport_px = [left as f32, top as f32, w as f32, h as f32];
+                let s = vg.slot(&cx.gpu.device, slot);
+                stats.draws = s.draws.len();
+                s.viewport_px = [left as f32, top as f32, w as f32, h as f32];
                 let off = cam.snapped_offset();
                 let mut u = Uniforms {
                     view: [off[0] as f32, off[1] as f32, cam.zoom as f32, 0.0],
@@ -478,12 +620,12 @@ impl Viewport {
                 for i in 0..doc.project.layers.len() {
                     u.set_opacity(i, cx.view.layer_opacity(doc, i));
                 }
-                vg.write_uniforms(&cx.gpu.queue, &u);
+                vg.write_uniforms(&cx.gpu.queue, slot, &u);
             }
             drop(r);
             painter.add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                ViewportCallback,
+                ViewportCallback(slot),
             ));
             if self.draw_entities {
                 draw_entities(
@@ -496,7 +638,7 @@ impl Viewport {
             if references::drawn(doc, &cx.view.references, cx.view.world_ix(doc)) {
                 let mut r = cx.gpu.renderer.write();
                 if let Some(vg) = r.callback_resources.get_mut::<ViewportGpu>() {
-                    vg.draws.clear();
+                    vg.slot(&cx.gpu.device, slot).draws.clear();
                     references::sync(
                         vg,
                         cx.gpu,
@@ -505,11 +647,14 @@ impl Viewport {
                         &mut cx.view.references,
                         &scene.draw_order,
                         &view,
+                        slot,
                     );
-                    vg.viewport_px = [left as f32, top as f32, w as f32, h as f32];
+                    vg.slot(&cx.gpu.device, slot).viewport_px =
+                        [left as f32, top as f32, w as f32, h as f32];
                     let off = cam.snapped_offset();
                     vg.write_uniforms(
                         &cx.gpu.queue,
+                        slot,
                         &Uniforms {
                             view: [off[0] as f32, off[1] as f32, cam.zoom as f32, 0.0],
                             size: [w as f32, h as f32, 0.0, 0.0],
@@ -520,7 +665,7 @@ impl Viewport {
                 drop(r);
                 painter.add(egui_wgpu::Callback::new_paint_callback(
                     rect,
-                    ViewportCallback,
+                    ViewportCallback(slot),
                 ));
             }
             if self.draw_entities {
@@ -768,7 +913,7 @@ impl Viewport {
         // the marquee).
         // The tool's strip at the top left of the map (Note options, Paint
         // modes) floats above the map: the tab steps aside from it.
-        let strip = tool_strip_rect(ui.ctx(), rect, tool);
+        let strip = tool_strip_rect(ui.ctx(), rect, tool).filter(|_| cx.focused);
         let tab = active.map(|ix| {
             let l = doc.level(ix);
             let name = if l.name.is_empty() {
@@ -803,34 +948,37 @@ impl Viewport {
         });
         let escape = kb_free && ui.input(|i| i.key_pressed(egui::Key::Escape));
         // The Select tool on reference images (the References pseudo-layer
-        // active): a press it takes doesn't start the Select gesture.
+        // active): a press it takes doesn't start the Select gesture. Only
+        // the focused tab handles them (a press in another tab focuses it
+        // first), so a drag never reads another tab's camera.
         let mut ref_cmds = Vec::new();
-        let ref_busy = references::interact(
-            doc,
-            cx.view.world_ix(doc),
-            &mut cx.view.references,
-            &scene.draw_order,
-            &references::Input {
-                tool,
-                hand,
-                hovered: resp.hovered(),
-                pressed,
-                down,
-                released,
-                escape,
-                free: self.gesture.is_none()
-                    && cx.view.pick.is_none()
-                    && cx.view.drawing.is_none()
-                    && cx.view.paste.is_none()
-                    && !on_tab
-                    && handle.is_none()
-                    && !strip.zip(pointer_pts).is_some_and(|(r, p)| r.contains(p)),
-                pointer_world,
-                pointer: pointer_pts,
-                to_screen: &to_screen,
-            },
-            &mut ref_cmds,
-        );
+        let ref_busy = cx.focused
+            && references::interact(
+                doc,
+                cx.view.world_ix(doc),
+                &mut cx.view.references,
+                &scene.draw_order,
+                &references::Input {
+                    tool,
+                    hand,
+                    hovered: resp.hovered(),
+                    pressed,
+                    down,
+                    released,
+                    escape,
+                    free: self.gesture.is_none()
+                        && cx.view.pick.is_none()
+                        && cx.view.drawing.is_none()
+                        && cx.view.paste.is_none()
+                        && !on_tab
+                        && handle.is_none()
+                        && !strip.zip(pointer_pts).is_some_and(|(r, p)| r.contains(p)),
+                    pointer_world,
+                    pointer: pointer_pts,
+                    to_screen: &to_screen,
+                },
+                &mut ref_cmds,
+            );
         cx.actions
             .extend(ref_cmds.into_iter().map(|c| Action::Apply(Box::new(c))));
         if ref_busy {
@@ -1397,11 +1545,11 @@ impl Viewport {
 
         // The Note tool's options strip, top left of the map; in its place
         // with a Paint mode, the Paint group's mode strip.
-        if tool == Tool::Note {
+        // (The focused tab's only: the strips are one egui area each.)
+        if tool == Tool::Note && cx.focused {
             note_strip(ui.ctx(), rect, cx.view);
         }
-        self.paint_strip = tool
-            .is_paint_mode()
+        self.paint_strip = (tool.is_paint_mode() && cx.focused)
             .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions, doc, cx.view));
 
         // Context menu (a right click; right drag pans).
@@ -1467,7 +1615,14 @@ impl Viewport {
     /// visible layer's chunks at the camera's zoom, entity boxes if
     /// [`Viewport::draw_entities`]. `px` is the viewport in physical px
     /// (left, top, width, height).
-    fn map(&mut self, ui: &mut egui::Ui, cx: &mut ViewportCx<'_>, rect: Rect, px: [f64; 4]) {
+    fn map(
+        &mut self,
+        ui: &mut egui::Ui,
+        cx: &mut ViewportCx<'_>,
+        rect: Rect,
+        px: [f64; 4],
+        slot: usize,
+    ) {
         let Some(doc) = cx.doc else {
             return;
         };
@@ -1516,14 +1671,15 @@ impl Viewport {
             for id in scene.retired.drain(..) {
                 vg.free_chunk(id);
             }
-            vg.draws.clear();
+            vg.slot(&cx.gpu.device, slot).draws.clear();
             // Reference images aren't part of a snapshot.
-            vg.ref_draws.clear();
+            vg.slot(&cx.gpu.device, slot).ref_draws.clear();
             for &cr in &self.visible {
                 let c = scene.chunk(cr);
                 vg.sync_chunk(&cx.gpu.device, &cx.gpu.queue, c);
+                let draws = &mut vg.slot(&cx.gpu.device, slot).draws;
                 for run in &c.runs {
-                    vg.draws.push(DrawCmd {
+                    draws.push(DrawCmd {
                         chunk: c.id,
                         tex: run.tex,
                         start: run.start,
@@ -1531,7 +1687,8 @@ impl Viewport {
                     });
                 }
             }
-            vg.viewport_px = [left as f32, top as f32, w as f32, h as f32];
+            vg.slot(&cx.gpu.device, slot).viewport_px =
+                [left as f32, top as f32, w as f32, h as f32];
             let off = cam.snapped_offset();
             let mut u = Uniforms {
                 view: [off[0] as f32, off[1] as f32, cam.zoom as f32, 0.0],
@@ -1541,12 +1698,12 @@ impl Viewport {
             for i in 0..doc.project.layers.len() {
                 u.set_opacity(i, cx.view.layer_opacity(doc, i));
             }
-            vg.write_uniforms(&cx.gpu.queue, &u);
+            vg.write_uniforms(&cx.gpu.queue, slot, &u);
         }
         drop(r);
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
-            ViewportCallback,
+            ViewportCallback(slot),
         ));
         if self.draw_entities {
             draw_entities(

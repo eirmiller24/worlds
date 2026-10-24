@@ -386,9 +386,11 @@ impl Handler {
             "rules.regions" => rules::regions(self, host, method, params),
             "history.cancel_batch" => history::cancel_batch(self, host, client, method, params),
             "history.batch_status" => history::batch_status(self, method, params),
-            "view.focus" | "view.select" | "view.snapshot" => {
-                view::call(self, host, method, params)
-            }
+            "view.focus"
+            | "view.select"
+            | "view.snapshot"
+            | "view.list_viewports"
+            | "view.open_viewport" => view::call(self, host, method, params),
             "events.subscribe" | "events.unsubscribe" => {
                 events::subscribe(self, client, method, params)
             }

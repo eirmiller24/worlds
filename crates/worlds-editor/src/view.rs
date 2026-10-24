@@ -2,6 +2,19 @@
 //! and layer, per-layer visibility/lock/opacity, the tool and the palette,
 //! the selection and a pending canvas pick. Partly saved to
 //! `.worlds/ui.json` (not the selection).
+//!
+//! **Map tabs.** The editor has any number of map tabs ([`ViewportTab`]).
+//! Per tab: the camera (and what the viewport keeps for it,
+//! [`crate::viewport::TabCam`]), the world shown and the active level.
+//! Everything else here is global: tool, brush, active layer, layer and
+//! annotation visibility, selection. The *live* tab's per-tab state sits
+//! in the usual places ([`ViewState::active_level`],
+//! [`ViewState::active_world`], [`ViewState::zoom`] and the app's
+//! [`crate::viewport::Viewport`]); the other tabs are parked in
+//! [`ViewState::tabs`]. Outside the dock's drawing the live tab is the
+//! focused one, so code that reads the active level reads the focused
+//! tab's; drawing another tab swaps it in for its draw and back after
+//! ([`swap_live`]).
 
 use std::time::{Duration, Instant};
 
@@ -35,6 +48,63 @@ pub struct StatusMsg {
     pub text: String,
     pub error: bool,
     pub until: Instant,
+}
+
+/// A map tab's id: stable for the tab's life, saved in `ui.json` and
+/// what the API's `viewport` argument names. The first tab is 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ViewportId(pub u32);
+
+impl ViewportId {
+    pub const FIRST: ViewportId = ViewportId(1);
+}
+
+impl std::fmt::Display for ViewportId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// One map tab. While the tab is live its fields here are stale (its
+/// state is in the live slots, see the module docs); parked, they hold it.
+#[derive(Debug, Clone)]
+pub struct ViewportTab {
+    pub id: ViewportId,
+    pub active_level: Option<LevelIx>,
+    pub active_world: Option<Slug>,
+    pub zoom: f64,
+    pub cam: crate::viewport::TabCam,
+}
+
+impl ViewportTab {
+    pub fn new(id: ViewportId) -> Self {
+        ViewportTab {
+            id,
+            active_level: None,
+            active_world: None,
+            zoom: 1.0,
+            cam: Default::default(),
+        }
+    }
+}
+
+/// A saved view (`ui.json` `bookmarks`): a world and where the camera
+/// looked, as its center and zoom so it frames the same spot in a tab of
+/// any size.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub name: String,
+    pub world: String,
+    pub camera: BookmarkCamera,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BookmarkCamera {
+    /// The world pixel at the middle of the tab.
+    pub center: [f64; 2],
+    /// Physical screen px per world px.
+    pub zoom: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +164,20 @@ pub struct ViewState {
     pub grid_marquee: Option<crate::clipboard::GridMarquee>,
     /// Reference images: the pseudo-layer, the selected one, a drag.
     pub references: crate::viewport::references::RefsView,
+    /// Every map tab, in the order opened (see the module docs). Never
+    /// empty.
+    pub tabs: Vec<ViewportTab>,
+    /// The focused map tab: keys, single-key tools, the toolbar's world
+    /// switcher, the API's default `viewport`.
+    pub focused: ViewportId,
+    /// The tab whose state is in the live slots (the focused one, except
+    /// while another tab draws).
+    pub live: ViewportId,
+    /// Two tabs whose cameras move together: same zoom, the same offset
+    /// between their centers ("Link cameras").
+    pub link: Option<[ViewportId; 2]>,
+    /// Saved views, in order (Ctrl+Shift+1..9 jump to the first nine).
+    pub bookmarks: Vec<Bookmark>,
 }
 
 impl Default for ViewState {
@@ -122,6 +206,11 @@ impl Default for ViewState {
             paste: None,
             grid_marquee: None,
             references: Default::default(),
+            tabs: vec![ViewportTab::new(ViewportId::FIRST)],
+            focused: ViewportId::FIRST,
+            live: ViewportId::FIRST,
+            link: None,
+            bookmarks: Vec::new(),
         }
     }
 }
@@ -502,17 +591,7 @@ impl ViewState {
     /// hit-tested; everything project-wide (validation, palette counts,
     /// the Notes and Problems panes) still covers every world.
     pub fn world_ix(&self, doc: &Document) -> usize {
-        if let Some(r) = self
-            .active_level
-            .and_then(|ix| doc.levels.get(ix))
-            .filter(|r| r.world < doc.project.worlds.len())
-        {
-            return r.world;
-        }
-        self.active_world
-            .as_ref()
-            .and_then(|s| doc.project.worlds.iter().position(|w| w.slug == *s))
-            .unwrap_or(0)
+        world_ix_of(doc, self.active_level, self.active_world.as_ref())
     }
 
     /// Show world `w`: it becomes [`Self::active_world`], and an active
@@ -534,6 +613,64 @@ impl ViewState {
             .is_some_and(|r| r.world != w)
         {
             self.active_level = None;
+        }
+    }
+
+    /// The world map tab `id` shows (index into `project.worlds`), as
+    /// [`Self::world_ix`] for the live tab.
+    pub fn tab_world_ix(&self, doc: &Document, id: ViewportId) -> usize {
+        if id == self.live {
+            return self.world_ix(doc);
+        }
+        match self.tabs.iter().find(|t| t.id == id) {
+            Some(t) => world_ix_of(doc, t.active_level, t.active_world.as_ref()),
+            None => self.world_ix(doc),
+        }
+    }
+
+    /// Tab `id`'s active level ([`Self::active_level`] for the live tab).
+    pub fn tab_active_level(&self, id: ViewportId) -> Option<LevelIx> {
+        if id == self.live {
+            return self.active_level;
+        }
+        self.tabs
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.active_level)
+    }
+
+    pub fn has_tab(&self, id: ViewportId) -> bool {
+        self.tabs.iter().any(|t| t.id == id)
+    }
+
+    /// An id no tab has: one more than the largest.
+    pub fn fresh_tab_id(&self) -> ViewportId {
+        ViewportId(self.tabs.iter().map(|t| t.id.0).max().unwrap_or(0) + 1)
+    }
+
+    /// Level indices changed (`map[old]` is the new index, `None`: gone):
+    /// follow them in the live tab and every parked one.
+    pub fn remap_levels(&mut self, map: &[Option<usize>]) {
+        self.active_level = self
+            .active_level
+            .and_then(|i| map.get(i).copied().flatten());
+        let live = self.live;
+        for t in self.tabs.iter_mut().filter(|t| t.id != live) {
+            t.active_level = t.active_level.and_then(|i| map.get(i).copied().flatten());
+            t.cam.remap_levels(map);
+        }
+    }
+
+    /// World `from` is now `to`: every tab showing it still does.
+    pub fn rename_world(&mut self, from: &Slug, to: &Slug) {
+        if self.active_world.as_ref() == Some(from) {
+            self.active_world = Some(to.clone());
+        }
+        let live = self.live;
+        for t in self.tabs.iter_mut().filter(|t| t.id != live) {
+            if t.active_world.as_ref() == Some(from) {
+                t.active_world = Some(to.clone());
+            }
         }
     }
 
@@ -648,6 +785,206 @@ impl ViewState {
     }
 }
 
+/// The world a tab with this active level and world shows (see
+/// [`ViewState::world_ix`]).
+fn world_ix_of(doc: &Document, level: Option<LevelIx>, world: Option<&Slug>) -> usize {
+    if let Some(r) = level
+        .and_then(|ix| doc.levels.get(ix))
+        .filter(|r| r.world < doc.project.worlds.len())
+    {
+        return r.world;
+    }
+    world
+        .and_then(|s| doc.project.worlds.iter().position(|w| w.slug == *s))
+        .unwrap_or(0)
+}
+
+impl ViewState {
+    /// Make tab `id` focused (and live). False if there is no such tab.
+    pub fn focus_tab(&mut self, vp: &mut crate::viewport::Viewport, id: ViewportId) -> bool {
+        if !self.has_tab(id) {
+            return false;
+        }
+        swap_live(self, vp, id);
+        self.focused = id;
+        true
+    }
+
+    /// Tab `id`'s camera and size in physical px (the live tab's are the
+    /// viewport's).
+    pub fn tab_camera(
+        &self,
+        vp: &crate::viewport::Viewport,
+        id: ViewportId,
+    ) -> Option<(crate::viewport::camera::Camera, [f64; 2])> {
+        if id == self.live {
+            return Some((vp.camera, vp.size_px));
+        }
+        let t = self.tabs.iter().find(|t| t.id == id)?;
+        Some((t.cam.camera, t.cam.size_px))
+    }
+
+    /// Set tab `id`'s camera.
+    pub fn set_tab_camera(
+        &mut self,
+        vp: &mut crate::viewport::Viewport,
+        id: ViewportId,
+        cam: crate::viewport::camera::Camera,
+    ) {
+        if id == self.live {
+            vp.camera = cam;
+        } else if let Some(t) = self.tabs.iter_mut().find(|t| t.id == id) {
+            t.cam.camera = cam;
+        }
+    }
+
+    /// Add a map tab (parked; the app docks it): a copy of tab `copy_of`'s
+    /// world, active level and camera, else world `world` (a slug; `None`:
+    /// the focused tab's world), fitted when first drawn.
+    pub fn new_tab(
+        &mut self,
+        doc: &Document,
+        vp: &crate::viewport::Viewport,
+        world: Option<Slug>,
+        copy_of: Option<ViewportId>,
+    ) -> ViewportId {
+        let id = self.fresh_tab_id();
+        let mut tab = ViewportTab::new(id);
+        match copy_of.filter(|&c| self.has_tab(c)) {
+            Some(src) => {
+                let (cam, size) = self.tab_camera(vp, src).expect("has the tab");
+                tab.active_level = self.tab_active_level(src);
+                tab.active_world = doc
+                    .project
+                    .worlds
+                    .get(self.tab_world_ix(doc, src))
+                    .map(|w| w.slug.clone());
+                tab.zoom = cam.zoom;
+                tab.cam = crate::viewport::TabCam::new(cam, None);
+                tab.cam.size_px = size;
+            }
+            None => {
+                tab.active_world = world.or_else(|| {
+                    doc.project
+                        .worlds
+                        .get(self.tab_world_ix(doc, self.focused))
+                        .map(|w| w.slug.clone())
+                });
+                let (cam, size) = self.tab_camera(vp, self.focused).unwrap_or_default();
+                tab.cam = crate::viewport::TabCam::new(cam, Some(crate::viewport::Fit::World));
+                tab.cam.size_px = size;
+            }
+        }
+        self.tabs.push(tab);
+        id
+    }
+
+    /// Close tab `id`. The last tab can't be closed; closing the focused
+    /// one focuses the first other tab.
+    pub fn close_tab(
+        &mut self,
+        vp: &mut crate::viewport::Viewport,
+        id: ViewportId,
+    ) -> Result<(), String> {
+        if !self.has_tab(id) {
+            return Err(format!("There is no map tab {id}"));
+        }
+        if self.tabs.len() <= 1 {
+            return Err("The last map tab stays open".into());
+        }
+        if self.focused == id || self.live == id {
+            let other = self.tabs.iter().find(|t| t.id != id).expect("two tabs").id;
+            self.focus_tab(vp, other);
+        }
+        self.tabs.retain(|t| t.id != id);
+        if self.link.is_some_and(|l| l.contains(&id)) {
+            self.link = None;
+        }
+        Ok(())
+    }
+
+    /// Save the focused tab's view as bookmark `name` (an old one with that
+    /// name is replaced in place). Returns its index.
+    pub fn save_bookmark(
+        &mut self,
+        doc: &Document,
+        vp: &crate::viewport::Viewport,
+        name: &str,
+    ) -> Result<usize, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("A bookmark needs a name".into());
+        }
+        let (cam, size) = self
+            .tab_camera(vp, self.focused)
+            .ok_or("no focused map tab")?;
+        let world = doc
+            .project
+            .worlds
+            .get(self.tab_world_ix(doc, self.focused))
+            .map(|w| w.slug.to_string())
+            .unwrap_or_default();
+        let b = Bookmark {
+            name: name.to_string(),
+            world,
+            camera: BookmarkCamera {
+                center: cam.center(size),
+                zoom: cam.zoom,
+            },
+        };
+        Ok(match self.bookmarks.iter().position(|x| x.name == b.name) {
+            Some(i) => {
+                self.bookmarks[i] = b;
+                i
+            }
+            None => {
+                self.bookmarks.push(b);
+                self.bookmarks.len() - 1
+            }
+        })
+    }
+
+    /// The bookmark named `name`.
+    pub fn bookmark_ix(&self, name: &str) -> Option<usize> {
+        self.bookmarks.iter().position(|b| b.name == name)
+    }
+}
+
+/// Make map tab `id` the live one: park the live tab's per-tab state (the
+/// view's active level, world and zoom, the viewport's [`TabCam`]) in its
+/// entry and take `id`'s. Nothing if `id` is live or unknown. Swapping
+/// back restores everything exactly.
+///
+/// [`TabCam`]: crate::viewport::TabCam
+pub fn swap_live(view: &mut ViewState, vp: &mut crate::viewport::Viewport, id: ViewportId) {
+    if id == view.live {
+        return;
+    }
+    let (Some(a), Some(b)) = (
+        view.tabs.iter().position(|t| t.id == view.live),
+        view.tabs.iter().position(|t| t.id == id),
+    ) else {
+        return;
+    };
+    use std::mem::swap;
+    // Park the live tab in its entry (a), then take b's.
+    {
+        let t = &mut view.tabs[a];
+        swap(&mut view.active_level, &mut t.active_level);
+        swap(&mut view.active_world, &mut t.active_world);
+        swap(&mut view.zoom, &mut t.zoom);
+        vp.swap_tab(&mut t.cam);
+    }
+    {
+        let t = &mut view.tabs[b];
+        swap(&mut view.active_level, &mut t.active_level);
+        swap(&mut view.active_world, &mut t.active_world);
+        swap(&mut view.zoom, &mut t.zoom);
+        vp.swap_tab(&mut t.cam);
+    }
+    view.live = id;
+}
+
 /// The topmost int_grid layer, else the topmost tiles layer, else the top.
 pub fn default_active_layer(doc: &Document) -> Option<usize> {
     let layers = &doc.project.layers;
@@ -665,6 +1002,66 @@ pub fn first_entities_layer(doc: &Document) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Swapping a parked tab in and back restores both exactly; per-tab
+    /// state stays per tab while tool, layer and selection are shared;
+    /// level indices follow a reindex in parked tabs; the last tab stays.
+    #[test]
+    fn map_tabs_swap_park_and_close() {
+        use crate::viewport::camera::Camera;
+        use crate::viewport::{Fit, Viewport};
+        let mut v = ViewState::new();
+        let mut vp = Viewport::new();
+        let w = |s: &str| Some(Slug::new(s).unwrap());
+        v.active_level = Some(0);
+        v.active_world = w("main");
+        vp.camera = Camera {
+            origin: [1.0, 2.0],
+            zoom: 2.0,
+        };
+        let mut t = ViewportTab::new(ViewportId(2));
+        t.active_level = Some(3);
+        t.active_world = w("dungeon");
+        t.cam = crate::viewport::TabCam::new(
+            Camera {
+                origin: [9.0, 9.0],
+                zoom: 4.0,
+            },
+            Some(Fit::Level(3)),
+        );
+        v.tabs.push(t);
+        v.set_tool(Tool::Fill);
+        swap_live(&mut v, &mut vp, ViewportId(2));
+        assert_eq!(v.live, ViewportId(2));
+        assert_eq!(v.active_level, Some(3));
+        assert_eq!(v.active_world, w("dungeon"));
+        assert_eq!(vp.camera.zoom, 4.0);
+        assert_eq!(vp.pending_fit(), Some(Fit::Level(3)));
+        assert_eq!(v.tool, Tool::Fill, "the tool is global");
+        assert_eq!(v.tab_active_level(ViewportId::FIRST), Some(0));
+        swap_live(&mut v, &mut vp, ViewportId::FIRST);
+        assert_eq!(v.active_level, Some(0));
+        assert_eq!(v.active_world, w("main"));
+        assert_eq!(vp.camera.origin, [1.0, 2.0]);
+        assert_eq!(vp.pending_fit(), None);
+        assert_eq!(v.tab_active_level(ViewportId(2)), Some(3));
+        // A reindex: level 3 is now 1, level 0 is gone.
+        v.remap_levels(&[None, None, None, Some(1)]);
+        assert_eq!(v.active_level, None);
+        assert_eq!(v.tab_active_level(ViewportId(2)), Some(1));
+        assert_eq!(v.tabs[1].cam.pending_fit(), Some(Fit::Level(1)));
+        v.rename_world(&Slug::new("dungeon").unwrap(), &Slug::new("caves").unwrap());
+        assert_eq!(v.tabs[1].active_world, w("caves"));
+        // Closing the focused tab focuses the other; the last one stays.
+        assert_eq!(v.fresh_tab_id(), ViewportId(3));
+        v.link = Some([ViewportId::FIRST, ViewportId(2)]);
+        v.close_tab(&mut vp, ViewportId::FIRST).unwrap();
+        assert_eq!((v.focused, v.live), (ViewportId(2), ViewportId(2)));
+        assert_eq!(v.active_level, Some(1));
+        assert_eq!(v.link, None);
+        assert!(v.close_tab(&mut vp, ViewportId(2)).is_err());
+        assert_eq!(v.tabs.len(), 1);
+    }
 
     /// The Paint group remembers its mode across other tools: Select and
     /// back to Paint (its button, P) restores the last mode, and a fresh

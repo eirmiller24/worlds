@@ -436,13 +436,14 @@ patch holds any of these, applied in this order: set_macros ([{ kind: "pattern",
     },
     ToolDef {
         name: "screenshot",
-        description: r#"Render a level, or a rectangle of the world in world pixels ([x, y, width, height]), to a PNG image so you can see it as the game will roughly look: all visible layers including generated tiles, with entity boxes and open notes drawn on top. Give level or world_rect. size is the largest image wanted, default [1024, 1024]. Works with or without the Worlds editor open."#,
+        description: r#"Render a level, or a rectangle of the world in world pixels ([x, y, width, height]), to a PNG image so you can see it as the game will roughly look: all visible layers including generated tiles, with entity boxes and open notes drawn on top. Give level or world_rect. size is the largest image wanted, default [1024, 1024]. Works with or without the Worlds editor open. With the editor open you can also see what the user sees: give neither level nor world_rect for what the focused map tab shows, or viewport (a map tab's number, as in its title "Map 2") for that tab; with world_rect, viewport says the rect is in that tab's world."#,
         schema: r#"{ "type": "object",
   "properties": {
     "level": { "type": "string" },
     "world_rect": { "type": "array", "items": { "type": "integer" }, "minItems": 4, "maxItems": 4 },
     "layers": { "type": "array", "items": { "type": "string" }, "description": "Only these layers. Default: all visible." },
-    "size": { "type": "array", "items": { "type": "integer", "minimum": 16, "maximum": 4096 }, "minItems": 2, "maxItems": 2 } },
+    "size": { "type": "array", "items": { "type": "integer", "minimum": 16, "maximum": 4096 }, "minItems": 2, "maxItems": 2 },
+    "viewport": { "type": "integer", "minimum": 1, "description": "Editor only: the map tab (1 is the first). Default: the focused one." } },
   "additionalProperties": false }"#,
     },
     ToolDef {

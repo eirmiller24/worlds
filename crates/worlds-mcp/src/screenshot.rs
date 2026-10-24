@@ -137,6 +137,7 @@ mod tests {
             world_rect: None,
             layers: Some(vec!["collision".into(), "objects".into()]),
             size: None,
+            viewport: None,
         };
         assert_eq!(
             snapshot_args(Path::new("/t/o.png"), &a, Path::new("/p/mini.worlds")),

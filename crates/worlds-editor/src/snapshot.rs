@@ -250,6 +250,7 @@ impl SnapshotRenderer {
                         ghosts: &[],
                         highlight: None,
                         atlas: None,
+                        focused: true,
                     };
                     vp.ui(ui, &mut cx);
                 });

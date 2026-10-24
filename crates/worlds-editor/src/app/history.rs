@@ -343,7 +343,7 @@ mod tests {
     fn old_layouts_get_the_history_pane_next_to_the_log() {
         use super::super::{Pane, add_history_pane, default_dock};
         use egui_dock::{DockState, NodeIndex};
-        let mut old = DockState::new(vec![Pane::Viewport]);
+        let mut old = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
         let s = old.main_surface_mut();
         let [center, _] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
         s.split_below(center, 0.8, vec![Pane::Log, Pane::Rules]);
@@ -359,7 +359,7 @@ mod tests {
             1
         );
         // No Log or Rules: a split under the map.
-        let mut bare = DockState::new(vec![Pane::Viewport]);
+        let mut bare = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
         add_history_pane(&mut bare);
         assert!(bare.find_tab(&Pane::History).is_some());
         assert!(default_dock().find_tab(&Pane::History).is_some());
