@@ -517,8 +517,8 @@ impl Editing {
         // What the levels look like (the thumbnails' key): a change in a
         // level moves that level's stamp; one with no level (a definition,
         // a project setting, a world) may reach every level, so it moves
-        // them all. Notes, references and guide groups aren't in a
-        // thumbnail.
+        // them all. Notes, references, guide groups and assemblies aren't
+        // in a level's thumbnail.
         for c in changes {
             match c.level() {
                 Some(l) => {
@@ -528,7 +528,17 @@ impl Editing {
                 }
                 None if matches!(
                     c,
-                    Change::Note { .. } | Change::Reference { .. } | Change::GuideGroup { .. }
+                    Change::Note { .. }
+                        | Change::Reference { .. }
+                        | Change::GuideGroup { .. }
+                        | Change::Def {
+                            kind: DefKind::Assembly,
+                            ..
+                        }
+                        | Change::DefRenamed {
+                            kind: DefKind::Assembly,
+                            ..
+                        }
                 ) => {}
                 None => doc.touch_all_looks(),
             }

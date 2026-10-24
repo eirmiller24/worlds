@@ -120,6 +120,9 @@ fn save_an_assembly_then_place_it_turned_from_the_library() {
     assert!(app.st.library.dialog.is_some(), "the dialog is open");
     app.st.library.dialog = None;
 
+    // (The map and the Levels pane have made their level thumbnails by
+    // now: the same cache.)
+    let before = app.st.thumbs.rendered;
     steps(
         &mut app,
         r#"[{ "ui": "save_assembly", "slug": "torch_pair", "name": "Torch and pickup",
@@ -134,8 +137,9 @@ fn save_an_assembly_then_place_it_turned_from_the_library() {
     for _ in 0..3 {
         frame(&mut app, vec![]);
     }
-    // Its thumbnail was rendered (headless: not written into the project).
-    assert_eq!(app.st.thumbs.rendered, 1);
+    // Its thumbnail was rendered, and nothing else (a new assembly changes
+    // no level's picture); headless: not written into the project.
+    assert_eq!(app.st.thumbs.rendered, before + 1);
     assert!(!dir.join(".worlds/thumbs").exists());
     assert!(app.st.library.rects.contains_key("torch_pair"));
     if let Some(o) = &out {
