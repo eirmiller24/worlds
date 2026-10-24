@@ -264,8 +264,9 @@ pub(crate) fn move_entity(_: &Project, method: &str, p: Value) -> Result<Write, 
     Ok(Write::one(params::command(method, "move_entity", p)?))
 }
 
-/// `entity.remove { ids }` → `remove_entity`s.
-pub(crate) fn remove(_: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+/// `entity.remove { ids }` → `remove_entity`s, and the `set_group`s that
+/// drop them from their object groups.
+pub(crate) fn remove(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct P {
@@ -275,13 +276,16 @@ pub(crate) fn remove(_: &Project, method: &str, p: Value) -> Result<Write, RpcEr
     if p.ids.is_empty() {
         return Err(RpcError::invalid_params(format!("{method}: ids is empty")));
     }
-    Ok(Write::cmds(
-        p.ids
-            .into_iter()
-            .map(|id| Command::RemoveEntity {
-                id,
-                keep_empty: false,
-            })
-            .collect(),
-    ))
+    // Members leave their object groups in the same write.
+    let drop = worlds_core::command::groups::drop_members(project, &p.ids);
+    let mut cmds: Vec<Command> = p
+        .ids
+        .into_iter()
+        .map(|id| Command::RemoveEntity {
+            id,
+            keep_empty: false,
+        })
+        .collect();
+    cmds.extend(drop);
+    Ok(Write::cmds(cmds))
 }

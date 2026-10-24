@@ -17,6 +17,7 @@ mod edit;
 mod entity;
 pub(crate) mod events;
 mod grid;
+mod groups;
 mod history;
 mod import;
 mod layer_ops;
@@ -237,6 +238,11 @@ pub fn is_write(method: &str) -> bool {
             | "edit.transform"
             | "level.arrange"
             | "level.set_void"
+            | "level.reorder"
+            | "world.set_layout"
+            | "group.create"
+            | "group.update"
+            | "group.remove"
     )
 }
 
@@ -413,6 +419,7 @@ impl Handler {
             }
             "edit.copy" => read(host, edit::copy),
             "reference.list" => read(host, references::list),
+            "group.list" => read(host, groups::list),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -511,6 +518,11 @@ fn write_builder(method: &str) -> Option<Builder> {
         "edit.transform" => edit::transform,
         "level.arrange" => edit::arrange,
         "level.set_void" => level::set_void,
+        "level.reorder" => world::reorder_levels,
+        "world.set_layout" => world::set_layout,
+        "group.create" => groups::create,
+        "group.update" => groups::update,
+        "group.remove" => groups::remove,
         _ => return None,
     })
 }

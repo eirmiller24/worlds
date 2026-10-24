@@ -94,3 +94,41 @@ pub(crate) fn move_level(_: &Project, method: &str, p: Value) -> Result<Write, R
         p,
     )?))
 }
+
+/// `level.reorder { world?, order }` → `reorder_levels`. `world` defaults
+/// to the world of the first listed level (or the only world, for `[]`).
+pub(crate) fn reorder_levels(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        world: Option<Slug>,
+        order: Vec<Slug>,
+    }
+    let p: P = params::parse(method, p)?;
+    let world = match (&p.world, p.order.first()) {
+        (None, Some(first)) => params::find_level(project, first.as_str())?.0.slug.clone(),
+        (w, _) => params::default_world(project, method, w.as_ref().map(Slug::as_str))?,
+    };
+    Ok(Write::one(Command::ReorderLevels {
+        world,
+        order: p.order,
+        restore: false,
+    }))
+}
+
+/// `world.set_layout { world?, layout }` → `set_world_layout`.
+pub(crate) fn set_layout(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        world: Option<Slug>,
+        layout: worlds_core::WorldLayout,
+    }
+    let p: P = params::parse(method, p)?;
+    let world = params::default_world(project, method, p.world.as_ref().map(Slug::as_str))?;
+    Ok(Write::one(Command::SetWorldLayout {
+        world,
+        layout: p.layout,
+        restore: false,
+    }))
+}

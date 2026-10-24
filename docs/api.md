@@ -2463,6 +2463,83 @@ Line the shaft up with the top of `crevasse`:
   "changes": [ { "change": "level_meta", "world": "main", "level": "shaft", "part": "position" } ] } }
 ```
 
+### level order, world layouts and object groups
+
+A world's levels have an order (`world.json` `levels`, slug order when it has none): `level.list` and `project.describe` list them in it, the editor's Levels pane and PgUp/PgDn follow it, and so does the export. A world's `layout` says how the tools place its levels: `free`, a `horizontal` or `vertical` strip (positions follow the order, `gap` pixels apart; every write that reorders, creates, duplicates, resizes, deletes or moves a level away puts the strip's levels back in place, in the same write), or `grid_vania` (the editor snaps to a lattice of `cell` pixels; `project.validate` reports a level off it). See [commands.md](commands.md#level-order-world-layouts-and-object-groups) and [format.md](format.md#world-layouts). `project.describe` gives a world's `layout` when it isn't free.
+
+Object groups are named sets of a level's entities and annotations (`level.json` `groups`) that the editor selects and moves together. They are never exported. `entity.remove` and `notes.remove` take the removed ids out of their groups in the same write (a group left empty goes).
+
+| Method | Params | Result / command |
+| --- | --- | --- |
+| `level.reorder` | `{ world?, order }`: every level of the world once (`[]` drops the list); `world` defaults to the first listed level's | `reorder_levels` |
+| `world.set_layout` | `{ world?, layout: { mode, gap?, cell? } }`; `world` may be left out with one world | `set_world_layout`; switching to a strip moves the levels |
+| `group.list` | `{ level? }` | `{ rev, groups: [{ level, id, name, members }] }`, levels in `level.list` order |
+| `group.create` | `{ level, members, name?, id? }` | a `batch` labelled "Group \<n\> objects": the members leave any other group, then `set_group`; result has `id`. Refused (`invalid`) for a member that isn't an entity or annotation of the level |
+| `group.update` | `{ level, id, name?, members? }` | `set_group` with the new name or member list |
+| `group.remove` | `{ level, ids }` | `remove_group`s; the members stay |
+
+```json
+{ "jsonrpc": "2.0", "id": 161, "method": "level.reorder", "params": { "world": "main", "order": ["shaft", "crevasse", "shaft_b"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 161, "result": { "rev": 81, "status": "applied", "label": "claude-code: Reorder levels of main",
+  "changes": [ { "change": "world_meta", "world": "main" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 162, "method": "world.set_layout", "params": { "world": "main", "layout": { "mode": "horizontal", "gap": 16 } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 162, "result": { "rev": 82, "status": "applied", "label": "claude-code: Set layout of main to Horizontal",
+  "changes": [
+    { "change": "world_meta", "world": "main" },
+    { "change": "level_meta", "world": "main", "level": "shaft", "part": "position" },
+    { "change": "level_meta", "world": "main", "level": "crevasse", "part": "position" },
+    { "change": "level_meta", "world": "main", "level": "shaft_b", "part": "position" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 163, "method": "group.create", "params": { "level": "crevasse", "members": ["doorcrev22", "notecrev22"], "name": "Gap puzzle", "id": "gapgroup22" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 163, "result": { "rev": 83, "status": "applied", "label": "claude-code: Group 2 objects", "id": "gapgroup22",
+  "changes": [ { "change": "level_meta", "world": "main", "level": "crevasse", "part": "groups" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 164, "method": "group.list", "params": { "level": "crevasse" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 164, "result": { "rev": 83, "groups": [
+  { "level": "crevasse", "id": "gapgroup22", "name": "Gap puzzle", "members": ["doorcrev22", "notecrev22"] } ] } }
+```
+
+Removing a member takes it out of its group in the same write:
+
+```json
+{ "jsonrpc": "2.0", "id": 165, "method": "entity.remove", "params": { "ids": ["doorcrev22"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 165, "result": { "rev": 84, "status": "applied", "label": "claude-code: Remove entity doorcrev22",
+  "changes": [
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "doorcrev22" },
+    { "change": "level_meta", "world": "main", "level": "crevasse", "part": "groups" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 166, "method": "group.remove", "params": { "level": "crevasse", "ids": ["gapgroup22"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 166, "result": { "rev": 85, "status": "applied", "label": "claude-code: Remove group gapgroup22",
+  "changes": [ { "change": "level_meta", "world": "main", "level": "crevasse", "part": "groups" } ] } }
+```
+
 ## Headless mode
 
 `worlds_server::headless` runs the same method handler over a `Project` loaded from a directory, with its own `History` and `BakeCache`: `headless::Session` answers calls in-process with no socket, and `headless::run` (the `worlds-server <dir>` binary) serves it over the same WebSocket and `server.json` as the editor (the docs test uses that). Differences from the editor:
