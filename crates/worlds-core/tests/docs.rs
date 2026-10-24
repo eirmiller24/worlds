@@ -39,6 +39,7 @@ fn format_md_examples_parse() {
             "tiles" => format::parse::<TilesLayer>(path, text).map(drop),
             "entities" => format::parse::<EntitiesFile>(path, text).map(drop),
             "notes" => format::parse::<NotesFile>(path, text).map(drop),
+            "assembly" => format::parse::<assembly::Assembly>(path, text).map(drop),
             other => panic!("unknown schema kind {other}"),
         };
         r.unwrap_or_else(|e| panic!("example for {kind} doesn't parse: {e}\n{text}"));
@@ -152,6 +153,9 @@ fn commands_md_examples_apply_in_order() {
         "add_reference",
         "update_reference",
         "remove_reference",
+        "set_assembly",
+        "rename_assembly",
+        "remove_assembly",
     ];
     let missing: Vec<&str> = all.iter().copied().filter(|o| !ops.contains(*o)).collect();
     assert!(missing.is_empty(), "no example for {missing:?}");

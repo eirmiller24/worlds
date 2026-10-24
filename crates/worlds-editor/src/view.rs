@@ -178,6 +178,14 @@ pub struct ViewState {
     pub link: Option<[ViewportId; 2]>,
     /// Saved views, in order (Ctrl+Shift+1..9 jump to the first nine).
     pub bookmarks: Vec<Bookmark>,
+    /// The tile stamp's brush transform (X, Y, R; shown in the Paint
+    /// strip): `t` first, then `x`, `y`, as a tile's flip. A paste ghost
+    /// keeps its own ([`crate::clipboard::PasteGhost::transform`]).
+    pub brush_flip: Option<worlds_core::Flip>,
+    /// The Palette pane's Library (assemblies): shown instead of the active
+    /// layer's palette, favorites, collapsed categories (`ui.json`
+    /// `library`).
+    pub library: crate::library::LibraryView,
 }
 
 impl Default for ViewState {
@@ -211,6 +219,8 @@ impl Default for ViewState {
             live: ViewportId::FIRST,
             link: None,
             bookmarks: Vec::new(),
+            brush_flip: None,
+            library: Default::default(),
         }
     }
 }

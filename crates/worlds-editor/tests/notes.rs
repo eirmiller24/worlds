@@ -489,7 +489,10 @@ fn levels_snap_to_guides_within_8_screen_px_and_not_beyond() {
     r.view.annotations.snap_to_guides = true;
     r.view.annotations.hidden_kinds.insert("guide".into());
     let (d, snaps) = annot::drag_delta(&r.doc, &r.view, &[shaft], [79.0, 0.0], false);
-    assert_eq!((d, snaps.len()), ([80, 0], 0));
+    // (The shaft's top stays on crevasse's bottom edge: a level-edge snap
+    // on y.)
+    let on_x = snaps.iter().filter(|s| s.axis == 0).count();
+    assert_eq!((d, on_x), ([80, 0], 0));
     r.view.annotations.hidden_kinds.clear();
     // A guide group's offset counts (as built): moved 20 px right, the
     // guide is at 520, which a drag by 99 reaches (right edge 515) and a

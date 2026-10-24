@@ -3,6 +3,7 @@
 //! [`defs`], field definition commands in [`fields`], rule, macro and stamp
 //! commands in [`rules`].
 
+mod assembly;
 mod defs;
 mod duplicate;
 mod fields;
@@ -555,6 +556,9 @@ impl Project {
             } => self.add_reference(scope, reference, index),
             UpdateReference { id, reference } => self.update_reference(id, reference),
             RemoveReference { id } => self.remove_reference(id),
+            SetAssembly { assembly } => self.set_assembly(assembly),
+            RemoveAssembly { slug } => self.remove_assembly(slug),
+            RenameAssembly { slug, new_slug } => self.rename_assembly(slug, new_slug),
         }
     }
 

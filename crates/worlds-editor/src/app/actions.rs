@@ -136,6 +136,25 @@ pub enum Action {
     DeleteBookmark(usize),
     /// Save the focused tab's view as this bookmark (empty: "View n").
     SaveBookmarkAs(String),
+    /// X, Y, R: turn the armed paste ghost (or assembly), else the tile
+    /// stamp, by `x` (mirror left-right), `y` (top-bottom) or `xt` (a
+    /// quarter turn clockwise).
+    Turn(worlds_core::Flip),
+    /// Mirror or rotate the selection in place (one entry).
+    TransformSelection(worlds_core::transform::TransformOp),
+    /// Align, distribute or butt together the selected levels (one entry).
+    ArrangeLevels(worlds_core::transform::ArrangeOp),
+    /// Ctrl+Shift+S: the "Save selection as assembly…" dialog.
+    OpenSaveAssembly,
+    /// The dialog's Save: the selection as assembly `info` (one entry).
+    SaveAssembly {
+        info: worlds_core::assembly::AssemblyInfo,
+        replace: bool,
+    },
+    /// A Library click: arm the assembly as a paste ghost to place.
+    ArmAssembly(worlds_core::Slug),
+    /// Show the Library in the Palette pane (or the layer's palette again).
+    ToggleLibrary,
 }
 
 impl Action {
@@ -260,6 +279,46 @@ impl Action {
                 format!("Tool: {}", t.name())
             };
             v.push((name, t.shortcut(), Action::SetTool(t)));
+        }
+        v.push((
+            "Save selection as assembly…".into(),
+            "Ctrl+Shift+S",
+            Action::OpenSaveAssembly,
+        ));
+        v.push((
+            "Library: assemblies in the Palette".into(),
+            "",
+            Action::ToggleLibrary,
+        ));
+        use worlds_core::transform::{ArrangeOp, TransformOp};
+        for op in [
+            TransformOp::MirrorX,
+            TransformOp::MirrorY,
+            TransformOp::Rotate90,
+        ] {
+            v.push((
+                crate::arrange::op_title(op).into(),
+                "",
+                Action::TransformSelection(op),
+            ));
+        }
+        for (key, flip, what) in [
+            ("X", worlds_core::Flip::X, "mirror left-right"),
+            ("Y", worlds_core::Flip::Y, "mirror top-bottom"),
+            ("R", worlds_core::Flip::XT, "rotate 90°"),
+        ] {
+            v.push((
+                format!("Brush: {what} (the paste or the tile stamp)"),
+                key,
+                Action::Turn(flip),
+            ));
+        }
+        for op in ArrangeOp::ALL {
+            v.push((
+                format!("Levels: {}", op.title()),
+                "",
+                Action::ArrangeLevels(op),
+            ));
         }
         v
     }

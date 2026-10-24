@@ -164,6 +164,9 @@ enum Fields<'a> {
     UnknownReference {
         id: &'a Id,
     },
+    UnknownAssembly {
+        slug: &'a Slug,
+    },
 }
 
 impl<'a> From<&'a CommandError> for Fields<'a> {
@@ -253,6 +256,7 @@ impl<'a> From<&'a CommandError> for Fields<'a> {
             E::Rollback { batch, failed } => Fields::Rollback { batch, failed },
             E::DuplicateWorld(world) => Fields::DuplicateWorld { world },
             E::UnknownReference(id) => Fields::UnknownReference { id },
+            E::UnknownAssembly(slug) => Fields::UnknownAssembly { slug },
         }
     }
 }

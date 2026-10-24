@@ -253,6 +253,18 @@ pub enum UiStep {
     Viewport(ViewportStep),
     /// `"ui": "bookmark"`: save or jump to a camera bookmark.
     Bookmark(BookmarkStep),
+    /// `"ui": "turn"`: the X, Y and R keys (turn the paste ghost or the
+    /// tile stamp).
+    Turn(TurnStep),
+    /// `"ui": "transform"`: Mirror X, Mirror Y or Rotate 90 on the
+    /// selection.
+    Transform(TransformStep),
+    /// `"ui": "arrange"`: align, distribute or butt together levels.
+    Arrange(ArrangeStep),
+    /// `"ui": "save_assembly"`: the "Save selection as assembly…" dialog.
+    SaveAssembly(SaveAssemblyStep),
+    /// `"ui": "library"`: the Palette's Library, and arming an assembly.
+    Library(LibraryStep),
 }
 
 /// `{ "ui": "import_project", "source": dir, "selection"?, "policy"?,
@@ -339,6 +351,82 @@ pub struct BookmarkStep {
     pub save: Option<String>,
     #[serde(default)]
     pub jump: Option<String>,
+}
+
+/// `{ "ui": "turn", "keys": "xyr" }`: press X, Y and R in that order, as
+/// on the map: with a paste ghost (or an assembly) armed they turn it,
+/// else on a tiles layer in a Paint mode they turn the tile stamp. A key
+/// that can't turn anything (or a rotation of tiles that aren't square) is
+/// an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnStep {
+    pub keys: String,
+}
+
+/// `{ "ui": "transform", "op": "mirror_x" | "mirror_y" | "rotate_90" }`:
+/// the selection transform of the command palette and the context menu
+/// ([`crate::arrange::plan_transform`]); one entry.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransformStep {
+    pub op: worlds_core::transform::TransformOp,
+}
+
+/// `{ "ui": "arrange", "op": "align_left" | ..., "levels"?: [slugs] }`:
+/// select `levels` (when given), then arrange the selected levels
+/// ([`crate::arrange::plan_arrange`]); one entry.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArrangeStep {
+    pub op: worlds_core::transform::ArrangeOp,
+    #[serde(default)]
+    pub levels: Option<Vec<String>>,
+}
+
+/// `{ "ui": "save_assembly", "slug", "name", "category"?, "tags"?, "doc"?,
+/// "replace"?, "open"? }`: Ctrl+Shift+S on the selection, the dialog's
+/// fields, then Save (one entry). With `"open": true` the dialog is left
+/// open, filled in, for the picture.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaveAssemblyStep {
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub doc: Option<String>,
+    #[serde(default)]
+    pub replace: bool,
+    #[serde(default)]
+    pub open: bool,
+}
+
+/// `{ "ui": "library", "search"?, "favorites"?, "collapsed"?, "arm"?: slug,
+/// "level"?, "origin"?, "place"? }`: the Palette pane on its Library with
+/// that state; `arm` clicks an assembly (its ghost is armed), `level` and
+/// `origin` pin the ghost there (its top-left corner, cells of the project
+/// grid), `place: true` then lands it as a click does.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryStep {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub favorites: Option<Vec<String>>,
+    #[serde(default)]
+    pub collapsed: Option<Vec<String>>,
+    #[serde(default)]
+    pub arm: Option<String>,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub origin: Option<[i64; 2]>,
+    #[serde(default)]
+    pub place: bool,
 }
 
 /// `{ "ui": "copy" }` / `{ "ui": "cut" }`: the key, exactly as pressed

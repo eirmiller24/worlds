@@ -115,6 +115,9 @@ pub struct Project {
     /// [`Self::world_order`], then unlisted worlds by slug.
     #[serde(skip)]
     pub worlds: Vec<World>,
+    /// `assemblies/<slug>.json`, sorted by slug.
+    #[serde(skip)]
+    pub assemblies: Vec<crate::assembly::Assembly>,
 
     /// The project files this document knows exist on disk (loaded, or
     /// written by a save). `save` only deletes files listed here. Not part
@@ -306,6 +309,7 @@ impl Project {
             rules: Vec::new(),
             macros: None,
             worlds: vec![World::new(crate::id::slug("main"))],
+            assemblies: Vec::new(),
             files: ProjectFiles::default(),
         }
     }
@@ -344,6 +348,10 @@ impl Project {
 
     pub fn entity_def(&self, slug: &str) -> Option<&EntityDef> {
         self.entities.iter().find(|e| e.slug == slug)
+    }
+
+    pub fn assembly(&self, slug: &str) -> Option<&crate::assembly::Assembly> {
+        self.assemblies.iter().find(|a| a.slug == slug)
     }
 
     /// The rule set of an `auto` layer.
@@ -477,6 +485,7 @@ impl Project {
         self.entities.sort_by(|a, b| a.slug.cmp(&b.slug));
         self.rules.sort_by(|a, b| a.layer.cmp(&b.layer));
         self.sort_worlds();
+        self.assemblies.sort_by(|a, b| a.slug.cmp(&b.slug));
         for w in &mut self.worlds {
             w.normalize();
         }

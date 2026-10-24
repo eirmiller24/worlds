@@ -232,6 +232,10 @@ pub fn is_write(method: &str) -> bool {
             | "reference.update"
             | "reference.remove"
             | "project.import"
+            | "edit.place_assembly"
+            | "edit.save_assembly"
+            | "edit.transform"
+            | "level.arrange"
     )
 }
 
@@ -501,6 +505,10 @@ fn write_builder(method: &str) -> Option<Builder> {
         "reference.add" => references::add,
         "reference.update" => references::update,
         "reference.remove" => references::remove,
+        "edit.place_assembly" => edit::place_assembly,
+        "edit.save_assembly" => edit::save_assembly,
+        "edit.transform" => edit::transform,
+        "level.arrange" => edit::arrange,
         _ => return None,
     })
 }

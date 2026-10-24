@@ -210,6 +210,16 @@ fn render_paths(
                     }
                 }
             }
+            ["assemblies", file] if file.ends_with(".json") => {
+                match project.assembly(file.trim_end_matches(".json")) {
+                    Some(a) => {
+                        out.insert(rel.clone(), to_bytes(rel, FileKind::Assembly, a)?);
+                    }
+                    None => {
+                        gone.insert(rel.clone());
+                    }
+                }
+            }
             ["rules", file] if file.ends_with(".json") && *file != "macros.json" => {
                 match project.rules_for(file.trim_end_matches(".json")) {
                     Some(set) => {
@@ -391,6 +401,15 @@ pub fn render_file(project: &Project, rel: &Path) -> Result<Option<Vec<u8>>> {
                 out.add(format!("entities/{}.json", e.slug), FileKind::Entity, e)?;
             }
         }
+        ["assemblies", file] => {
+            for a in project
+                .assemblies
+                .iter()
+                .filter(|a| a.slug.as_str() == stem(file))
+            {
+                out.add(format!("assemblies/{}.json", a.slug), FileKind::Assembly, a)?;
+            }
+        }
         ["rules", "macros.json"] => {
             if let Some(m) = &project.macros {
                 out.add("rules/macros.json", FileKind::Macros, m)?;
@@ -480,6 +499,9 @@ pub(crate) fn render(project: &Project) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     }
     if let Some(m) = &p.macros {
         out.add("rules/macros.json", FileKind::Macros, m)?;
+    }
+    for a in &p.assemblies {
+        out.add(format!("assemblies/{}.json", a.slug), FileKind::Assembly, a)?;
     }
     for w in &p.worlds {
         let wdir = format!("worlds/{}", w.slug);

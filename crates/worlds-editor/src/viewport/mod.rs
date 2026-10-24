@@ -1156,6 +1156,15 @@ impl Viewport {
                         Color32::from_rgb(230, 80, 80),
                     );
                 }
+                // How it is turned (X, Y, R), at its bottom-left corner.
+                if let (Some(_), Some(r)) = (p.transform.flip, g.outlines.last()) {
+                    crate::arrange::ghost_badge(
+                        &painter,
+                        to_screen([r.min[0], r.max[1]]),
+                        p.transform.describe(),
+                        cx.accent,
+                    );
+                }
             }
         }
 
@@ -1606,6 +1615,7 @@ impl Viewport {
                     });
                 }
             }
+            crate::arrange::context_menu(ui, doc, cx.view, cx.actions);
         });
     }
 }
@@ -1897,7 +1907,10 @@ fn paint_strip(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| {
+                // A narrow map wraps the strip (Density, Turn) onto a
+                // second row rather than past the map's right edge.
+                ui.set_max_width((map.width() - 2.0 * STRIP_OFFSET.x - 24.0).max(120.0));
+                ui.horizontal_wrapped(|ui| {
                     ui.weak("Paint");
                     for t in Tool::PAINT_MODES {
                         if ui
@@ -1917,18 +1930,22 @@ fn paint_strip(
                         ui.separator();
                         random_toggle(ui, view, def.slug.as_str());
                         let mut d = view.palette.density.clamp(1, 100);
+                        let tip = "Scatter: each cell of a stroke, rectangle or fill on a tiles \
+                                   layer is painted with this chance";
+                        // The slider and its value box are one piece that
+                        // does not wrap by itself: a new row when they
+                        // would not fit; the label apart, so it can wrap.
+                        let room = ui.max_rect().right() - ui.cursor().left();
+                        if room < ui.spacing().slider_width + 70.0 {
+                            ui.end_row();
+                        }
                         let r = ui
-                            .add(
-                                egui::Slider::new(&mut d, 1..=100)
-                                    .suffix(" %")
-                                    .text("Density"),
-                            )
-                            .on_hover_text(
-                                "Scatter: each cell of a stroke, rectangle or fill on a tiles \
-                                 layer is painted with this chance",
-                            );
+                            .add(egui::Slider::new(&mut d, 1..=100).suffix(" %"))
+                            .on_hover_text(tip);
                         crate::app::fields::mark(ui, "paint:density", r.rect);
+                        ui.label("Density").on_hover_text(tip);
                         view.palette.density = d;
+                        crate::arrange::turn_buttons(ui, view.brush_flip, actions);
                     }
                 });
             });

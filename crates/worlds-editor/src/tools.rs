@@ -731,6 +731,10 @@ pub fn in_layer(c: [i32; 2], size: [u32; 2]) -> bool {
 pub struct Stamp {
     pub rect: [u32; 4],
     pub stride: [u32; 2],
+    /// The brush transform (X, Y, R in the Paint strip): the block laid out
+    /// turned, every tile turned with it (`t` first, then `x`, `y`, as a
+    /// tile's flip).
+    pub flip: Option<worlds_core::Flip>,
 }
 
 impl Stamp {
@@ -740,15 +744,49 @@ impl Stamp {
         Stamp {
             rect: [rect[0], rect[1], rect[2].max(1), rect[3].max(1)],
             stride: [(tile_size[0] / g).max(1), (tile_size[1] / g).max(1)],
+            flip: None,
         }
+    }
+
+    /// The same stamp turned by `flip` (see [`Stamp::flip`]).
+    pub fn turned(self, flip: Option<worlds_core::Flip>) -> Self {
+        Stamp { flip, ..self }
+    }
+
+    fn bits(&self) -> u8 {
+        worlds_core::Flip::bits_of(self.flip)
+    }
+
+    /// Tiles across and down, as laid out (turned).
+    fn dims(&self) -> [u32; 2] {
+        if self.bits() & 4 != 0 {
+            [self.rect[3], self.rect[2]]
+        } else {
+            [self.rect[2], self.rect[3]]
+        }
+    }
+
+    /// The atlas tile at position `(i, j)` of the turned layout.
+    fn source(&self, i: u32, j: u32) -> [u32; 2] {
+        let [w, h] = self.dims();
+        let b = self.bits();
+        let (mut a, mut c) = (i, j);
+        if b & 1 != 0 {
+            a = w - 1 - a;
+        }
+        if b & 2 != 0 {
+            c = h - 1 - c;
+        }
+        if b & 4 != 0 {
+            std::mem::swap(&mut a, &mut c);
+        }
+        [self.rect[0] + a, self.rect[1] + c]
     }
 
     /// Cells the whole stamp covers.
     pub fn footprint(&self) -> [i32; 2] {
-        [
-            (self.rect[2] * self.stride[0]) as i32,
-            (self.rect[3] * self.stride[1]) as i32,
-        ]
+        let [w, h] = self.dims();
+        [(w * self.stride[0]) as i32, (h * self.stride[1]) as i32]
     }
 
     /// The stamp origin (top-left cell) that `cell` falls in, when stamps
@@ -771,21 +809,23 @@ impl Stamp {
         if d[0].rem_euclid(s[0]) != 0 || d[1].rem_euclid(s[1]) != 0 {
             return None;
         }
-        let i = (d[0].div_euclid(s[0])).rem_euclid(self.rect[2] as i32) as u32;
-        let j = (d[1].div_euclid(s[1])).rem_euclid(self.rect[3] as i32) as u32;
-        Some([self.rect[0] + i, self.rect[1] + j])
+        let [w, h] = self.dims();
+        let i = (d[0].div_euclid(s[0])).rem_euclid(w as i32) as u32;
+        let j = (d[1].div_euclid(s[1])).rem_euclid(h as i32) as u32;
+        Some(self.source(i, j))
     }
 
     /// `(cell, tile)` for every tile of one stamp placed at `anchor`.
     pub fn tiles(&self, anchor: [i32; 2], out: &mut Vec<([i32; 2], [u32; 2])>) {
-        for j in 0..self.rect[3] {
-            for i in 0..self.rect[2] {
+        let [w, h] = self.dims();
+        for j in 0..h {
+            for i in 0..w {
                 out.push((
                     [
                         anchor[0] + (i * self.stride[0]) as i32,
                         anchor[1] + (j * self.stride[1]) as i32,
                     ],
-                    [self.rect[0] + i, self.rect[1] + j],
+                    self.source(i, j),
                 ));
             }
         }

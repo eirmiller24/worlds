@@ -93,6 +93,9 @@ pub enum Paint {
         alternatives: Vec<RandomAlt>,
         /// Cells one tile covers per axis (tiles bigger than cells).
         stride: [u32; 2],
+        /// The brush transform (X, Y, R): every alternative's stamp is laid
+        /// out turned and every tile placed turned.
+        flip: Option<worlds_core::Flip>,
     },
 }
 
@@ -768,6 +771,16 @@ impl Editing {
                     kind: DefKind::Enum,
                     ..
                 } => {}
+                // Assemblies bake nothing (placed copies are independent).
+                Change::Def {
+                    kind: DefKind::Assembly,
+                    ..
+                } => {}
+                Change::DefRenamed {
+                    kind: DefKind::Assembly,
+                    from,
+                    to,
+                } => cx.view.library.renamed(from, to),
                 // Level field definitions: only the auto layers with a group
                 // reading a level field (`requires_level_field`) can change.
                 Change::Project {
@@ -1698,9 +1711,15 @@ pub fn resolve_paint(
                     .project
                     .tileset(tileset.as_str())
                     .ok_or_else(|| format!("No tileset {tileset}"))?;
+                if worlds_core::Flip::bits_of(view.brush_flip) & 4 != 0
+                    && ts.tile_size[0] != ts.tile_size[1]
+                {
+                    return Err(crate::clipboard::not_square(ts));
+                }
                 Ok(Paint::Tiles {
                     tileset: tileset.clone(),
-                    stamp: Stamp::new(*rect, ts.tile_size, doc.project.layer_grid(def)),
+                    stamp: Stamp::new(*rect, ts.tile_size, doc.project.layer_grid(def))
+                        .turned(view.brush_flip),
                 })
             }
             Some(Brush::Random {
@@ -1719,12 +1738,19 @@ pub fn resolve_paint(
                         "The random brush has no tiles to pick: select tiles in the palette".into(),
                     );
                 }
+                if worlds_core::Flip::bits_of(view.brush_flip) & 4 != 0
+                    && ts.tile_size[0] != ts.tile_size[1]
+                {
+                    return Err(crate::clipboard::not_square(ts));
+                }
                 let grid = doc.project.layer_grid(def);
                 let alternatives = alternatives
                     .iter()
                     .map(|a| RandomAlt {
                         shape: match a.as_rect() {
-                            Some(r) => AltShape::Stamp(Stamp::new(r, ts.tile_size, grid)),
+                            Some(r) => AltShape::Stamp(
+                                Stamp::new(r, ts.tile_size, grid).turned(view.brush_flip),
+                            ),
                             None => AltShape::Stack(a.tiles.clone()),
                         },
                         weight: if a.tiles.is_empty() { 0 } else { a.weight },
@@ -1734,6 +1760,7 @@ pub fn resolve_paint(
                     tileset: tileset.clone(),
                     alternatives,
                     stride: Stamp::new([0, 0, 1, 1], ts.tile_size, grid).stride,
+                    flip: view.brush_flip,
                 })
             }
             _ => Err("Pick a tile in the palette first".into()),
@@ -1825,7 +1852,7 @@ fn paint_command(
                         cell,
                         tileset: tileset.clone(),
                         tile,
-                        flip: None,
+                        flip: stamp.flip,
                         alpha: 1.0,
                     })
                     .collect(),
@@ -1837,6 +1864,7 @@ fn paint_command(
             tileset,
             alternatives,
             stride,
+            flip,
         } => {
             let weights: Vec<u32> = alternatives.iter().map(|a| a.weight).collect();
             let region: Option<HashSet<[i32; 2]>> =
@@ -1889,7 +1917,7 @@ fn paint_command(
                         cell,
                         tileset: tileset.clone(),
                         tile,
-                        flip: None,
+                        flip: *flip,
                         alpha: 1.0,
                     })
                     .collect(),

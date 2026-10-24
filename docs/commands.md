@@ -925,8 +925,8 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | `layer_state` | `world`, `level`, `layer` | `.../<level>/level.json` |
 | `guide_group` | `world`, `slug` | `worlds/<world>/world.json`; a guide group was added, replaced, moved or removed |
 | `project` | `key`: `name`, `bg_color`, `collision_layer`, `seed`, `level_fields` or `worlds` (the display order of the worlds) | `project.json` |
-| `def` | `kind`: `layer`, `entity`, `enum`, `tileset`, `rules` or `macros`; `slug` | `layers.json`, `entities/<slug>.json`, `enums.json`, `tilesets.json`, `rules/<slug>.json` (the slug of a rule set is its layer's) or `rules/macros.json` (slug `macros`) |
-| `def_renamed` | `kind`, `from`, `to` | the file of `to`; for `entity` and `rules` also the file of `from`, which saving deletes |
+| `def` | `kind`: `layer`, `entity`, `enum`, `tileset`, `rules`, `macros` or `assembly`; `slug` | `layers.json`, `entities/<slug>.json`, `enums.json`, `tilesets.json`, `rules/<slug>.json` (the slug of a rule set is its layer's), `rules/macros.json` (slug `macros`) or `assemblies/<slug>.json` |
+| `def_renamed` | `kind`, `from`, `to` | the file of `to`; for `entity`, `rules` and `assembly` also the file of `from`, which saving deletes |
 | `layer_file_renamed` | `world`, `level`, `from`, `to` | `.../<level>/<to>.json`, and `.../<level>/<from>.json`, which saving deletes |
 | `world_created` | `world` | the directory `worlds/<world>` (every file in it) |
 | `world_removed` | `world` | the directory (saving deletes its files) |
@@ -987,6 +987,54 @@ An agent's batch on the [live API](api.md#history) uses `record`, not a gesture,
 
 ## Errors
 
-`CommandError` says why a command was refused; its message is meant for the agent to read. The kinds: unknown world, level, layer, value, tileset, entity type, field, entity, note, guide group (`unknown_guide_group`), enum, enum value, rule group, rule (`unknown_rule`), macro (`unknown_macro`) or stamp (`unknown_stamp`); a definition slug that is taken; a field slug that is taken (`duplicate_field`: renaming a field to the slug of another); a definition still in use (`in_use`: removing a tileset, macro or stamp something uses, with the first few uses); a level that is in another world; a layer of the wrong kind; a cell outside the layer (with the layer size); a stored grid whose size doesn't match the level; a cell holding a value index the layer doesn't define; a duplicate id or level slug; a world slug that is taken (`duplicate_world { world }`); an invalid argument (bad anchor, index past the end, `note.id` mismatch, `"!"` on a layer that isn't derived, `derived` switched on a layer with content); a failed batch step (`batch`, with the index and the cause); a batch whose rollback failed too (`rollback`: the project may differ from before).
+`CommandError` says why a command was refused; its message is meant for the agent to read. The kinds: unknown world, level, layer, value, tileset, entity type, field, entity, note, guide group (`unknown_guide_group`), enum, enum value, rule group, rule (`unknown_rule`), macro (`unknown_macro`), stamp (`unknown_stamp`) or assembly (`unknown_assembly`); a definition slug that is taken; a field slug that is taken (`duplicate_field`: renaming a field to the slug of another); a definition still in use (`in_use`: removing a tileset, macro or stamp something uses, with the first few uses); a level that is in another world; a layer of the wrong kind; a cell outside the layer (with the layer size); a stored grid whose size doesn't match the level; a cell holding a value index the layer doesn't define; a duplicate id or level slug; a world slug that is taken (`duplicate_world { world }`); an invalid argument (bad anchor, index past the end, `note.id` mismatch, `"!"` on a layer that isn't derived, `derived` switched on a layer with content); a failed batch step (`batch`, with the index and the cause); a batch whose rollback failed too (`rollback`: the project may differ from before).
 
 On the wire (the [live API](api.md#errors)) a `CommandError` serializes as `{ "kind": <variant in snake_case>, ...fields, "message": <the Display text> }`: `{ "kind": "unknown_value", "layer": "collision", "value": "lava", "message": "\"lava\" is not a value of layer \"collision\"" }`. Variants with one unnamed field name it (`unknown_level { level }`, `unknown_entity_type { type }`, `unknown_entity { id }`, ...), `enum_` is `enum`, the definition kind of `duplicate_def` and `in_use` is `def_kind` (a stamp in use is `in_use` with `def_kind: "stamp"` and its `layer`), the macro kind of `unknown_macro` is `macro_kind`, `unknown_guide_group` is `{ world, group }`, `unknown_field` and `duplicate_field` are `{ owner, field }` with `owner` naming the list (`entity type "door"` or `project level_fields`), and `invalid` has only its `message`. `batch { label, index, source }` and `rollback { batch, failed }` nest errors in the same form.
+
+## Assembly commands
+
+An assembly is a named, reusable piece of content (a doorway with its door, switch and wiring) in `assemblies/<slug>.json`: a [fragment](format.md#clipboard-fragments)'s content plus a name, category, tags and doc (see [format.md](format.md#assembliesslugjson)). Nothing refers to an assembly: a placed copy is independent of it, so these commands only ever touch its own file. Placing one is not a command of its own but a paste: `worlds_core::assembly::place(project, slug, level, origin, flip)` works out the same plan as [a paste](format.md#what-a-paste-does) of the assembly's fragment (turned by `flip` first, see below), one `batch` labelled `Place assembly <slug>`.
+
+### set_assembly
+
+Create or replace an assembly; `assembly.slug` names it.
+
+```json
+{ "op": "set_assembly",
+  "assembly": { "slug": "ledge", "name": "Ledge", "category": "Platforms", "tags": ["small"],
+                "grid_size": 16, "size": [3, 2],
+                "grids": { "collision": { "legend": { "#": "solid" }, "rows": ["###", "   "] } } } }
+```
+
+- **Inverse:** a new one: `remove_assembly`. A replaced one: `set_assembly` with the old assembly.
+- **Changes:** `def` kind `assembly` (its file is `assemblies/<slug>.json`).
+
+### rename_assembly
+
+Change an assembly's slug (and so its file name).
+
+```json
+{ "op": "rename_assembly", "slug": "ledge", "new_slug": "stone_ledge" }
+```
+
+- **Inverse:** `rename_assembly` back.
+- **Changes:** `def_renamed` kind `assembly` (saving deletes the old file).
+
+### remove_assembly
+
+Remove an assembly. Copies placed from it stay as they are.
+
+```json
+{ "op": "remove_assembly", "slug": "stone_ledge" }
+```
+
+- **Inverse:** `set_assembly` with the assembly.
+- **Changes:** `def` kind `assembly` (saving deletes the file).
+
+## Transforms
+
+Mirroring and rotating are not commands either: `worlds_core::transform` works them out as batches of the commands above, one undo entry each. A turn is written like a tile's [`flip`](format.md#common-value-types): `t` (transpose) first, then `x` mirrors left-right and `y` top-bottom; a quarter turn clockwise is `xt`. A turn with `t` needs square tiles: it is refused when a tile in it comes from a tileset whose tiles aren't square.
+
+- **`transform::fragment(project, fragment, flip)`** turns a fragment about its own box (the paste ghost, an assembly before it lands): grid cells and tile stacks move and each tile's flip composes with the turn; an entity moves so that its box (its size kept, not turned) is centered where the turned box's center lands; annotation geometry turns (a rect region stays a rect). Entity field values never change.
+- **`transform::selection(project, selection, flip)`** turns a [copy selection](api.md#clipboard-copy-and-paste) in place about its bounding box (around what a copy would take: grid cells, tiles (a tile bigger than its cell with its whole box), entity boxes and annotation geometry, rounded out to whole cells of the grid and tiles layers involved; entities and annotations alone turn about their exact box, so mirroring one entity leaves it where it is; a rotation keeps the box's center): one `batch` of a `paint_cells` per grid layer (the old cells emptied, then the turned ones written), a `set_tiles` per tiles layer (the old stacks in `clear`, the turned ones in `tiles`), a `move_entity` per entity (same id, size and fields) and an `update_note` per annotation, labelled like `Mirror 4 items left-right` or `Rotate 4 items a quarter turn`. Cells and stacks that would leave the level are dropped, and the plan's notes say how many; an entity that would leave it refuses the whole transform. **A transform never changes an entity's field values**: when a turned entity's type has an `enum` field with at least two values that look like directions (`left`, `right`, `up`, `down`, `north`, ..., also as a part of a slug like `facing_left`), the plan's notes say so, so the editor can point it out.
+- **`transform::arrange_levels(project, levels, op)`** arranges two or more levels of one world: one `batch` of `move_level`, labelled like `Align 3 levels left`, leaving out levels that don't move. `op` is `align_left`, `align_right`, `align_top`, `align_bottom` (onto the outermost edge), `align_center_x`, `align_center_y` (onto the first level's center), `distribute_x`, `distribute_y` (equal gaps between neighbours, the outer two stay), or `butt_left`, `butt_right`, `butt_up`, `butt_down` (close the gaps in that direction: the level furthest that way stays, each next one goes against the previous one). Positions that a center or a distribution puts between cells are rounded to the project grid.

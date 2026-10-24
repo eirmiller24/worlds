@@ -54,6 +54,7 @@ use std::path::PathBuf;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::assembly::Assembly;
 use crate::format::IntGridFile;
 use crate::id::{Id, Slug};
 use crate::model::{
@@ -658,6 +659,23 @@ pub enum Command {
     RemoveReference {
         id: Id,
     },
+
+    // ---- assemblies ----
+    /// Create or replace an assembly (`assemblies/<slug>.json`, named by
+    /// `assembly.slug`).
+    SetAssembly {
+        assembly: Assembly,
+    },
+    /// Remove an assembly. Copies placed from it stay: they never were
+    /// linked to it.
+    RemoveAssembly {
+        slug: Slug,
+    },
+    /// Rename an assembly (its file follows).
+    RenameAssembly {
+        slug: Slug,
+        new_slug: Slug,
+    },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -795,6 +813,9 @@ impl Command {
             AddReference { .. } => "Add reference image".into(),
             UpdateReference { id, .. } => format!("Edit reference image {id}"),
             RemoveReference { id } => format!("Remove reference image {id}"),
+            SetAssembly { assembly } => format!("Set assembly {}", assembly.slug),
+            RemoveAssembly { slug } => format!("Remove assembly {slug}"),
+            RenameAssembly { slug, new_slug } => format!("Rename assembly {slug} to {new_slug}"),
         }
     }
 }
@@ -1182,6 +1203,8 @@ pub enum DefKind {
     Rules,
     /// `rules/macros.json` (the slug is always `macros`).
     Macros,
+    /// `assemblies/<slug>.json`.
+    Assembly,
 }
 
 impl DefKind {
@@ -1193,6 +1216,7 @@ impl DefKind {
             DefKind::Tileset => "tileset",
             DefKind::Rules => "rule set",
             DefKind::Macros => "macro",
+            DefKind::Assembly => "assembly",
         }
     }
 
@@ -1205,6 +1229,7 @@ impl DefKind {
             DefKind::Tileset => PathBuf::from("tilesets.json"),
             DefKind::Rules => PathBuf::from("rules").join(format!("{slug}.json")),
             DefKind::Macros => PathBuf::from("rules").join("macros.json"),
+            DefKind::Assembly => PathBuf::from("assemblies").join(format!("{slug}.json")),
         }
     }
 }
@@ -1853,6 +1878,8 @@ pub enum CommandError {
     DuplicateWorld(Slug),
     #[error("no reference image {0:?}")]
     UnknownReference(Id),
+    #[error("no assembly {0:?}")]
+    UnknownAssembly(Slug),
 }
 
 impl fmt::Display for NoteScope {

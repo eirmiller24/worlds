@@ -198,7 +198,8 @@ The JSON-RPC `message` is always a sentence meant for an agent to read. For `com
 | `unknown_rule` | `layer`, `rule` (a rule or template reference slug) |
 | `unknown_macro` | `macro_kind` (`pattern`, `legend`, `template`), `name` |
 | `unknown_stamp` | `layer`, `stamp` |
-| `duplicate_def` | `def_kind` (`layer`, `entity`, `enum`, `tileset`, `rules`, `macros`), `slug` |
+| `unknown_assembly` | `slug` |
+| `duplicate_def` | `def_kind` (`layer`, `entity`, `enum`, `tileset`, `rules`, `macros`, `assembly`), `slug` |
 | `in_use` | `def_kind` (`tileset`, `macros`, or `stamp` with its `layer`), `slug`, `uses` (the first few, as phrases) |
 | `invalid` | none: `message` says it all |
 | `batch` | `label`, `index` (of the failed command), `source` (its error, in this same form) |
@@ -231,6 +232,7 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 | `entity_types[]` | `{ slug, name, doc?, category?, tags, size, pivot, resizable, color, icon?, limit?, fields, count }`. `pivot` is the point of the entity that sits on its cell, as fractions of its size (`[0.5, 1.0]` is bottom center). `color` is the type's `#rrggbb`, `icon` its `{ tileset, tile: [col, row] }` atlas tile, `limit` `{ max, scope, behavior }` with the defaults spelled out (`scope` `level`, `behavior` `prevent_adding`). `fields` as in the entity file without `name` and `display` (with `doc` when set); `count` across the project |
 | `enums[]` | `{ slug, values: [slug] }` |
 | `tilesets[]` | `{ slug, image, tile_size, spacing?, padding?, atlas }`. `atlas` is `[columns, rows]` in tiles, `null` if the image can't be read |
+| `assemblies[]` | `{ slug, name, category?, tags, doc?, size, items }`: every [assembly](#assemblies-and-transforms), `size` in cells of the project grid, `items` how many grid cells, tile stacks, entities and notes it holds (`defs.get` kind `assembly` gives the content) |
 | `notes` | `{ open, done }` across the project. Guides are not counted in any `notes` count: they are reference lines, not work items (`worlds[].guides` counts them) |
 | `recovered`? | Only when this editor session started from a crash recovery (the editor's *Recover*): `{ files: [paths recovered], skipped: [conflicting paths left out], session: { pid, written } }`, `session` being the crashed one |
 
@@ -874,7 +876,7 @@ A connector from a room to a door entity, through one waypoint (shown, not repla
 
 ### defs
 
-Definitions by `kind` and `slug`, in file form without `$schema` and `format`. The editable kinds are `layer` (an entry of `layers.json`), `entity` (an `entities/<slug>.json`), `entity_field` (one field of an entity type, the type named by `entity`), `level_field` (an entry of `project.json` `level_fields`), `enum` (an entry of `enums.json`) and `tileset` (an entry of `tilesets.json`). `rules` (a `rules/<layer>.json`, slug the layer) and `macros` (`rules/macros.json`, slug `macros`) can be read here; they are edited with the [`rules.*`](#rules) methods, one group, rule, stamp or macro at a time. There is no generic definition command: the server dispatches on `kind` to the per-kind [definition commands](commands.md#definition-commands):
+Definitions by `kind` and `slug`, in file form without `$schema` and `format`. The editable kinds are `layer` (an entry of `layers.json`), `entity` (an `entities/<slug>.json`), `entity_field` (one field of an entity type, the type named by `entity`), `level_field` (an entry of `project.json` `level_fields`), `enum` (an entry of `enums.json`), `tileset` (an entry of `tilesets.json`) and `assembly` (an `assemblies/<slug>.json`, [format.md](format.md#assembliesslugjson)). `rules` (a `rules/<layer>.json`, slug the layer) and `macros` (`rules/macros.json`, slug `macros`) can be read here; they are edited with the [`rules.*`](#rules) methods, one group, rule, stamp or macro at a time. There is no generic definition command: the server dispatches on `kind` to the per-kind [definition commands](commands.md#definition-commands):
 
 | `kind` | `defs.set` | `defs.remove` | `defs.rename` |
 | --- | --- | --- | --- |
@@ -885,6 +887,7 @@ Definitions by `kind` and `slug`, in file form without `$schema` and `format`. T
 | `level_field` | `set_level_field_def { field, def, index? }` | `remove_level_field_def { field }` | `rename_level_field { from, to }` |
 | `enum_value` | | | `rename_enum_value { enum, from, to }` |
 | `tileset` | `set_tileset_def { tileset, def, index? }` | `remove_tileset_def { tileset }` | `rename_tileset { from, to }` |
+| `assembly` | `set_assembly { assembly }` | `remove_assembly { slug }` | `rename_assembly { slug: from, new_slug: to }` |
 
 The command's slug field (`layer`, `entity`, `enum`, `tileset`, and `field` for the field kinds) is `def.slug` for `defs.set` and `slug` for `defs.remove`. `entity` is required with `entity_field` and refused with every other kind (`invalid params`). A kind left out of a column is `invalid params`. The kinds `stamp` and `macros` are `invalid params` too, with a message naming the `rules.*` method that edits them (`rules.set_stamp`, `rules.remove_stamp`, `rules.set_macro`, `rules.remove_macro`, `rules.rename_macro`; stamps have no rename). Any other kind is `invalid params`.
 
@@ -892,8 +895,8 @@ Each command reports a `def` change `{ "change": "def", "kind", "slug" }` for ev
 
 | Method | Params | Result / command |
 | --- | --- | --- |
-| `defs.get` | `{ kind?, entity?, slug? }` | `{ rev, defs: { layers, entities, enums, tilesets, rules, macros } }` (only `kind`'s entry when given; `kind` may be `rules` or `macros`); with `kind` and `slug`: `{ rev, kind, def }`. `macros` is not a list but the one file `rules/macros.json` (`{}` when the project has none), slug `macros`. The field kinds aren't in the full listing (entity fields are in their type, level fields in `project.json`): `{ kind: "entity_field", entity }` and `{ kind: "level_field" }` give `{ rev, defs: { fields } }` in file order, and with `slug` `{ rev, kind, entity?, def }` |
-| `defs.set` | `{ kind, entity?, def, index?, confirm? }` | the `set_*` command of `kind`: replaces the definition with `def.slug`, or creates it (at `index`, default the end; `entity` has no order and takes no `index`). For a field, `index` on an existing one moves it. Never drops stored data; `confirm` per [Confirmation](#confirmation). `set_layer_def` refuses taking out an `int_grid` value a cell holds, changing the kind or grid of a layer that has content, and changing `derived` on a layer with content in any level ("marks has overrides in hall; clear them first") |
+| `defs.get` | `{ kind?, entity?, slug? }` | `{ rev, defs: { layers, entities, enums, tilesets, rules, assemblies, macros } }` (only `kind`'s entry when given; `kind` may be `rules` or `macros`); with `kind` and `slug`: `{ rev, kind, def }`. `macros` is not a list but the one file `rules/macros.json` (`{}` when the project has none), slug `macros`. The field kinds aren't in the full listing (entity fields are in their type, level fields in `project.json`): `{ kind: "entity_field", entity }` and `{ kind: "level_field" }` give `{ rev, defs: { fields } }` in file order, and with `slug` `{ rev, kind, entity?, def }` |
+| `defs.set` | `{ kind, entity?, def, index?, confirm? }` | the `set_*` command of `kind`: replaces the definition with `def.slug`, or creates it (at `index`, default the end; `entity` and `assembly` have no order and take no `index`). For a field, `index` on an existing one moves it. Never drops stored data; `confirm` per [Confirmation](#confirmation). `set_layer_def` refuses taking out an `int_grid` value a cell holds, changing the kind or grid of a layer that has content, and changing `derived` on a layer with content in any level ("marks has overrides in hall; clear them first") |
 | `defs.rename` | `{ kind, from, to }`, `{ kind: "entity_field", entity, from, to }`, or `{ kind: "enum_value", enum, from, to }` | the `rename_*` command of `kind`, rewriting every reference (below). Never needs `confirm` |
 | `defs.remove` | `{ kind, entity?, slug, confirm: true }` | the `remove_*` command of `kind` (see below) |
 
@@ -903,6 +906,7 @@ What `defs.remove` takes with it:
 - `entity`: every instance of the type, then the type (one `batch`; undo puts the type and each instance back).
 - `enum`: only the enum. Fields and level fields that use it, and their stored values, stay as they are for `project.validate` to report.
 - `tileset`: refused while anything uses it, with `command_error` `in_use` naming the first few uses. Rename or remove those first.
+- `assembly`: only the assembly. Copies placed from it are independent and stay.
 - `entity_field`, `level_field`: the field and every value instances of the type (levels, for a level field) store for it (one `batch`; undo puts the field and each value back). A rule group that requires a removed level field stays, for `project.validate` to report.
 
 What `defs.rename` rewrites (a rules file can't be renamed on its own: renaming the `auto` layer renames it):
@@ -1936,7 +1940,7 @@ Undo puts the old level back, overrides and all:
 | Method | Params | Result |
 | --- | --- | --- |
 | `edit.copy` | `{ selection: { level?, entities?: [id], notes?: [id], tiles?: { layer: [[x, y]] }, rect?: [x, y, w, h], layers?: [slug] } }`. Everything comes from one level (`level`, else the level of the first entity or level note); world notes of its world may come along. `tiles` names tile stacks by cell; `rect` (cells of the project grid) copies the cells of `layers` inside it, empty ones included (default: every int_grid layer that isn't derived; tiles layers may be listed) | `{ rev, fragment }` (a read). Refused (`command_error`): unknown ids, levels or layers, things from two levels, a rect outside the level, a derived or auto layer |
-| `edit.paste` (write) | `{ level, origin: [x, y], fragment, layer_map?: { from: to } }`: `origin` is where the fragment's top-left corner goes, in cells of the project grid (may be negative) | `batch` of `paint_cells`, `set_tiles`, `add_entity`, `add_note`. The write result adds `items` (how many grid cells, tile stacks, entities and notes), `ids` (fragment id to new id), `entities` and `notes` (the new ids, in fragment order) and `problems` (what was clipped, refused, skipped or nulled, in words). Every entity and note gets a new id, references inside the fragment follow, references outside are kept when they resolve here (see [format.md](format.md#what-a-paste-does)). A fragment of another version or project grid size is `invalid_params`/`invalid`; a paste that would write nothing is `invalid`, naming the problems |
+| `edit.paste` (write) | `{ level, origin: [x, y], fragment, layer_map?: { from: to }, flip? }`: `origin` is where the fragment's top-left corner goes, in cells of the project grid (may be negative); `flip` turns the fragment first, written like a tile's flip (`x` mirrors left-right, `y` top-bottom, `xt` is a quarter turn clockwise; see [commands.md](commands.md#transforms)) | `batch` of `paint_cells`, `set_tiles`, `add_entity`, `add_note`. The write result adds `items` (how many grid cells, tile stacks, entities and notes), `ids` (fragment id to new id), `entities` and `notes` (the new ids, in fragment order) and `problems` (what was clipped, refused, skipped or nulled, in words). Every entity and note gets a new id, references inside the fragment follow, references outside are kept when they resolve here (see [format.md](format.md#what-a-paste-does)). A fragment of another version or project grid size is `invalid_params`/`invalid`; a paste that would write nothing is `invalid`, naming the problems |
 
 Copy the door at the end of `crevasse` with the cells around its foot:
 
@@ -2344,6 +2348,68 @@ A plan made before the project changed is refused; plan again:
 { "jsonrpc": "2.0", "id": 152, "error": { "code": -32001,
   "message": "the project changed since plan plan_2 was made (rev 67 then, 68 now): call project.import_plan again",
   "data": { "expected": 67, "current": 68 } } }
+```
+
+### assemblies and transforms
+
+An **assembly** is a named, reusable fragment kept in the project (`assemblies/<slug>.json`, [format.md](format.md#assembliesslugjson)); it is read and edited like any definition with [`defs.*`](#defs) kind `assembly`. `edit.save_assembly` makes one out of a selection, `edit.place_assembly` pastes one. `edit.transform` mirrors or rotates a selection in place and `level.arrange` aligns levels; both are worked out by `worlds_core::transform` ([commands.md](commands.md#transforms)) as one batch of existing commands, one undo entry.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `edit.save_assembly` (write) | `{ selection \| fragment, slug, name, category?, tags?, doc?, replace? }`: `selection` as for `edit.copy`, or a `fragment` | `set_assembly`; the write result adds `items` and `size`. An assembly with that slug is `command_error` `duplicate_def` unless `replace: true`; an empty one is `invalid` |
+| `edit.place_assembly` (write) | `{ level, slug, origin: [x, y], flip? }` | as `edit.paste` of the assembly's fragment (turned by `flip` first), labelled `Place assembly <slug>`, with the same result keys. An unknown slug is `command_error` `unknown_assembly` |
+| `edit.transform` (write) | `{ selection, op }`: `selection` as for `edit.copy`, `op` one of `mirror_x`, `mirror_y`, `rotate_90` (clockwise) | a `batch` of `paint_cells`, `set_tiles`, `move_entity` and `update_note` turning it about its bounding box; entities keep their ids, size and field values. The write result adds `notes` (what the editor shows in its status bar: cells dropped at the level's edge, enum fields that look like directions, since a transform never changes a field) and `rect` (the turned box, `[x, y, w, h]` in cells). Refused: an entity that would leave the level, non-square tiles with `rotate_90` (`command_error` `invalid`), a selection that is the same turned (`invalid`) |
+| `level.arrange` (write) | `{ levels: [slug], op }`: two or more levels of one world; `op` one of `align_left`, `align_right`, `align_top`, `align_bottom`, `align_center_x`, `align_center_y`, `distribute_x`, `distribute_y`, `butt_left`, `butt_right`, `butt_up`, `butt_down` | a `batch` of `move_level` for the levels that move |
+
+Save the button and door pasted above as an assembly:
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "method": "edit.save_assembly", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] },
+  "slug": "doorway", "name": "Doorway", "category": "Puzzle/Doors", "tags": ["door"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "result": { "rev": 75, "status": "applied", "label": "claude-code: Set assembly doorway", "items": 2, "size": [7, 1],
+  "changes": [ { "change": "def", "kind": "assembly", "slug": "doorway" } ] } }
+```
+
+Place it mirrored, so the door is on the left:
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "method": "edit.place_assembly", "params": { "level": "crevasse", "slug": "doorway", "origin": [2, 2], "flip": "x" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "result": { "rev": 76, "status": "applied", "label": "claude-code: Place assembly doorway",
+  "items": 2, "ids": { "5w6isso7ut": "ijajfkenuk", "75rk7gzrhn": "h7wkgcgyut" }, "entities": ["h7wkgcgyut", "ijajfkenuk"], "notes": [], "problems": [],
+  "changes": [
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "h7wkgcgyut" },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "ijajfkenuk" } ] } }
+```
+
+Mirror the pasted pair in place:
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "method": "edit.transform", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] }, "op": "mirror_x" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "result": { "rev": 77, "status": "applied", "label": "claude-code: Mirror 2 items left-right",
+  "notes": ["Fields aren't changed by a transform: check locked_door.facing (looks like a direction)"], "rect": [2, -1, 7, 3],
+  "changes": [
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "75rk7gzrhn" },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "5w6isso7ut" } ] } }
+```
+
+Line the shaft up with the top of `crevasse`:
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "method": "level.arrange", "params": { "levels": ["crevasse", "shaft"], "op": "align_top" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "result": { "rev": 78, "status": "applied", "label": "claude-code: Align 2 levels top",
+  "changes": [ { "change": "level_meta", "world": "main", "level": "shaft", "part": "position" } ] } }
 ```
 
 ## Headless mode

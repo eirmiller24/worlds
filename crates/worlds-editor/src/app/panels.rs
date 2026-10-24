@@ -261,6 +261,10 @@ fn derived_badge(
 
 /// Palette for the active layer.
 pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
+    if st.doc.is_some() && crate::library::switch(ui, &mut st.view) {
+        crate::library::library(ui, st);
+        return;
+    }
     let Some(doc) = &st.doc else {
         ui.weak("No project");
         return;

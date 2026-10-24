@@ -1079,7 +1079,9 @@ pub struct SnapHit {
 /// and "Snap to guides" on, each axis snaps the moving levels' bounding
 /// edges to the x (or y) of vertical (horizontal) guide segments and of
 /// guide vertices within [`SNAP_PX`] screen px, as built, visible guides
-/// only. Also returns what it snapped to.
+/// only, and (with guide snapping on or off) to the edges of the other
+/// levels of their world ([`crate::arrange::level_edges`]). Also returns
+/// what it snapped to.
 pub fn drag_delta(
     doc: &Document,
     view: &ViewState,
@@ -1097,7 +1099,7 @@ pub fn drag_delta(
         ]
     };
     let mut hits = Vec::new();
-    if levels.is_empty() || !view.annotations.snap_to_guides {
+    if levels.is_empty() {
         return (d, hits);
     }
     let bbox = levels
@@ -1106,8 +1108,11 @@ pub fn drag_delta(
         .fold(WRect::EMPTY, |a, b| a.union(&b));
     let tol = SNAP_PX / view.zoom.max(1e-9);
     // Candidates per axis: (coordinate, segment along it if any).
-    let mut cand: [Vec<(i64, Option<Seg>)>; 2] = [Vec::new(), Vec::new()];
-    for r in shown_notes(doc, view) {
+    let mut cand: [Vec<(i64, Option<Seg>)>; 2] = crate::arrange::level_edges(doc, levels);
+    for r in shown_notes(doc, view)
+        .into_iter()
+        .filter(|_| view.annotations.snap_to_guides)
+    {
         if !matches!(r.note.shape, Shape::Guide { .. }) || !shown(view, r.note, false) {
             continue;
         }

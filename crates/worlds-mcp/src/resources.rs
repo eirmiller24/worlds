@@ -12,7 +12,7 @@ pub const TEMPLATES: &[(&str, &str, &str)] = &[
     (
         "worlds://defs/{file}",
         "definition file",
-        "layers.json, tilesets.json, enums.json, entities/<slug>.json, rules/<layer>.json or rules/macros.json",
+        "layers.json, tilesets.json, enums.json, entities/<slug>.json, rules/<layer>.json, rules/macros.json or assemblies/<slug>.json",
     ),
     (
         "worlds://worlds/{world}/world.json",
@@ -32,7 +32,7 @@ pub const TEMPLATES: &[(&str, &str, &str)] = &[
     (
         "worlds://schema/{name}.json",
         "JSON Schema",
-        "the schema of a file kind (project, layers, tilesets, enums, entity, rules, macros, world, level, intgrid, tiles, entities, notes) or command",
+        "the schema of a file kind (project, layers, tilesets, enums, entity, rules, macros, world, level, intgrid, tiles, entities, notes, assembly), command or fragment",
     ),
 ];
 
@@ -76,7 +76,7 @@ fn defs_file_ok(f: &str) -> bool {
         _ => {
             let parts: Vec<&str> = f.split('/').collect();
             parts.len() == 2
-                && (parts[0] == "entities" || parts[0] == "rules")
+                && (parts[0] == "entities" || parts[0] == "rules" || parts[0] == "assemblies")
                 && parts[1].ends_with(".json")
                 && parts[1].len() > 5
         }
@@ -101,6 +101,12 @@ impl Engine {
             add(format!(
                 "worlds://defs/entities/{}.json",
                 e["slug"].as_str().unwrap_or("")
+            ));
+        }
+        for a in d["assemblies"].as_array().into_iter().flatten() {
+            add(format!(
+                "worlds://defs/assemblies/{}.json",
+                a["slug"].as_str().unwrap_or("")
             ));
         }
         let layers = d["layers"].as_array().cloned().unwrap_or_default();
@@ -241,7 +247,7 @@ mod tests {
 
     #[test]
     fn schemas_and_defs_paths() {
-        assert_eq!(schema_names().len(), 15);
+        assert_eq!(schema_names().len(), 16);
         for n in schema_names() {
             let t = schema_text(n).unwrap();
             assert!(serde_json::from_str::<Value>(&t).is_ok(), "{n}");
@@ -252,6 +258,7 @@ mod tests {
         assert!(builtin_template_text("nope").is_none());
         assert!(defs_file_ok("entities/door.json"));
         assert!(defs_file_ok("rules/macros.json"));
+        assert!(defs_file_ok("assemblies/doorway.json"));
         assert!(!defs_file_ok("project.json"));
         assert!(!defs_file_ok("rules/../x.json"));
         assert!(!defs_file_ok("worlds/main/world.json"));

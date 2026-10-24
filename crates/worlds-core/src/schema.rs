@@ -28,6 +28,7 @@ pub fn for_kind(kind: FileKind) -> Value {
         FileKind::Tiles => file_schema::<TilesLayer>(kind),
         FileKind::Entities => file_schema::<EntitiesFile>(kind),
         FileKind::Notes => file_schema::<NotesFile>(kind),
+        FileKind::Assembly => file_schema::<crate::assembly::Assembly>(kind),
     }
 }
 

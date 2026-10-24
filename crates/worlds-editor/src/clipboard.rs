@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use worlds_core::command::{Command, GridValue, Rect};
 use worlds_core::fragment::{self, CopySelection, Fragment, PasteOptions, PastePlan};
-use worlds_core::{Id, Slug};
+use worlds_core::{Flip, Id, Project, Slug};
 
 use crate::annot::{At, find_note};
 use crate::doc::{Document, LevelIx};
@@ -23,22 +23,68 @@ use crate::ghost::Ghost;
 use crate::view::{SelItem, ViewState};
 use crate::viewport::camera::WRect;
 
-/// How the paste ghost is turned before it lands. Only the identity for
-/// now: mirror and rotate (roadmap 2.4) add their variants here and in
-/// [`Transform::apply`], and every paste goes through it.
+/// How the paste ghost (or an assembly about to be placed) is turned
+/// before it lands: X mirrors it left-right, Y top-bottom, R a quarter turn
+/// clockwise ([`Transform::then`]); every paste goes through
+/// [`Transform::apply`] ([`worlds_core::transform::fragment`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Transform {
-    #[default]
-    Identity,
+pub struct Transform {
+    /// As a tile's flip: `t` first, then `x`, `y`. `None`: as copied.
+    pub flip: Option<Flip>,
 }
 
 impl Transform {
-    /// The fragment as it lands.
-    pub fn apply<'a>(&self, f: &'a Fragment) -> Cow<'a, Fragment> {
-        match self {
-            Transform::Identity => Cow::Borrowed(f),
+    /// The identity.
+    pub const IDENTITY: Transform = Transform { flip: None };
+
+    /// This, then turned by `op`.
+    pub fn then(self, op: Flip) -> Transform {
+        Transform {
+            flip: worlds_core::transform::then(self.flip, op),
         }
     }
+
+    /// The fragment as it lands. Refused: a turn with `t` of tiles that
+    /// aren't square.
+    pub fn apply<'a>(
+        &self,
+        project: &Project,
+        f: &'a Fragment,
+    ) -> Result<Cow<'a, Fragment>, String> {
+        match self.flip {
+            None => Ok(Cow::Borrowed(f)),
+            Some(flip) => worlds_core::transform::fragment(project, f, flip)
+                .map(Cow::Owned)
+                .map_err(|e| format!("Can't turn it: {e}")),
+        }
+    }
+
+    /// In words, for the status bar and the ghost ("mirrored left-right").
+    pub fn describe(&self) -> &'static str {
+        describe_flip(self.flip)
+    }
+}
+
+/// A turn in words ("as copied", "a quarter turn", ...).
+pub fn describe_flip(flip: Option<Flip>) -> &'static str {
+    match flip {
+        None => "as copied",
+        Some(Flip::X) => "mirrored left-right",
+        Some(Flip::Y) => "mirrored top-bottom",
+        Some(Flip::XY) => "a half turn",
+        Some(Flip::XT) => "a quarter turn",
+        Some(Flip::YT) => "three quarter turns",
+        Some(Flip::T) => "mirrored on its diagonal",
+        Some(Flip::XYT) => "mirrored on its other diagonal",
+    }
+}
+
+/// The status message for a rotation of tiles that aren't square.
+pub fn not_square(ts: &worlds_core::TilesetDef) -> String {
+    format!(
+        "Rotating needs square tiles: tileset {} has {}x{} tiles (X and Y still mirror)",
+        ts.slug, ts.tile_size[0], ts.tile_size[1]
+    )
 }
 
 /// A paste waiting for its click (`ViewState::paste`).
@@ -46,8 +92,13 @@ impl Transform {
 pub struct PasteGhost {
     /// The fragment as copied.
     pub fragment: Fragment,
-    /// Applied to `fragment` before it is drawn or pasted.
+    /// Applied to `fragment` before it is drawn or pasted ([`Self::turn`]).
     pub transform: Transform,
+    /// `fragment` turned by `transform`: what is drawn and pasted.
+    turned: Fragment,
+    /// Set when this places an assembly (the Library): the paste is
+    /// labelled `Place assembly <slug>`.
+    pub assembly: Option<Slug>,
     /// Where it would land: the level and the fragment's origin there (in
     /// cells of the project grid), following the pointer.
     pub at: Option<(LevelIx, [i64; 2])>,
@@ -60,17 +111,54 @@ pub struct PasteGhost {
 impl PasteGhost {
     pub fn new(fragment: Fragment) -> Self {
         PasteGhost {
+            turned: fragment.clone(),
             fragment,
-            transform: Transform::Identity,
+            transform: Transform::IDENTITY,
+            assembly: None,
             at: None,
             pinned: false,
             ghost: None,
         }
     }
 
+    /// Placing assembly `slug` (its fragment).
+    pub fn assembly(slug: Slug, fragment: Fragment) -> Self {
+        PasteGhost {
+            assembly: Some(slug),
+            ..PasteGhost::new(fragment)
+        }
+    }
+
     /// The fragment as it would land.
     pub fn fragment(&self) -> Cow<'_, Fragment> {
-        self.transform.apply(&self.fragment)
+        Cow::Borrowed(&self.turned)
+    }
+
+    /// Turn it by `op` (X: `x`, Y: `y`, R: `xt`). Its middle stays where
+    /// it was. Refused (and left as it is): a rotation of tiles that aren't
+    /// square.
+    pub fn turn(&mut self, project: &Project, op: Flip) -> Result<(), String> {
+        let t = self.transform.then(op);
+        let turned = t.apply(project, &self.fragment)?.into_owned();
+        let (old, new) = (self.turned.size, turned.size);
+        if let Some((_, o)) = &mut self.at {
+            o[0] += (old[0] as i64 - new[0] as i64) / 2;
+            o[1] += (old[1] as i64 - new[1] as i64) / 2;
+        }
+        self.transform = t;
+        self.turned = turned;
+        self.ghost = None;
+        Ok(())
+    }
+
+    /// The paste of it with its origin at `origin` in level `ix`
+    /// (labelled `Place assembly <slug>` for an assembly).
+    pub fn plan(&self, doc: &Document, ix: LevelIx, origin: [i64; 2]) -> Result<PastePlan, String> {
+        let mut plan = paste_plan(doc, &self.turned, ix, origin)?;
+        if let Some(s) = &self.assembly {
+            plan.label = format!("Place assembly {s}");
+        }
+        Ok(plan)
     }
 
     /// The origin that puts the middle of the fragment on the project cell
@@ -96,7 +184,7 @@ impl PasteGhost {
             return;
         }
         let frag = self.fragment().into_owned();
-        let mut g = match paste_plan(doc, &frag, at.0, at.1) {
+        let mut g = match self.plan(doc, at.0, at.1) {
             Ok(plan) => {
                 Ghost::of_commands(&doc.project, "paste", &plan.label, "", &plan.commands, &[])
             }
@@ -184,11 +272,54 @@ pub struct Copied {
     pub marquee: Option<(LevelIx, GridMarquee)>,
 }
 
+/// What Copy (and Save as assembly, and the selection transforms) take
+/// from the selection and the grid marquee, before anything is copied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopyRequest {
+    pub sel: CopySelection,
+    /// The selection items it takes.
+    pub items: Vec<SelItem>,
+    pub marquee: Option<(LevelIx, GridMarquee)>,
+    /// Selected items left out because they are in another level.
+    pub elsewhere: usize,
+    /// Selected levels (never copied).
+    pub levels: usize,
+}
+
 /// Copy: the selection and the grid marquee as a fragment. Everything
 /// comes from one level (the marquee's, else the first selected item's);
 /// selected items in other levels and selected levels are left out, and
 /// the message says so.
 pub fn copy_selection(doc: &Document, view: &ViewState) -> Result<Copied, String> {
+    let CopyRequest {
+        sel,
+        items,
+        marquee,
+        elsewhere,
+        levels,
+    } = copy_request(doc, view)?;
+    let fragment = fragment::copy(&doc.project, &sel).map_err(|e| format!("Can't copy: {e}"))?;
+    let n = fragment.item_count();
+    let mut message = format!("Copied {n} item{}", if n == 1 { "" } else { "s" });
+    if elsewhere > 0 {
+        message.push_str(&format!(
+            "; {elsewhere} selected in other levels left out (a copy comes from one level)"
+        ));
+    }
+    if levels > 0 {
+        message.push_str("; levels aren't copied (Ctrl+D duplicates a level)");
+    }
+    Ok(Copied {
+        fragment,
+        message,
+        items,
+        marquee,
+    })
+}
+
+/// What Copy would take ([`CopyRequest`]). Nothing (or only levels) is an
+/// error saying what can be copied.
+pub fn copy_request(doc: &Document, view: &ViewState) -> Result<CopyRequest, String> {
     let marquee = live_marquee(doc, view);
     let item_level = |i: &SelItem| -> Option<Option<LevelIx>> {
         match i {
@@ -256,22 +387,12 @@ pub fn copy_selection(doc: &Document, view: &ViewState) -> Result<Copied, String
             "Nothing to copy: select entities, tile stacks or notes, or drag a marquee with an int_grid layer active".into()
         });
     }
-    let fragment = fragment::copy(&doc.project, &sel).map_err(|e| format!("Can't copy: {e}"))?;
-    let n = fragment.item_count();
-    let mut message = format!("Copied {n} item{}", if n == 1 { "" } else { "s" });
-    if elsewhere > 0 {
-        message.push_str(&format!(
-            "; {elsewhere} selected in other levels left out (a copy comes from one level)"
-        ));
-    }
-    if levels > 0 {
-        message.push_str("; levels aren't copied (Ctrl+D duplicates a level)");
-    }
-    Ok(Copied {
-        fragment,
-        message,
+    Ok(CopyRequest {
+        sel,
         items,
         marquee,
+        elsewhere,
+        levels,
     })
 }
 

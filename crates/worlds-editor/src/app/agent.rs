@@ -300,6 +300,7 @@ impl EditorApp {
         // from the old document, so nothing keyed on it matches again.
         self.st.view.entities.retain_known(&doc.project);
         self.st.entities.document_replaced();
+        self.st.library.thumbs.clear();
         doc.defs_gen = old.defs_gen + 1;
         if headless {
             doc.inline_layer_bakes = true;
