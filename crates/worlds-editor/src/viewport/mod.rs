@@ -46,8 +46,13 @@ use camera::{Camera, WRect};
 use gpu::{DrawCmd, Gpu, Uniforms, ViewportCallback, ViewportGpu};
 use scene::{ChunkRef, Scene, parse_color, tileset_tex};
 
-/// Below this many screen px per cell, levels draw as flat rects.
+/// Below this many screen px per cell, levels draw as their thumbnails
+/// (flat rects until a thumbnail is made) instead of tiles.
 pub const DETAIL_CELL_PX: f64 = 4.0;
+/// Below this many screen px per cell (but still drawing tiles), the
+/// visible levels' thumbnails are made ahead, unseen, so zooming out past
+/// [`DETAIL_CELL_PX`] finds them ready instead of flashing flat fills.
+pub const THUMB_AHEAD_CELL_PX: f64 = 2.0 * DETAIL_CELL_PX;
 /// Grid lines show when a cell is at least this many screen px.
 pub const GRID_CELL_PX: f64 = 8.0;
 
@@ -85,6 +90,8 @@ pub struct ViewStats {
     pub rebuild_ms: f64,
     pub pending: usize,
     pub uploaded: usize,
+    /// Levels drawn as their thumbnail (zoomed out).
+    pub thumbs: usize,
 }
 
 pub struct ViewportCx<'a> {
@@ -107,6 +114,10 @@ pub struct ViewportCx<'a> {
     /// This is the focused map tab: it takes the keys and draws the tool
     /// strips (snapshots: true).
     pub focused: bool,
+    /// The editor's thumbnail cache: zoomed out, each level draws as its
+    /// thumbnail ([`crate::thumbs`]); `None` (snapshots, which always draw
+    /// the tiles): flat fills.
+    pub thumbs: Option<&'a mut crate::thumbs::Thumbs>,
 }
 
 /// Tileset atlas textures by slug (`None`: the image failed to load).
@@ -533,6 +544,14 @@ impl Viewport {
             .bg_color
             .as_ref()
             .map_or([0x40, 0x40, 0x48, 255], |c| parse_color(c.as_str()));
+        // Zoomed out, a level is its thumbnail over the flat fill (the fill
+        // shows until the thumbnail is made, a few a frame); a little above
+        // that zoom the thumbnails are made ahead, unseen. Levels under
+        // MIN_LEVEL_PT stay specks (below) and ask for none.
+        let ahead = !detail || cam.zoom * grid < THUMB_AHEAD_CELL_PX;
+        let look =
+            (ahead && cx.thumbs.is_some()).then(|| crate::thumbs::LayerLook::of(doc, cx.view));
+        let mut thumbs_drawn = 0;
         for &ix in &scene.draw_order {
             let lr = scene.levels[ix].rect;
             if !lr.intersects(&view) {
@@ -557,11 +576,28 @@ impl Viewport {
             } else {
                 painter.rect_filled(to_srect(&lr), 0.0, fill);
             }
+            let sr = to_srect(&lr);
+            if let (Some(look), Some(thumbs)) = (&look, cx.thumbs.as_deref_mut())
+                && sr.width() >= MIN_LEVEL_PT
+                && sr.height() >= MIN_LEVEL_PT
+            {
+                let src = crate::thumbs::LevelThumb { doc, ix, look };
+                if let Some(tex) = thumbs.get(ui.ctx(), &src)
+                    && !detail
+                {
+                    // Its void is transparent: the map (or a level in the
+                    // notch) shows through.
+                    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                    painter.image(tex.id(), sr, uv, Color32::WHITE);
+                    thumbs_drawn += 1;
+                }
+            }
         }
 
         // ---- tiles via the GPU ----
         let mut stats = ViewStats {
             detail,
+            thumbs: thumbs_drawn,
             ..Default::default()
         };
         if detail {

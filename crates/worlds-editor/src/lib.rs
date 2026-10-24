@@ -10,8 +10,10 @@
 //! - [`clipboard`]: copy, cut and paste of fragments, the paste ghost and
 //!   its mirror and rotate.
 //! - [`arrange`]: selection transforms, aligning levels, level-edge snaps.
-//! - [`library`]: assemblies in the Palette's Library; [`thumbs`]: their
-//!   thumbnails in `.worlds/thumbs/`.
+//! - [`library`]: assemblies in the Palette's Library.
+//! - [`thumbs`]: thumbnails of assemblies (kept in `.worlds/thumbs/`) and
+//!   levels (in memory), one cache for the Library, the Levels pane and the
+//!   zoomed-out map.
 //! - [`edit`]: the command layer (history, gestures, incremental rebake, save).
 //! - [`headless`]: offscreen rendering for `--screenshot` and tests.
 //! - [`script`]: `--script` files (commands and replayed tool gestures).

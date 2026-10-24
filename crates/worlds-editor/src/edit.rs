@@ -514,6 +514,25 @@ impl Editing {
             cx.view.remap_levels(&map);
             cx.invalidate.push(Invalidation::All);
         }
+        // What the levels look like (the thumbnails' key): a change in a
+        // level moves that level's stamp; one with no level (a definition,
+        // a project setting, a world) may reach every level, so it moves
+        // them all. Notes, references and guide groups aren't in a
+        // thumbnail.
+        for c in changes {
+            match c.level() {
+                Some(l) => {
+                    if let Some(ix) = doc.level_ix(l.as_str()) {
+                        doc.touch_look(ix);
+                    }
+                }
+                None if matches!(
+                    c,
+                    Change::Note { .. } | Change::Reference { .. } | Change::GuideGroup { .. }
+                ) => {}
+                None => doc.touch_all_looks(),
+            }
+        }
         let mut levels: Vec<Slug> = Vec::new();
         for c in changes {
             match c {

@@ -114,11 +114,11 @@ impl SaveDialog {
     }
 }
 
-/// What isn't saved: the search, the thumbnails, the dialog.
+/// What isn't saved: the search, the dialog. (The thumbnails are in
+/// `EditorState::thumbs`, shared with the Levels pane and the map.)
 #[derive(Default)]
 pub struct LibraryState {
     pub query: String,
-    pub thumbs: crate::thumbs::Thumbs,
     /// The save dialog, while open.
     pub dialog: Option<SaveDialog>,
     /// Where each row and header was drawn last frame, by slug or key
@@ -337,6 +337,7 @@ pub fn library(ui: &mut egui::Ui, st: &mut EditorState) {
         doc,
         view,
         library: lib,
+        thumbs,
         actions,
         pending,
         accent,
@@ -448,19 +449,16 @@ pub fn library(ui: &mut egui::Ui, st: &mut EditorState) {
                             pos2(x0, rect.min.y + 2.0),
                             Vec2::splat(ROW_H - 4.0),
                         );
-                        let tex = lib.thumbs.texture(&ctx, &doc.dir, &doc.project, a);
-                        let [tw, th] = tex.size();
-                        let s = (thumb_box.width() / tw as f32).min(thumb_box.height() / th as f32);
-                        let r = Rect::from_center_size(
-                            thumb_box.center(),
-                            Vec2::new(tw as f32 * s, th as f32 * s),
-                        );
-                        p.image(
-                            tex.id(),
-                            r,
-                            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                            egui::Color32::WHITE,
-                        );
+                        let src = crate::thumbs::AssemblyThumb { doc, assembly: a };
+                        match thumbs.get(&ctx, &src) {
+                            Some(tex) => {
+                                crate::thumbs::draw_fitted(&p, &tex, thumb_box);
+                            }
+                            // Not made yet (a few a frame): an empty box.
+                            None => {
+                                p.rect_filled(thumb_box, 0.0, egui::Color32::from_gray(50));
+                            }
+                        }
                         let star = Rect::from_min_max(
                             pos2(rect.max.x - 22.0, rect.min.y),
                             pos2(rect.max.x - 4.0, rect.max.y),

@@ -135,7 +135,7 @@ fn save_an_assembly_then_place_it_turned_from_the_library() {
         frame(&mut app, vec![]);
     }
     // Its thumbnail was rendered (headless: not written into the project).
-    assert_eq!(app.st.library.thumbs.rendered, 1);
+    assert_eq!(app.st.thumbs.rendered, 1);
     assert!(!dir.join(".worlds/thumbs").exists());
     assert!(app.st.library.rects.contains_key("torch_pair"));
     if let Some(o) = &out {
