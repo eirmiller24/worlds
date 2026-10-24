@@ -118,9 +118,22 @@ func build_level(slug: String) -> Node2D:
 	root.set_meta("worlds_int_grids", data.get("int_grids", {}))
 	# Level notes are in world pixels, like the world's.
 	root.set_meta("worlds_notes", data.get("notes", []))
+	# The room's shape, in the level's own pixels (from its top-left): the
+	# export's `outline` for a non-rectangular level, else the box's corners.
+	var outline := _outline(data, size_px)
+	root.set_meta("worlds_outline", outline)
+	root.set_meta("worlds_void", data.get("void", []))
 
 	var bg = data.get("bg_color", world.get("bg_color"))
-	if bg != null:
+	if bg != null and data.has("outline"):
+		# A shaped room: only its cells, not the void, get the color.
+		var poly := Polygon2D.new()
+		poly.name = "Background"
+		poly.color = Color.html(bg)
+		poly.polygon = outline
+		poly.z_index = -100
+		_add(root, poly)
+	elif bg != null:
 		var rect := ColorRect.new()
 		rect.name = "Background"
 		rect.color = Color.html(bg)
@@ -148,6 +161,22 @@ func build_level(slug: String) -> Node2D:
 
 	_own(root, root)
 	return root
+
+
+## A level's outline in its own pixels: the export's `outline` (world
+## pixels) moved by `world_px`, or the corners of its `size_px` box.
+func _outline(data: Dictionary, size_px: Vector2) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if data.has("outline"):
+		var origin := _vec2(data["world_px"])
+		for p in data["outline"]:
+			out.append(_vec2(p) - origin)
+		return out
+	out.append(Vector2.ZERO)
+	out.append(Vector2(size_px.x, 0))
+	out.append(size_px)
+	out.append(Vector2(0, size_px.y))
+	return out
 
 
 ## Builds every level of a world (the first one when `world_slug` is empty)
