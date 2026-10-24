@@ -1465,7 +1465,11 @@ impl EditorApp {
                 .as_ref()
                 .and_then(|g| g.at)
                 .ok_or("place needs level and origin")?;
-            return self.status_step(Action::PasteAt { level: ix, origin });
+            return self.status_step(Action::PasteAt {
+                level: ix,
+                origin,
+                keep: false,
+            });
         }
         Ok(())
     }
@@ -3168,7 +3172,7 @@ impl EditorApp {
                 .as_ref()
                 .and_then(|d| crate::clipboard::in_place_target(d, &self.st.view, &frag));
             match target {
-                Some((ix, origin)) => self.paste_at(Some(frag), ix, origin),
+                Some((ix, origin)) => self.paste_at(Some(frag), ix, origin, false),
                 None => self.st.view.set_status("No level to paste in", true),
             }
             return;
@@ -3180,7 +3184,8 @@ impl EditorApp {
         self.st.view.paste = Some(crate::clipboard::PasteGhost::new(frag));
         self.st.view.set_status(
             format!(
-                "Paste {n} item{}: click to place; X, Y mirror and R rotates it; Escape cancels",
+                "Paste {n} item{}: click to place (Shift+click places more); X, Y mirror and R \
+                 rotates it; Escape cancels",
                 if n == 1 { "" } else { "s" }
             ),
             false,
@@ -3190,11 +3195,14 @@ impl EditorApp {
     /// Land a paste: `frag`, or the armed ghost's fragment, with its origin
     /// at `origin` in level `ix`. One entry; what it made becomes the
     /// selection and `ix` the active level; problems go to the status bar.
+    /// With `keep` (a Shift+click) the ghost stays armed, so the next click
+    /// places another one.
     fn paste_at(
         &mut self,
         frag: Option<worlds_core::fragment::Fragment>,
         ix: crate::doc::LevelIx,
         origin: [i64; 2],
+        keep: bool,
     ) {
         let Some(doc) = self.st.doc.as_ref().filter(|d| ix < d.levels.len()) else {
             return;
@@ -3213,7 +3221,14 @@ impl EditorApp {
                 return;
             }
         };
-        self.st.view.paste = None;
+        if keep {
+            // What is under the ghost changed: plan it again next frame.
+            if let Some(p) = self.st.view.paste.as_mut() {
+                p.ghost = None;
+            }
+        } else {
+            self.st.view.paste = None;
+        }
         if plan.commands.is_empty() {
             let why = plan.problems.join("; ");
             self.st
@@ -3775,7 +3790,11 @@ impl EditorApp {
                 self.cut(Some(&ctx));
             }
             Action::Paste { text, in_place } => self.paste(text, in_place),
-            Action::PasteAt { level, origin } => self.paste_at(None, level, origin),
+            Action::PasteAt {
+                level,
+                origin,
+                keep,
+            } => self.paste_at(None, level, origin, keep),
             Action::Turn(op) => self.turn_brush(op),
             Action::TransformSelection(op) => self.transform_selection(op),
             Action::ArrangeLevels(op) => self.arrange_levels(op),

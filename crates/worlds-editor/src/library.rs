@@ -78,6 +78,97 @@ pub struct SaveDialog {
 }
 
 impl SaveDialog {
+    /// The dialog filled in from what is about to be saved, so the usual
+    /// case is Ctrl+Shift+S, Enter. Entities name it: one torch is
+    /// `torch` / "Torch", a torch and a pickup `torch_pickup` / "Torch and
+    /// Pickup", more than three types "Torch group"; the category is the
+    /// one the types share, the tags are all of theirs. Tiles alone are
+    /// named after their layer (`decor_back` / "Decor (back)", the layer's
+    /// folder as category) and tagged with their tilesets; grid cells
+    /// alone after their layer; notes alone "notes". A slug that is taken
+    /// gets `_2`, `_3`, ... so Save never needs Replace by accident.
+    pub fn suggest(project: &Project, frag: &worlds_core::fragment::Fragment) -> Self {
+        let mut tags: Vec<String> = Vec::new();
+        let mut tag = |t: &str| {
+            if !t.is_empty() && !tags.iter().any(|x| x == t) {
+                tags.push(t.to_string());
+            }
+        };
+        let mut types: Vec<&worlds_core::EntityDef> = Vec::new();
+        for e in &frag.entities {
+            if let Some(d) = project.entity_def(e.ty.as_str())
+                && !types.iter().any(|t| t.slug == d.slug)
+            {
+                types.push(d);
+            }
+        }
+        let layer_named = |slug: &Slug| {
+            let def = project.layer(slug.as_str());
+            (
+                slug.to_string(),
+                def.map_or_else(|| slug.to_string(), |d| d.name.clone()),
+                def.and_then(|d| d.folder.clone()).unwrap_or_default(),
+            )
+        };
+        let (base, name, category) = if let Some(first) = types.first() {
+            for t in &types {
+                for x in &t.tags {
+                    tag(x);
+                }
+            }
+            let shared = types
+                .iter()
+                .all(|t| t.category == first.category)
+                .then(|| first.category.clone())
+                .flatten()
+                .unwrap_or_default();
+            let names: Vec<&str> = types.iter().map(|t| t.name.as_str()).collect();
+            let (base, name) = match names.len() {
+                1 => (first.slug.to_string(), first.name.clone()),
+                2 | 3 => {
+                    let (last, rest) = names.split_last().unwrap();
+                    (
+                        types
+                            .iter()
+                            .map(|t| t.slug.as_str())
+                            .collect::<Vec<_>>()
+                            .join("_"),
+                        format!("{} and {last}", rest.join(", ")),
+                    )
+                }
+                _ => (
+                    format!("{}_group", first.slug),
+                    format!("{} group", first.name),
+                ),
+            };
+            (base, name, shared)
+        } else if let Some(l) = frag.tiles.keys().next() {
+            layer_named(l)
+        } else if let Some(l) = frag.grids.keys().next() {
+            layer_named(l)
+        } else {
+            ("notes".to_string(), "Notes".to_string(), String::new())
+        };
+        for placements in frag.tiles.values() {
+            for p in placements {
+                tag(p.tileset.as_str());
+            }
+        }
+        let mut slug = base.clone();
+        let mut n = 1;
+        while project.assembly(&slug).is_some() {
+            n += 1;
+            slug = format!("{base}_{n}");
+        }
+        SaveDialog {
+            slug,
+            name,
+            category,
+            tags: tags.join(", "),
+            ..Default::default()
+        }
+    }
+
     /// What Save would save, or why it can't.
     pub fn info(&self, project: &Project) -> Result<(AssemblyInfo, bool), String> {
         let slug = Slug::new(self.slug.trim()).map_err(|_| {
@@ -566,19 +657,34 @@ pub fn save_dialog(ctx: &egui::Context, st: &mut EditorState) {
                 .spacing([8.0, 6.0])
                 .show(ui, |ui| {
                     ui.label("Slug");
-                    ui.add(egui::TextEdit::singleline(&mut d.slug).hint_text("doorway"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.slug)
+                            .hint_text("lowercase_and_underscores"),
+                    );
                     ui.end_row();
                     ui.label("Name");
-                    ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("Doorway"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.name).hint_text("Shown in the Library"),
+                    );
                     ui.end_row();
                     ui.label("Category");
-                    ui.add(egui::TextEdit::singleline(&mut d.category).hint_text("Puzzle/Doors"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.category)
+                            .hint_text("Optional: Folder/Subfolder"),
+                    );
                     ui.end_row();
                     ui.label("Tags");
-                    ui.add(egui::TextEdit::singleline(&mut d.tags).hint_text("door, puzzle"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.tags)
+                            .hint_text("Optional, comma-separated"),
+                    );
                     ui.end_row();
                     ui.label("Doc");
-                    ui.add(egui::TextEdit::multiline(&mut d.doc).desired_rows(2));
+                    ui.add(
+                        egui::TextEdit::multiline(&mut d.doc)
+                            .hint_text("Optional")
+                            .desired_rows(2),
+                    );
                     ui.end_row();
                 });
             if doc.project.assembly(d.slug.trim()).is_some() {

@@ -148,18 +148,24 @@ impl EditorApp {
         }
     }
 
-    /// Ctrl+Shift+S: the dialog, when there is something to save.
+    /// Ctrl+Shift+S: the dialog, when there is something to save, with a
+    /// slug, name, category and tags suggested from the selection.
     pub(super) fn open_save_assembly(&mut self) {
         let Some(doc) = self.st.doc.as_ref() else {
             return;
         };
-        if let Err(e) = crate::clipboard::copy_request(doc, &self.st.view) {
-            self.st
+        match crate::clipboard::copy_selection(doc, &self.st.view) {
+            Ok(copied) => {
+                self.st.library.dialog = Some(crate::library::SaveDialog::suggest(
+                    &doc.project,
+                    &copied.fragment,
+                ));
+            }
+            Err(e) => self
+                .st
                 .view
-                .set_status(e.replacen("Nothing to copy", "Nothing to save", 1), true);
-            return;
+                .set_status(e.replacen("Nothing to copy", "Nothing to save", 1), true),
         }
-        self.st.library.dialog = Some(crate::library::SaveDialog::default());
     }
 
     /// The dialog's Save: what Copy would take, as assembly `info`.
@@ -216,7 +222,10 @@ impl EditorApp {
             .cancel_gesture(self.st.view.tool, &mut self.st.tool_events);
         self.st.view.paste = Some(crate::clipboard::PasteGhost::assembly(slug.clone(), frag));
         self.st.view.set_status(
-            format!("Place assembly {slug}: click on the map; X, Y and R turn it, Escape cancels"),
+            format!(
+                "Place assembly {slug}: click on the map (Shift+click places more); X, Y and R \
+                 turn it, Escape cancels"
+            ),
             false,
         );
     }
@@ -339,7 +348,11 @@ impl EditorApp {
                 .as_ref()
                 .and_then(|g| g.at)
                 .ok_or("place needs arm, level and origin")?;
-            return self.status_step(Action::PasteAt { level: ix, origin });
+            return self.status_step(Action::PasteAt {
+                level: ix,
+                origin,
+                keep: false,
+            });
         }
         Ok(())
     }

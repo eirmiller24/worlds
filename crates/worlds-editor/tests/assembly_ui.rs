@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use worlds_core::Flip;
+use worlds_editor::app::actions::Action;
 use worlds_editor::app::{AppOptions, EditorApp};
 use worlds_editor::headless::Headless;
 
@@ -117,8 +118,18 @@ fn save_an_assembly_then_place_it_turned_from_the_library() {
             egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
         ),
     );
-    assert!(app.st.library.dialog.is_some(), "the dialog is open");
-    app.st.library.dialog = None;
+    // Open, and filled in from the selection: a room entry and a torch.
+    let d = app.st.library.dialog.take().expect("the dialog is open");
+    assert!(
+        d.slug.contains("room_entry") && d.slug.contains("torch"),
+        "slug from the types: {}",
+        d.slug
+    );
+    assert!(d.name.contains("RoomEntry") && d.name.contains(" and ") && d.name.contains("Torch"));
+    for t in ["room", "object", "puzzle"] {
+        assert!(d.tags.contains(t), "tags from both types: {}", d.tags);
+    }
+    assert_eq!(d.category, "", "the types share no category");
 
     // (The map and the Levels pane have made their level thumbnails by
     // now: the same cache.)
@@ -200,11 +211,27 @@ fn save_an_assembly_then_place_it_turned_from_the_library() {
             .count()
     };
     let before = count(&app);
+    // A Shift+click places it and keeps it armed for the next one.
+    app.st.actions.push(Action::PasteAt {
+        level: 0,
+        origin: [6, 10],
+        keep: true,
+    });
+    frame(&mut app, vec![]);
+    assert_eq!(count(&app), before + 2);
+    let g = app
+        .st
+        .view
+        .paste
+        .as_ref()
+        .expect("still armed after Shift+click");
+    assert_eq!(g.assembly.as_ref().map(|s| s.as_str()), Some("torch_pair"));
+    // A plain click places it and disarms.
     steps(
         &mut app,
-        r#"[{ "ui": "library", "level": "crevasse", "origin": [6, 10], "place": true }]"#,
+        r#"[{ "ui": "library", "level": "crevasse", "origin": [10, 10], "place": true }]"#,
     );
-    assert_eq!(count(&app), before + 2);
+    assert_eq!(count(&app), before + 4);
     assert!(app.st.view.paste.is_none());
 
     // The selection transforms and arranging levels, as script steps.

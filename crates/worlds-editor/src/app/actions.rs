@@ -74,10 +74,12 @@ pub enum Action {
         text: Option<String>,
         in_place: bool,
     },
-    /// The click that lands the armed paste ghost.
+    /// The click that lands the armed paste ghost. `keep` (Shift) leaves
+    /// it armed for the next click.
     PasteAt {
         level: crate::doc::LevelIx,
         origin: [i64; 2],
+        keep: bool,
     },
     /// Crop the active level to the bounding box of its content.
     CropLevel,

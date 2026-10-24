@@ -1082,7 +1082,12 @@ impl Viewport {
                     && !hand
                     && let Some((ix, origin)) = p.at
                 {
-                    cx.actions.push(Action::PasteAt { level: ix, origin });
+                    // Shift keeps the ghost armed for the next click.
+                    cx.actions.push(Action::PasteAt {
+                        level: ix,
+                        origin,
+                        keep: modifiers.shift,
+                    });
                 }
             }
         } else if escape && self.gesture.is_none() && cx.view.drawing.is_some() {
@@ -1248,7 +1253,7 @@ impl Viewport {
                     crate::arrange::ghost_badge(
                         &painter,
                         to_screen([r.min[0], r.max[1]]),
-                        p.transform.describe(),
+                        p.transform.flip,
                         cx.accent,
                     );
                 }

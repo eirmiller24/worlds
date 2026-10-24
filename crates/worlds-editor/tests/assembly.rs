@@ -425,6 +425,128 @@ fn the_save_dialog_checks_slug_name_and_replace() {
 }
 
 #[test]
+fn the_save_dialog_is_filled_in_from_the_selection() {
+    let mut r = Rig::new();
+    let copy = |r: &Rig, sel: CopySelection| fragment::copy(&r.doc.project, &sel).unwrap();
+    // One entity type: its slug, name, category and tags.
+    let one = copy(
+        &r,
+        CopySelection {
+            level: Some(slug("crevasse")),
+            entities: vec![id("doorcrev22")],
+            ..Default::default()
+        },
+    );
+    let d = SaveDialog::suggest(&r.doc.project, &one);
+    assert_eq!(
+        (
+            d.slug.as_str(),
+            d.name.as_str(),
+            d.category.as_str(),
+            d.tags.as_str()
+        ),
+        (
+            "locked_door",
+            "Locked Door",
+            "Puzzle/Doors",
+            "object, puzzle"
+        )
+    );
+    // Two types: both slugs, "A and B", no category (they differ), all tags.
+    let two = copy(
+        &r,
+        CopySelection {
+            level: Some(slug("crevasse")),
+            entities: vec![id("doorcrev22"), id("btncrev222")],
+            ..Default::default()
+        },
+    );
+    let d = SaveDialog::suggest(&r.doc.project, &two);
+    assert_eq!(d.slug, "locked_door_floor_button");
+    assert_eq!(d.name, "Locked Door and Floor Button");
+    assert_eq!(d.category, "");
+    assert_eq!(d.tags, "object, puzzle");
+    // Tiles alone: the layer's name, the tilesets as tags.
+    let tiles = copy(
+        &r,
+        CopySelection {
+            level: Some(slug("crevasse")),
+            tiles: [(slug("decor_back"), vec![[4, 1], [4, 2], [5, 2]])]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        },
+    );
+    assert!(!tiles.tiles.is_empty());
+    let d = SaveDialog::suggest(&r.doc.project, &tiles);
+    assert_eq!(
+        (d.slug.as_str(), d.name.as_str()),
+        ("decor_back", "Decor (back)")
+    );
+    assert!(
+        d.tags.contains("castle_main") && d.tags.contains("ssw_set5"),
+        "{}",
+        d.tags
+    );
+    // A taken slug counts up, so Save needs no Replace by accident.
+    let (info, _) = d.info(&r.doc.project).unwrap();
+    r.apply(Command::SetAssembly {
+        assembly: Assembly::new(info, tiles.clone()),
+    })
+    .unwrap();
+    assert_eq!(
+        SaveDialog::suggest(&r.doc.project, &tiles).slug,
+        "decor_back_2"
+    );
+    // And the suggestion is always a valid save.
+    assert!(
+        SaveDialog::suggest(&r.doc.project, &two)
+            .info(&r.doc.project)
+            .is_ok()
+    );
+}
+
+#[test]
+fn the_turn_glyph_turns_as_a_tile_does() {
+    use worlds_editor::arrange::glyph_strokes;
+    let upright = glyph_strokes(None);
+    let at = |s: &Vec<Vec<[f32; 2]>>, i: usize, j: usize| s[i][j];
+    // X mirrors every point left-right.
+    let x = glyph_strokes(Some(Flip::X));
+    for (i, s) in upright.iter().enumerate() {
+        for (j, p) in s.iter().enumerate() {
+            let q = at(&x, i, j);
+            assert!((q[0] - (1.0 - p[0])).abs() < 1e-6 && (q[1] - p[1]).abs() < 1e-6);
+        }
+    }
+    // R (xt) is a quarter turn clockwise: (x, y) -> (1 - y, x).
+    let r = glyph_strokes(Some(Flip::XT));
+    for (i, s) in upright.iter().enumerate() {
+        for (j, p) in s.iter().enumerate() {
+            let q = at(&r, i, j);
+            assert!((q[0] - (1.0 - p[1])).abs() < 1e-6 && (q[1] - p[0]).abs() < 1e-6);
+        }
+    }
+    // The eight turns are eight different pictures.
+    let all: Vec<_> = [
+        None,
+        Some(Flip::X),
+        Some(Flip::Y),
+        Some(Flip::XY),
+        Some(Flip::T),
+        Some(Flip::XT),
+        Some(Flip::YT),
+        Some(Flip::XYT),
+    ]
+    .into_iter()
+    .map(|f| format!("{:?}", glyph_strokes(f)))
+    .collect();
+    for (i, a) in all.iter().enumerate() {
+        assert!(all[..i].iter().all(|b| b != a));
+    }
+}
+
+#[test]
 fn thumbnails_are_rendered_once_into_the_cache() {
     let r = Rig::new();
     let frag = fragment::copy(

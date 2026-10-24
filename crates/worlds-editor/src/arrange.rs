@@ -155,9 +155,9 @@ pub fn plan_arrange(doc: &Document, view: &ViewState, op: ArrangeOp) -> Result<C
 }
 
 /// The tile stamp's X, Y, R in the Paint strip (a tiles layer): a click is
-/// the key, and the stamp's turn in words follows (accented when it isn't
-/// as picked). A separate function so the strip's own layout stays the
-/// strip's.
+/// the key, and a capital R turned as the stamp is follows (accented when
+/// it isn't as picked; hover for the words). A separate function so the
+/// strip's own layout stays the strip's.
 pub fn turn_buttons(
     ui: &mut egui::Ui,
     flip: Option<worlds_core::Flip>,
@@ -168,10 +168,10 @@ pub fn turn_buttons(
     ui.separator();
     ui.weak("Turn");
     for (label, op, tip) in [
-        ("X", Flip::X, "Mirror the tile stamp left-right (X)"),
-        ("Y", Flip::Y, "Mirror the tile stamp top-bottom (Y)"),
+        ("↔", Flip::X, "Mirror the tile stamp left-right (X)"),
+        ("↕", Flip::Y, "Mirror the tile stamp top-bottom (Y)"),
         (
-            "R",
+            "↻",
             Flip::XT,
             "Rotate the tile stamp 90° clockwise (R; square tiles only)",
         ),
@@ -184,24 +184,85 @@ pub fn turn_buttons(
             actions.push(Action::Turn(op));
         }
     }
+    let side = ui.spacing().interact_size.y;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
+    let color = if flip.is_some() {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    turn_glyph(ui.painter(), rect.shrink(3.0), flip, color);
     let what = match flip {
         None => "as picked",
         f => crate::clipboard::describe_flip(f),
     };
-    if flip.is_some() {
-        ui.colored_label(ui.visuals().selection.stroke.color, what);
-    } else {
-        ui.weak(what);
+    resp.on_hover_text(format!("The stamp is {what}"));
+}
+
+/// A capital R in the unit square (y down), as strokes, turned by `flip`
+/// the way a tile is: `t` swaps x and y first, then `x` mirrors
+/// left-right and `y` top-bottom. The letter is asymmetric both ways, so
+/// each of the eight turns reads differently: mirrored left-right its
+/// bowl faces left, a quarter turn clockwise lays it on its back.
+pub fn glyph_strokes(flip: Option<worlds_core::Flip>) -> Vec<Vec<[f32; 2]>> {
+    let bits = worlds_core::Flip::bits_of(flip);
+    let turn = |[x, y]: [f32; 2]| {
+        let [x, y] = if bits & 4 != 0 { [y, x] } else { [x, y] };
+        [
+            if bits & 1 != 0 { 1.0 - x } else { x },
+            if bits & 2 != 0 { 1.0 - y } else { y },
+        ]
+    };
+    let strokes: [&[[f32; 2]]; 3] = [
+        // The stem.
+        &[[0.2, 0.05], [0.2, 0.95]],
+        // The bowl: across the top, round the right, back to the stem.
+        &[
+            [0.2, 0.05],
+            [0.6, 0.05],
+            [0.76, 0.1],
+            [0.84, 0.26],
+            [0.76, 0.42],
+            [0.6, 0.48],
+            [0.2, 0.48],
+        ],
+        // The leg.
+        &[[0.5, 0.48], [0.84, 0.95]],
+    ];
+    strokes
+        .iter()
+        .map(|s| s.iter().map(|&p| turn(p)).collect())
+        .collect()
+}
+
+/// Draw the turned R of [`glyph_strokes`] into `rect`.
+pub fn turn_glyph(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    flip: Option<worlds_core::Flip>,
+    color: egui::Color32,
+) {
+    let stroke = egui::Stroke::new((rect.width() * 0.13).max(1.0), color);
+    for s in glyph_strokes(flip) {
+        let pts = s
+            .iter()
+            .map(|p| rect.min + egui::vec2(p[0] * rect.width(), p[1] * rect.height()))
+            .collect();
+        painter.add(egui::Shape::line(pts, stroke));
     }
 }
 
-/// The paste ghost's turn in words, under its bottom-left corner.
-pub fn ghost_badge(painter: &egui::Painter, at: egui::Pos2, what: &str, accent: egui::Color32) {
-    let text = format!("⟳ {what} (X, Y, R)");
-    let g = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), egui::Color32::WHITE);
-    let r = egui::Rect::from_min_size(at + egui::vec2(0.0, 4.0), g.size() + egui::vec2(8.0, 4.0));
+/// The paste ghost's turn, under its bottom-left corner: a capital R
+/// turned as the ghost is, on an accent tab.
+pub fn ghost_badge(
+    painter: &egui::Painter,
+    at: egui::Pos2,
+    flip: Option<worlds_core::Flip>,
+    accent: egui::Color32,
+) {
+    let r = egui::Rect::from_min_size(at + egui::vec2(0.0, 4.0), egui::vec2(22.0, 22.0));
     painter.rect_filled(r, 3.0, accent.gamma_multiply(0.85));
-    painter.galley(r.min + egui::vec2(4.0, 2.0), g, egui::Color32::WHITE);
+    turn_glyph(painter, r.shrink(4.0), flip, egui::Color32::WHITE);
 }
 
 /// The map's context menu entries for the selection: Save as assembly,

@@ -75,8 +75,8 @@ pub fn describe_flip(flip: Option<Flip>) -> &'static str {
         Some(Flip::XY) => "a half turn",
         Some(Flip::XT) => "a quarter turn",
         Some(Flip::YT) => "three quarter turns",
-        Some(Flip::T) => "mirrored on its diagonal",
-        Some(Flip::XYT) => "mirrored on its other diagonal",
+        Some(Flip::T) => "a quarter turn, mirrored left-right",
+        Some(Flip::XYT) => "three quarter turns, mirrored left-right",
     }
 }
 
