@@ -175,6 +175,41 @@ pub enum UiStep {
     /// `"ui": "project"`: the Project pane (layers, tilesets, settings),
     /// and its + Layer and + Tileset buttons.
     Project(ProjectStep),
+    /// `"ui": "copy"`: Ctrl+C on the selection and the grid marquee.
+    Copy(CopyStep),
+    /// `"ui": "cut"`: Ctrl+X.
+    Cut(CopyStep),
+    /// `"ui": "paste"`: Ctrl+V (the ghost, pinned where the step says, and
+    /// optionally placed) or Ctrl+Shift+V.
+    Paste(PasteStep),
+}
+
+/// `{ "ui": "copy" }` / `{ "ui": "cut" }`: the key, exactly as pressed
+/// ([`crate::clipboard::copy_selection`]); the fragment becomes the
+/// editor's clipboard. Nothing to copy is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopyStep {}
+
+/// `{ "ui": "paste", "fragment"?: {...}, "level"?: slug, "origin"?: [x, y],
+/// "place"?: bool, "in_place"?: bool }`: Ctrl+V with `fragment` (default:
+/// the editor's clipboard, from the last copy). The ghost is armed and,
+/// with `level` and `origin` (the fragment's top-left corner in cells of
+/// the project grid), pinned there so the picture shows it; `place: true`
+/// then lands it as a click does. `in_place: true` is Ctrl+Shift+V instead.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasteStep {
+    #[serde(default)]
+    pub fragment: Option<serde_json::Value>,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub origin: Option<[i64; 2]>,
+    #[serde(default)]
+    pub place: bool,
+    #[serde(default)]
+    pub in_place: bool,
 }
 
 /// `{ "ui": "project", "add_layer"?: kind, "add_tileset"?: path,

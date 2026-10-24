@@ -52,15 +52,29 @@ pub struct Ghost {
 impl Ghost {
     /// Compute the ghost of `p` against `project` (the document now).
     pub fn compute(project: &Project, p: &PendingBatch) -> Ghost {
+        Ghost::of_commands(project, &p.id, &p.label, &p.client, &p.commands, &p.changes)
+    }
+
+    /// The ghost of any commands (a paste on its way): what they would
+    /// change in `project`. `changes` is what to outline if they no longer
+    /// apply.
+    pub fn of_commands(
+        project: &Project,
+        batch: &str,
+        label: &str,
+        client: &str,
+        commands: &[Command],
+        changes: &[Change],
+    ) -> Ghost {
         let mut scratch = project.clone();
         let applied = scratch.apply(Command::Batch {
-            label: p.label.clone(),
-            commands: p.commands.clone(),
+            label: label.to_string(),
+            commands: commands.to_vec(),
         });
         let mut g = Ghost {
-            batch: p.id.clone(),
-            label: p.label.clone(),
-            client: p.client.clone(),
+            batch: batch.to_string(),
+            label: label.to_string(),
+            client: client.to_string(),
             fills: Vec::new(),
             outlines: Vec::new(),
             boxes: Vec::new(),
@@ -70,7 +84,7 @@ impl Ghost {
         match applied {
             Ok(a) => {
                 let changes = if a.changes.is_empty() {
-                    p.changes.clone()
+                    changes.to_vec()
                 } else {
                     a.changes
                 };
@@ -80,7 +94,7 @@ impl Ghost {
             }
             Err(e) => {
                 g.error = Some(e.to_string());
-                for c in &p.changes {
+                for c in changes {
                     g.add(project, project, c, false);
                 }
             }

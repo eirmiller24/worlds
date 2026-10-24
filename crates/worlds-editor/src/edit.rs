@@ -2179,6 +2179,12 @@ fn marquee_select(
     } else {
         crate::annot::marquee_items(cx.doc, cx.view, level, &r)
     };
+    // With an int_grid layer active, the marquee's cells are what Copy
+    // takes from it.
+    let cells = level.and_then(|ix| crate::clipboard::grid_marquee(cx.doc, cx.view, ix, &r));
+    if cells.is_some() || !add {
+        cx.view.grid_marquee = cells;
+    }
     if add {
         for i in hits {
             cx.view.selection.add(i);

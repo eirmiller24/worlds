@@ -60,6 +60,25 @@ pub enum Action {
     ShowNotes,
     /// The Project pane on a section (layers, tilesets, settings).
     OpenProject(super::project_pane::Section),
+    /// Duplicate a level (its context menu): the copy goes just right of
+    /// it and becomes the active level and the selection.
+    DuplicateLevel(crate::doc::LevelIx),
+    /// Ctrl+C: copy the selection (and the grid marquee) as a fragment.
+    Copy,
+    /// Ctrl+X: copy, then remove what was copied.
+    Cut,
+    /// Ctrl+V: paste the fragment in `text` (the system clipboard; `None`:
+    /// the editor's own), as a ghost to place, or with `in_place`
+    /// (Ctrl+Shift+V) at its original cells.
+    Paste {
+        text: Option<String>,
+        in_place: bool,
+    },
+    /// The click that lands the armed paste ghost.
+    PasteAt {
+        level: crate::doc::LevelIx,
+        origin: [i64; 2],
+    },
 }
 
 impl Action {
@@ -90,6 +109,24 @@ impl Action {
                 Action::DuplicateSelection,
             ),
             ("Delete selection".into(), "Del", Action::DeleteSelection),
+            ("Copy selection".into(), "Ctrl+C", Action::Copy),
+            ("Cut selection".into(), "Ctrl+X", Action::Cut),
+            (
+                "Paste".into(),
+                "Ctrl+V",
+                Action::Paste {
+                    text: None,
+                    in_place: false,
+                },
+            ),
+            (
+                "Paste in place".into(),
+                "Ctrl+Shift+V",
+                Action::Paste {
+                    text: None,
+                    in_place: true,
+                },
+            ),
             (
                 "Select all entities in the level".into(),
                 "Ctrl+A",

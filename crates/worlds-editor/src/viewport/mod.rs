@@ -744,6 +744,31 @@ impl Viewport {
             } else if resp.hovered() && pressed && !hand {
                 pick_at(doc, cx.view, level_under, pointer_world, cam.zoom);
             }
+        } else if cx.view.paste.is_some() && self.gesture.is_none() {
+            // An armed paste: the ghost follows the pointer (centred on
+            // the project cell under it, in the level there) and a click
+            // lands it, whatever the tool; Escape cancels it.
+            if escape {
+                cx.view.paste = None;
+                cx.view.set_status("Paste cancelled", false);
+            } else if let Some(p) = cx.view.paste.as_mut() {
+                if !p.pinned
+                    && resp.hovered()
+                    && let Some(wp) = pointer_world
+                    && let Some(ix) = active
+                        .filter(|&a| a < doc.levels.len() && level_wrect(doc, a).contains(wp))
+                        .or(level_under)
+                {
+                    p.at = Some((ix, p.origin_under(doc, ix, wp)));
+                }
+                if resp.hovered()
+                    && pressed
+                    && !hand
+                    && let Some((ix, origin)) = p.at
+                {
+                    cx.actions.push(Action::PasteAt { level: ix, origin });
+                }
+            }
         } else if escape && self.gesture.is_none() && cx.view.drawing.is_some() {
             // Escape cancels the drawing (or measurement) first.
             crate::annot::cancel_drawing(cx.view);
@@ -862,9 +887,17 @@ impl Viewport {
         if tool == Tool::Select
             && !hand
             && resp.double_clicked()
+            && cx.view.paste.is_none()
             && let Some(ix) = level_under
         {
             self.pending_fit = Some(Fit::Level(ix));
+        }
+        // The paste ghost where a click would land it.
+        if let Some(p) = cx.view.paste.as_mut() {
+            p.refresh(doc);
+            if let Some((_, g)) = &p.ghost {
+                g.draw(&painter, &to_screen, cx.accent);
+            }
         }
 
         let hover_ix = active
@@ -1052,6 +1085,27 @@ impl Viewport {
             }
             _ => {}
         }
+        // The cells Copy takes from the active int_grid layer (the last
+        // marquee on it), dashed.
+        if let Some(m) = &cx.view.grid_marquee
+            && cx
+                .view
+                .active_layer
+                .and_then(|l| doc.project.layers.get(l))
+                .is_some_and(|d| d.slug == m.layer)
+            && let Some(ix) = doc.level_ix_by_id(&m.level)
+        {
+            let lr = level_wrect(doc, ix);
+            let g = doc.project.grid_size as f64;
+            let r = WRect::from_pos_size(
+                [
+                    lr.min[0] + m.rect.x as f64 * g,
+                    lr.min[1] + m.rect.y as f64 * g,
+                ],
+                [m.rect.w as f64 * g, m.rect.h as f64 * g],
+            );
+            crate::ghost::dashed_rect(&painter, to_srect(&r), Stroke::new(1.5, cx.accent));
+        }
 
         // The other levels' names (with tiles drawn; the flat view centres
         // every name): a quiet label in each one's top-left corner where it
@@ -1230,6 +1284,10 @@ impl Viewport {
                 if ui.button(format!("Frame {slug}")).clicked() {
                     cx.view.active_level = Some(ix);
                     cx.actions.push(Action::FitLevel);
+                    ui.close();
+                }
+                if ui.button(format!("Duplicate {slug}")).clicked() {
+                    cx.actions.push(Action::DuplicateLevel(ix));
                     ui.close();
                 }
                 if ui.button(format!("Delete {slug}…")).clicked() {
@@ -1829,6 +1887,11 @@ pub fn select_press(
     p: SelectPress,
 ) -> Option<(LevelIx, Grab)> {
     use crate::view::SelItem;
+    // A new press drops the grid marquee (a marquee release sets it
+    // again); Ctrl, which adds to the selection, keeps it.
+    if !p.add {
+        view.grid_marquee = None;
+    }
     if let (true, Some(ix)) = (p.on_tab, p.active) {
         let me = SelItem::Level(doc.ids[ix].clone());
         if view.selection.contains(&me) && view.selection.items.len() > 1 {

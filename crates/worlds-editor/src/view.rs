@@ -80,6 +80,12 @@ pub struct ViewState {
     pub zoom: f64,
     /// A newly added note whose title the Inspector should focus.
     pub focus_title: Option<Id>,
+    /// A paste waiting for its click: the fragment follows the pointer as
+    /// a ghost; Escape cancels ([`crate::clipboard::PasteGhost`]).
+    pub paste: Option<crate::clipboard::PasteGhost>,
+    /// The last Select marquee in a level while an int_grid layer was
+    /// active: the cells Copy takes from that layer.
+    pub grid_marquee: Option<crate::clipboard::GridMarquee>,
 }
 
 impl Default for ViewState {
@@ -103,6 +109,8 @@ impl Default for ViewState {
             drawing: None,
             zoom: 1.0,
             focus_title: None,
+            paste: None,
+            grid_marquee: None,
         }
     }
 }

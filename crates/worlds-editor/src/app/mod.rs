@@ -611,6 +611,9 @@ pub struct EditorApp {
     recover_reports: usize,
     /// Window focus last frame, to notice a focus loss.
     was_focused: Option<bool>,
+    /// The last fragment copied or pasted: what Ctrl+V pastes when the
+    /// system clipboard can't be read (and `--script`'s paste).
+    clipboard: Option<worlds_core::fragment::Fragment>,
 }
 
 impl EditorApp {
@@ -668,6 +671,7 @@ impl EditorApp {
             locked_out: None,
             recover_reports: 0,
             was_focused: None,
+            clipboard: None,
         }
     }
 
@@ -956,7 +960,58 @@ impl EditorApp {
             UiStep::Delete(d) => self.delete_step(d.confirm),
             UiStep::Layers(l) => self.layers_step(l),
             UiStep::Project(p) => self.project_step(p),
+            UiStep::Copy(_) => self.status_step(Action::Copy),
+            UiStep::Cut(_) => self.status_step(Action::Cut),
+            UiStep::Paste(p) => self.paste_step(p),
         }
+    }
+
+    /// Run an action as a script step: an error status it leaves is an
+    /// error.
+    fn status_step(&mut self, a: Action) -> Result<(), String> {
+        self.st.view.status = None;
+        self.run(a);
+        match &self.st.view.status {
+            Some(m) if m.error => Err(m.text.clone()),
+            _ => Ok(()),
+        }
+    }
+
+    /// `"ui": "paste"`: see [`crate::script::PasteStep`].
+    fn paste_step(&mut self, p: &crate::script::PasteStep) -> Result<(), String> {
+        let text = p.fragment.as_ref().map(|f| f.to_string());
+        if p.fragment.is_none() && self.clipboard.is_none() {
+            return Err("nothing copied yet: give fragment, or copy first".into());
+        }
+        self.status_step(Action::Paste {
+            text,
+            in_place: p.in_place,
+        })?;
+        if p.in_place {
+            return Ok(());
+        }
+        if let Some(level) = &p.level {
+            let doc = self.st.doc.as_ref().ok_or("no project open")?;
+            let ix = doc
+                .level_ix(level)
+                .ok_or_else(|| format!("no level {level:?}"))?;
+            let origin = p.origin.ok_or("level goes with origin")?;
+            if let Some(g) = self.st.view.paste.as_mut() {
+                g.at = Some((ix, origin));
+                g.pinned = true;
+            }
+        }
+        if p.place {
+            let (ix, origin) = self
+                .st
+                .view
+                .paste
+                .as_ref()
+                .and_then(|g| g.at)
+                .ok_or("place needs level and origin")?;
+            return self.status_step(Action::PasteAt { level: ix, origin });
+        }
+        Ok(())
     }
 
     /// `"ui": "project"`: the Project pane, through the functions its
@@ -2354,10 +2409,206 @@ impl EditorApp {
             commands: plan.commands,
         }) {
             Ok(()) => {
-                self.st.view.selection.set(plan.selection);
+                let mut sel = plan.selection;
+                // Level copies: selected, the first one active.
+                if let Some(doc) = &self.st.doc {
+                    let copies: Vec<crate::doc::LevelIx> = plan
+                        .levels
+                        .iter()
+                        .filter_map(|s| doc.level_ix(s.as_str()))
+                        .collect();
+                    sel.extend(
+                        copies
+                            .iter()
+                            .map(|&ix| crate::view::SelItem::Level(doc.ids[ix].clone())),
+                    );
+                    if let Some(&first) = copies.first() {
+                        self.st.view.active_level = Some(first);
+                    }
+                }
+                self.st.view.selection.set(sel);
                 if let Some(m) = plan.message {
                     self.st.view.set_status(m, false);
                 }
+            }
+            Err(e) => self.st.view.set_status(e, true),
+        }
+    }
+
+    /// A level's Duplicate (its context menu, the level inspector): a copy
+    /// just right of it under a fresh slug, which becomes the active level
+    /// and the selection. One entry.
+    fn duplicate_level(&mut self, ix: crate::doc::LevelIx) {
+        let Some(doc) = self.st.doc.as_ref().filter(|d| ix < d.levels.len()) else {
+            return;
+        };
+        let (cmd, slug) = crate::clipboard::duplicate_level_command(doc, ix, &[]);
+        if let Err(e) = self.apply_command(cmd) {
+            self.st.view.set_status(e, true);
+            return;
+        }
+        if let Some(doc) = &self.st.doc
+            && let Some(new) = doc.level_ix(slug.as_str())
+        {
+            self.st.view.active_level = Some(new);
+            self.st
+                .view
+                .selection
+                .set([crate::view::SelItem::Level(doc.ids[new].clone())]);
+            self.st
+                .view
+                .set_status(format!("Duplicated as {slug}"), false);
+        }
+    }
+
+    /// Ctrl+C (and the first half of Ctrl+X): the selection and the grid
+    /// marquee as a fragment, to the system clipboard (as JSON text) and to
+    /// the editor's own.
+    fn copy(&mut self, ctx: Option<&egui::Context>) -> Option<crate::clipboard::Copied> {
+        let doc = self.st.doc.as_ref()?;
+        match crate::clipboard::copy_selection(doc, &self.st.view) {
+            Ok(c) => {
+                if let (Some(ctx), Ok(text)) = (ctx, serde_json::to_string(&c.fragment)) {
+                    ctx.copy_text(text);
+                }
+                self.clipboard = Some(c.fragment.clone());
+                self.st.view.set_status(c.message.clone(), false);
+                Some(c)
+            }
+            Err(e) => {
+                self.st.view.set_status(e, true);
+                None
+            }
+        }
+    }
+
+    /// Ctrl+X: copy, then remove what was copied (one entry).
+    fn cut(&mut self, ctx: Option<&egui::Context>) {
+        let Some(doc) = self.st.doc.as_ref() else {
+            return;
+        };
+        let (copied, commands, label) = match crate::clipboard::cut_selection(doc, &self.st.view) {
+            Ok(x) => x,
+            Err(e) => {
+                self.st.view.set_status(e, true);
+                return;
+            }
+        };
+        if let (Some(ctx), Ok(text)) = (ctx, serde_json::to_string(&copied.fragment)) {
+            ctx.copy_text(text);
+        }
+        self.clipboard = Some(copied.fragment);
+        if commands.is_empty() {
+            self.st.view.set_status(copied.message, false);
+            return;
+        }
+        match self.apply_command(Command::Batch { label, commands }) {
+            Ok(()) => {
+                self.st.view.selection.clear();
+                self.st.view.grid_marquee = None;
+                self.st
+                    .view
+                    .set_status(copied.message.replacen("Copied", "Cut", 1), false);
+            }
+            Err(e) => self.st.view.set_status(e, true),
+        }
+    }
+
+    /// Ctrl+V (or Ctrl+Shift+V, `in_place`): the fragment in `text` (the
+    /// system clipboard), else the editor's own clipboard. A paste follows
+    /// the pointer as a ghost until a click; in place it lands at once on
+    /// its original cells.
+    fn paste(&mut self, text: Option<String>, in_place: bool) {
+        let frag = match text.as_deref().map(crate::clipboard::parse) {
+            Some(Ok(Some(f))) => f,
+            Some(Err(e)) => {
+                self.st.view.set_status(e, true);
+                return;
+            }
+            Some(Ok(None)) | None => match &self.clipboard {
+                Some(f) if text.is_none() => f.clone(),
+                _ => {
+                    self.st
+                        .view
+                        .set_status("The clipboard holds no Worlds fragment", true);
+                    return;
+                }
+            },
+        };
+        self.clipboard = Some(frag.clone());
+        if in_place {
+            let target = self
+                .st
+                .doc
+                .as_ref()
+                .and_then(|d| crate::clipboard::in_place_target(d, &self.st.view, &frag));
+            match target {
+                Some((ix, origin)) => self.paste_at(Some(frag), ix, origin),
+                None => self.st.view.set_status("No level to paste in", true),
+            }
+            return;
+        }
+        self.st
+            .viewport
+            .cancel_gesture(self.st.view.tool, &mut self.st.tool_events);
+        let n = frag.item_count();
+        self.st.view.paste = Some(crate::clipboard::PasteGhost::new(frag));
+        self.st.view.set_status(
+            format!(
+                "Paste {n} item{}: click to place, Escape cancels",
+                if n == 1 { "" } else { "s" }
+            ),
+            false,
+        );
+    }
+
+    /// Land a paste: `frag`, or the armed ghost's fragment, with its origin
+    /// at `origin` in level `ix`. One entry; what it made becomes the
+    /// selection and `ix` the active level; problems go to the status bar.
+    fn paste_at(
+        &mut self,
+        frag: Option<worlds_core::fragment::Fragment>,
+        ix: crate::doc::LevelIx,
+        origin: [i64; 2],
+    ) {
+        let Some(doc) = self.st.doc.as_ref().filter(|d| ix < d.levels.len()) else {
+            return;
+        };
+        let frag = match frag {
+            Some(f) => f,
+            None => match &self.st.view.paste {
+                Some(p) => p.fragment().into_owned(),
+                None => return,
+            },
+        };
+        let plan = match crate::clipboard::paste_plan(doc, &frag, ix, origin) {
+            Ok(p) => p,
+            Err(e) => {
+                self.st.view.set_status(e, true);
+                return;
+            }
+        };
+        self.st.view.paste = None;
+        if plan.commands.is_empty() {
+            let why = plan.problems.join("; ");
+            self.st
+                .view
+                .set_status(format!("Nothing pasted: {why}"), true);
+            return;
+        }
+        let label = plan.label.clone();
+        match self.apply_command(plan.command()) {
+            Ok(()) => {
+                if let Some(doc) = &self.st.doc {
+                    let sel = crate::clipboard::pasted_selection(doc, &plan, ix);
+                    self.st.view.selection.set(sel);
+                }
+                self.st.view.active_level = Some(ix);
+                let msg = match plan.problems.as_slice() {
+                    [] => label,
+                    ps => format!("{label}; {}", ps.join("; ")),
+                };
+                self.st.view.set_status(msg, false);
             }
             Err(e) => self.st.view.set_status(e, true),
         }
@@ -2616,6 +2867,19 @@ impl EditorApp {
                 if i.consume_key(M::COMMAND, Key::A) {
                     acts.push(Action::SelectAll);
                 }
+                // The clipboard keys arrive as events, not keys (the
+                // windowing layer reads the system clipboard for a paste).
+                for e in &i.events {
+                    match e {
+                        egui::Event::Copy => acts.push(Action::Copy),
+                        egui::Event::Cut => acts.push(Action::Cut),
+                        egui::Event::Paste(text) => acts.push(Action::Paste {
+                            text: Some(text.clone()),
+                            in_place: i.modifiers.shift,
+                        }),
+                        _ => {}
+                    }
+                }
                 if !self.st.view.selection.is_empty() {
                     for (key, d) in [
                         (Key::ArrowLeft, [-1, 0]),
@@ -2746,6 +3010,17 @@ impl EditorApp {
             }
             Action::DeleteSelection => self.delete_selection(),
             Action::DuplicateSelection => self.duplicate_selection(),
+            Action::DuplicateLevel(ix) => self.duplicate_level(ix),
+            Action::Copy => {
+                let ctx = self.ctx.clone();
+                self.copy(Some(&ctx));
+            }
+            Action::Cut => {
+                let ctx = self.ctx.clone();
+                self.cut(Some(&ctx));
+            }
+            Action::Paste { text, in_place } => self.paste(text, in_place),
+            Action::PasteAt { level, origin } => self.paste_at(None, level, origin),
             Action::Nudge { d, pixel } => self.nudge_selection(d, pixel),
             Action::SelectAll => {
                 if let (Some(doc), Some(ix)) = (&self.st.doc, self.st.view.active_level)
