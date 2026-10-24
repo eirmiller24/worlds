@@ -327,6 +327,7 @@ impl Engine {
             "create_world" => self.create_world(a),
             "edit_worlds" => self.edit_worlds(a),
             "move_level" => self.move_level(a),
+            "import_project" => self.import_project(a),
             other => Err(format!(
                 "there is no tool {other:?}; the tools are {}",
                 crate::catalog::TOOLS
