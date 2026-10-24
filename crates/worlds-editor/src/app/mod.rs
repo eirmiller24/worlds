@@ -523,6 +523,9 @@ pub struct EditorState {
     pub library: crate::library::LibraryState,
     /// The Levels pane.
     pub levels: levels::LevelsState,
+    /// Every thumbnail (assemblies, levels): the Library, the Levels pane
+    /// and the zoomed-out map share it ([`crate::thumbs`]).
+    pub thumbs: crate::thumbs::Thumbs,
 }
 
 impl Default for EditorState {
@@ -560,6 +563,7 @@ impl Default for EditorState {
             bookmark_focus: false,
             library: crate::library::LibraryState::default(),
             levels: levels::LevelsState::default(),
+            thumbs: crate::thumbs::Thumbs::default(),
         }
     }
 }
@@ -878,13 +882,19 @@ impl EditorApp {
         }
         let problems = problems::LiveProblems::new(0, opts.headless);
         let autosaver = crate::autosave::Autosaver::new(opts.autosave);
-        let mut library = crate::library::LibraryState::default();
-        library.thumbs.headless = opts.headless;
+        // Headless: read thumbnail files, write none, and make every
+        // picture asked for in the frame that asks (a screenshot is one
+        // frame's picture).
+        let mut thumbs = crate::thumbs::Thumbs::default();
+        if opts.headless {
+            thumbs.headless = true;
+            thumbs.budget = crate::thumbs::Budget::UNLIMITED;
+        }
         EditorApp {
             st: EditorState {
                 viewport,
                 log,
-                library,
+                thumbs,
                 ..Default::default()
             },
             problems,
@@ -2226,6 +2236,7 @@ impl EditorApp {
         self.st.view = ViewState::new();
         self.st.view.sync_layers(&doc, None);
         self.st.atlas.clear();
+        self.st.thumbs.clear();
         self.st.palette_tab.clear();
         self.st.edit_bufs.clear();
         self.st.pending.clear();
@@ -2546,6 +2557,9 @@ impl EditorApp {
         self.st.notes.rev = rev;
         self.st.find.rev = rev;
         self.st.levels.rev = rev;
+        if let Some(doc) = &self.st.doc {
+            self.st.thumbs.prune(doc);
+        }
         if std::mem::take(&mut self.st.find.focus) {
             show_pane(&mut self.dock, Pane::Find);
         }
@@ -4751,6 +4765,7 @@ impl TabViewer for Tabs<'_> {
                     highlight: st.rules.highlight.as_ref(),
                     atlas: Some(&st.atlas),
                     focused,
+                    thumbs: Some(&mut st.thumbs),
                 };
                 st.viewport.ui(ui, &mut cx);
                 let f = st.view.focused;

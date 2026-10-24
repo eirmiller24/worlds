@@ -44,6 +44,14 @@ fn next_images_gen() -> u64 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// A fresh look stamp ([`Document::look_stamp`]): unique across documents,
+/// like [`Document::images_gen`], so a reloaded project never matches a
+/// thumbnail of the one before.
+fn next_look_stamp() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A worker thread's bake of one level, layer by layer (each one baked or
 /// failed on its own).
 type WorkerBakes = BTreeMap<Slug, Result<Arc<LayerBake>, String>>;
@@ -160,6 +168,12 @@ pub struct Document {
     /// `level_fields`): what views derived from definitions (the entity
     /// palette's rows) are keyed on.
     pub defs_gen: u64,
+    /// Per level id, a stamp that moves whenever what that level looks
+    /// like may have changed ([`Self::look_stamp`]).
+    looks: HashMap<Id, u64>,
+    /// The stamp of the last change that could touch every level's look
+    /// (a definition, a project setting).
+    looks_all: u64,
     /// Levels whose bake hasn't arrived yet.
     pub bakes_pending: usize,
     /// Levels whose bake the command layer maintains (incrementally, after
@@ -261,11 +275,37 @@ impl Document {
             images_gen: next_images_gen(),
             problems,
             defs_gen: 0,
+            looks: HashMap::new(),
+            looks_all: next_look_stamp(),
             bakes_pending: 0,
             bake_rx: None,
             bake_started: None,
             seeds: HashMap::new(),
         }
+    }
+
+    /// A stamp of what level `ix` looks like: it moves whenever an edit
+    /// reaches the level, its bake (or one of its layers') arrives, or
+    /// something every level shares changes (definitions, project settings).
+    /// The level thumbnails are keyed on it, so painting one level never
+    /// re-renders the other 999. Equal stamps mean nothing the thumbnail
+    /// draws changed; a different stamp means it may have.
+    pub fn look_stamp(&self, ix: LevelIx) -> u64 {
+        let own = self.ids.get(ix).and_then(|id| self.looks.get(id));
+        own.copied().unwrap_or(0).max(self.looks_all)
+    }
+
+    /// Level `ix` may look different now (see [`Self::look_stamp`]).
+    pub fn touch_look(&mut self, ix: LevelIx) {
+        if let Some(id) = self.ids.get(ix) {
+            self.looks.insert(id.clone(), next_look_stamp());
+        }
+    }
+
+    /// Every level may look different now (see [`Self::look_stamp`]).
+    pub fn touch_all_looks(&mut self) {
+        self.looks.clear();
+        self.looks_all = next_look_stamp();
     }
 
     /// Rebuild the level index after levels were created, deleted or
@@ -356,6 +396,7 @@ impl Document {
                 s.extend(layers.iter().cloned());
             }
         }
+        self.touch_all_looks();
         layers
     }
 
@@ -365,6 +406,7 @@ impl Document {
     pub fn tileset_defs_changed(&mut self) {
         self.images = Arc::new(TilesetImages::new(&self.dir, &self.project.tilesets));
         self.images_gen = next_images_gen();
+        self.touch_all_looks();
     }
 
     /// A fresh generation number (see the module docs).
@@ -525,6 +567,7 @@ impl Document {
             self.stale_bakes[ix].remove(&layer);
             bakes.insert(layer, bake);
         }
+        self.touch_look(ix);
         // Only a level stored whole, every layer as baked there, may seed
         // the command layer's cache.
         match seed {
@@ -743,6 +786,7 @@ impl Document {
         Arc::make_mut(self.bakes[ix].get_or_insert_with(Default::default))
             .insert(layer.clone(), Arc::new(bake));
         self.stale_bakes[ix].remove(&layer);
+        self.touch_look(ix);
         Some(ix)
     }
 }

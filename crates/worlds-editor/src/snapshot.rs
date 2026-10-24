@@ -251,6 +251,7 @@ impl SnapshotRenderer {
                         highlight: None,
                         atlas: None,
                         focused: true,
+                        thumbs: None,
                     };
                     vp.ui(ui, &mut cx);
                 });

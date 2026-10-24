@@ -447,24 +447,114 @@ fn thumbnails_are_rendered_once_into_the_cache() {
         },
         frag,
     );
-    let mut images = worlds_editor::thumbs::Images::default();
-    let img = worlds_editor::thumbs::load_or_render(&r.doc.dir, &r.doc.project, &a, &mut images);
-    assert!(
-        img.width() <= worlds_editor::thumbs::MAX_SIDE
-            && img.height() <= worlds_editor::thumbs::MAX_SIDE
-    );
-    let path = worlds_editor::thumbs::file_of(&r.doc.dir, &a);
+    use worlds_editor::thumbs::{ASSEMBLY_MAX_SIDE, AssemblyThumb, Budget, Source, Thumbs};
+    // No frames run here (one egui pass throughout): no budget.
+    let ctx = egui::Context::default();
+    let mut thumbs = Thumbs::default();
+    thumbs.budget = Budget::UNLIMITED;
+    let src = AssemblyThumb {
+        doc: &r.doc,
+        assembly: &a,
+    };
+    let tex = thumbs.get(&ctx, &src).unwrap();
+    assert!(tex.size()[0] as u32 <= ASSEMBLY_MAX_SIDE && tex.size()[1] as u32 <= ASSEMBLY_MAX_SIDE);
+    let path = src.file().unwrap().path();
     assert!(path.exists(), "{}", path.display());
     assert!(path.starts_with(r.doc.dir.join(".worlds/thumbs")));
     // The solid cell at [0, 0] is the collision layer's color.
+    let img = image::open(&path).unwrap().to_rgba8();
     let c = img.get_pixel(1, 1).0;
     assert!(c[0] < 0x60 && c[1] < 0x60, "{c:?}");
+    // The next session reads the file instead of drawing it.
+    let mut next = Thumbs::default();
+    let _ = next.get(&ctx, &src).unwrap();
+    assert_eq!((thumbs.rendered, next.rendered, next.loaded), (1, 0, 1));
     // An edited assembly gets a new file; the old one goes.
     let mut b = a.clone();
     b.name = "Corner 2".into();
-    worlds_editor::thumbs::load_or_render(&r.doc.dir, &r.doc.project, &b, &mut images);
+    let src_b = AssemblyThumb {
+        doc: &r.doc,
+        assembly: &b,
+    };
+    let _ = thumbs.get(&ctx, &src_b).unwrap();
     assert!(!path.exists());
-    assert!(worlds_editor::thumbs::file_of(&r.doc.dir, &b).exists());
+    assert!(src_b.file().unwrap().path().exists());
+    assert_eq!((thumbs.rendered, thumbs.len()), (2, 1));
+}
+
+/// Level thumbnails: one pixel per cell, the void transparent, and keyed
+/// per level, so painting one level redraws only its picture.
+#[test]
+fn level_thumbnails_are_keyed_per_level_and_cut_the_void() {
+    use worlds_editor::thumbs::{LayerLook, LevelThumb, Source, Thumbs};
+    let mut r = Rig::new();
+    r.apply(Command::SetLevelVoid {
+        level: slug("crevasse"),
+        void: vec![worlds_core::command::Rect::new(0, 0, 3, 2)],
+        restore: false,
+    })
+    .unwrap();
+    let ctx = egui::Context::default();
+    let mut thumbs = Thumbs::default();
+    let crev = r.doc.level_ix("crevasse").unwrap();
+    let shaft = r.doc.level_ix("shaft").unwrap();
+    let look = LayerLook::of(&r.doc, &r.view);
+    let key = |doc: &Document, ix| {
+        LevelThumb {
+            doc,
+            ix,
+            look: &look,
+        }
+        .key()
+    };
+    let (k_crev, k_shaft) = (key(&r.doc, crev), key(&r.doc, shaft));
+    // One pixel per cell (20 x 5), memory only, the void cut out.
+    let src = LevelThumb {
+        doc: &r.doc,
+        ix: crev,
+        look: &look,
+    };
+    assert!(src.file().is_none());
+    let img = src.render(&mut Default::default());
+    assert_eq!(img.dimensions(), (20, 5));
+    assert_eq!(img.get_pixel(1, 1).0[3], 0, "void is transparent");
+    assert_eq!(img.get_pixel(3, 1).0[3], 255);
+    assert_eq!(img.get_pixel(1, 2).0[3], 255);
+    let _ = thumbs.get(&ctx, &src).unwrap();
+    // Painting crevasse moves its key only.
+    let fill: Command = serde_json::from_str(
+        r#"{ "op": "fill_rect", "level": "crevasse", "layer": "collision", "rect": [5, 1, 3, 1], "value": "water" }"#,
+    )
+    .unwrap();
+    r.apply(fill).unwrap();
+    assert_ne!(key(&r.doc, crev), k_crev);
+    assert_eq!(key(&r.doc, shaft), k_shaft);
+    // Hiding a layer moves every key (what the pictures show changed).
+    let mut hidden = r.view.clone();
+    hidden.layers[0].visible = false;
+    let look2 = LayerLook::of(&r.doc, &hidden);
+    assert_ne!(
+        LevelThumb {
+            doc: &r.doc,
+            ix: shaft,
+            look: &look2
+        }
+        .key(),
+        k_shaft
+    );
+    // A project setting may touch every level: both move.
+    let (k_crev, k_shaft) = (key(&r.doc, crev), key(&r.doc, shaft));
+    let seed: Command = serde_json::from_str(
+        r#"{ "op": "set_project_setting", "setting": { "key": "seed", "value": 1234 } }"#,
+    )
+    .unwrap();
+    r.apply(seed).unwrap();
+    assert_ne!(key(&r.doc, crev), k_crev);
+    assert_ne!(key(&r.doc, shaft), k_shaft);
+    // A bake arriving moves its level's key.
+    let k = key(&r.doc, shaft);
+    r.doc.bake_all_blocking();
+    assert_ne!(key(&r.doc, shaft), k);
 }
 
 #[test]

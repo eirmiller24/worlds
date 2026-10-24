@@ -18,11 +18,10 @@
 //!   also frames it in that tab (the Map's Fit level). Right click: Frame, Rename,
 //!   Duplicate, Crop to content, Move earlier/later, Move to world, Delete.
 //!
-//! Thumbnails are small CPU renders of the level (background, int_grid
-//! colors, tiles and baked auto tiles by their average tile color, entity
-//! dots), made for the rows on screen, a few per frame, and kept until the
-//! project changes (the edit revision), the level's bake arrives or the
-//! tileset images do.
+//! Each row's thumbnail comes from the editor's one thumbnail cache
+//! ([`crate::thumbs`]): the same texture the zoomed-out map draws, asked for
+//! only for the rows on screen (`show_rows`), so the budget there is spent
+//! on what is visible.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -30,17 +29,14 @@ use std::sync::Arc;
 use egui::{Color32, Sense, Stroke, Vec2};
 use worlds_core::{Command, Id, Slug};
 
+use crate::thumbs::{LayerLook, LevelThumb};
+
 use super::EditorState;
 use super::actions::Action;
 use super::fields::mark;
 use crate::doc::{Document, LevelIx};
 use crate::view::{SelItem, ViewState};
-use crate::viewport::scene::parse_color;
 
-/// Thumbnail edge, at most, in pixels.
-pub const THUMB_PX: usize = 64;
-/// Thumbnails (re)made per frame at most.
-const THUMBS_PER_FRAME: usize = 4;
 /// Row height in points.
 const ROW_H: f32 = 40.0;
 
@@ -116,7 +112,6 @@ pub struct LevelsState {
     built: Option<(u64, String, Sort, bool, usize, usize)>,
     /// Row rebuilds so far (tests: bounded work).
     pub builds: usize,
-    pub thumbs: Thumbs,
 }
 
 impl LevelsState {
@@ -247,236 +242,6 @@ fn order_index(doc: &Document, ix: LevelIx) -> usize {
     doc.levels[ix].level
 }
 
-// ---- thumbnails ----
-
-/// Average color of every tile of a tileset (`None`: the image didn't
-/// load), by `row * columns + column`.
-struct TileColors {
-    columns: u32,
-    colors: Vec<[u8; 4]>,
-}
-
-/// The thumbnail cache.
-#[derive(Default)]
-pub struct Thumbs {
-    by_level: HashMap<Id, Thumb>,
-    tiles: HashMap<Slug, Option<TileColors>>,
-    images_gen: u64,
-    /// Thumbnails rendered so far (tests).
-    pub made: usize,
-}
-
-struct Thumb {
-    key: (u64, bool),
-    tex: egui::TextureHandle,
-}
-
-impl Thumbs {
-    /// The texture of level `ix`'s thumbnail, rendered if it is missing or
-    /// out of date and `budget` allows.
-    fn get(
-        &mut self,
-        ctx: &egui::Context,
-        doc: &Document,
-        view: &ViewState,
-        ix: LevelIx,
-        rev: u64,
-        budget: &mut usize,
-    ) -> Option<egui::TextureHandle> {
-        if self.images_gen != doc.images_gen {
-            self.images_gen = doc.images_gen;
-            self.tiles.clear();
-            self.by_level.clear();
-        }
-        let id = &doc.ids[ix];
-        let key = (rev, doc.bakes.get(ix).is_some_and(Option::is_some));
-        if let Some(t) = self.by_level.get(id)
-            && (t.key == key || *budget == 0)
-        {
-            return Some(t.tex.clone());
-        }
-        if *budget == 0 {
-            return None;
-        }
-        *budget -= 1;
-        let img = self.render(doc, view, ix);
-        self.made += 1;
-        let opts = egui::TextureOptions::NEAREST;
-        let tex = match self.by_level.get_mut(id) {
-            Some(t) => {
-                t.tex.set(img, opts);
-                t.key = key;
-                t.tex.clone()
-            }
-            None => {
-                let tex = ctx.load_texture(format!("level thumb {id}"), img, opts);
-                self.by_level.insert(
-                    id.clone(),
-                    Thumb {
-                        key,
-                        tex: tex.clone(),
-                    },
-                );
-                tex
-            }
-        };
-        Some(tex)
-    }
-
-    fn tile_color(&mut self, doc: &Document, tileset: &Slug, tile: [u32; 2]) -> Option<[u8; 4]> {
-        let colors = self.tiles.entry(tileset.clone()).or_insert_with(|| {
-            let def = doc.project.tileset(tileset.as_str())?;
-            let img = image::open(doc.dir.join(&def.image)).ok()?.to_rgba8();
-            let (cols, rows) = (def.columns(img.width()), def.rows(img.height()));
-            let [tw, th] = def.tile_size;
-            let mut colors = Vec::with_capacity((cols * rows) as usize);
-            for r in 0..rows {
-                for c in 0..cols {
-                    let x0 = def.padding + c * (tw + def.spacing);
-                    let y0 = def.padding + r * (th + def.spacing);
-                    let mut sum = [0u64; 4];
-                    for y in y0..(y0 + th).min(img.height()) {
-                        for x in x0..(x0 + tw).min(img.width()) {
-                            let p = img.get_pixel(x, y).0;
-                            let a = p[3] as u64;
-                            for k in 0..3 {
-                                sum[k] += p[k] as u64 * a;
-                            }
-                            sum[3] += a;
-                        }
-                    }
-                    let n = (tw as u64 * th as u64).max(1);
-                    let avg = |k: usize| sum[k].checked_div(sum[3]).unwrap_or(0) as u8;
-                    colors.push([avg(0), avg(1), avg(2), (sum[3] / n) as u8]);
-                }
-            }
-            Some(TileColors {
-                columns: cols,
-                colors,
-            })
-        });
-        let c = colors.as_ref()?;
-        c.colors
-            .get((tile[1] * c.columns + tile[0]) as usize)
-            .copied()
-    }
-
-    /// Level `ix` drawn small: its background, then every visible layer
-    /// bottom first, then entity dots.
-    fn render(&mut self, doc: &Document, view: &ViewState, ix: LevelIx) -> egui::ColorImage {
-        let l = doc.level(ix);
-        let g = doc.project.grid_size.max(1) as f64;
-        let (wpx, hpx) = (l.size[0] as f64 * g, l.size[1] as f64 * g);
-        let scale = (wpx.max(hpx) / THUMB_PX as f64).max(1e-6);
-        let w = ((wpx / scale).round() as usize).clamp(1, THUMB_PX);
-        let h = ((hpx / scale).round() as usize).clamp(1, THUMB_PX);
-        let bg = l
-            .bg_color
-            .as_ref()
-            .or(doc.project.bg_color.as_ref())
-            .map_or([40, 42, 54, 255], |c| parse_color(c.as_str()));
-        let mut px = vec![[bg[0], bg[1], bg[2], 255u8]; w * h];
-        let blend = |px: &mut Vec<[u8; 4]>, x: usize, y: usize, c: [u8; 4], a: f64| {
-            let a = (c[3] as f64 / 255.0 * a).clamp(0.0, 1.0);
-            let p = &mut px[y * w + x];
-            for k in 0..3 {
-                p[k] = (p[k] as f64 * (1.0 - a) + c[k] as f64 * a).round() as u8;
-            }
-        };
-        // A pixel rect of the level, in thumbnail pixels (at least one).
-        let span = |x: f64, y: f64, rw: f64, rh: f64| {
-            let x0 = ((x / scale).floor().max(0.0) as usize).min(w - 1);
-            let y0 = ((y / scale).floor().max(0.0) as usize).min(h - 1);
-            let x1 = (((x + rw) / scale).ceil() as usize).clamp(x0 + 1, w);
-            let y1 = (((y + rh) / scale).ceil() as usize).clamp(y0 + 1, h);
-            (x0..x1, y0..y1)
-        };
-        let bakes = doc.bakes.get(ix).and_then(|b| b.clone());
-        for (i, def) in doc.project.layers.iter().enumerate() {
-            if !view.layer_visible(i) {
-                continue;
-            }
-            let op = view.layer_opacity(doc, i) as f64;
-            let lg = doc.project.layer_grid(def) as f64;
-            if let Some(grid) = l.int_grid(def.slug.as_str()) {
-                let values = def.values();
-                for y in 0..h {
-                    for x in 0..w {
-                        let cx = (((x as f64 + 0.5) * scale) / lg) as u32;
-                        let cy = (((y as f64 + 0.5) * scale) / lg) as u32;
-                        if let Some(v) = grid.index_at(cx, cy).filter(|&v| v > 0)
-                            && let Some(val) = values.get(v as usize - 1)
-                        {
-                            blend(&mut px, x, y, parse_color(val.color.as_str()), 0.85 * op);
-                        }
-                    }
-                }
-            }
-            if let Some(t) = l.tiles_layer(def.slug.as_str()) {
-                for p in &t.tiles {
-                    let Some(ts) = doc.project.tileset(p.tileset.as_str()) else {
-                        continue;
-                    };
-                    let Some(c) = self.tile_color(doc, &p.tileset, p.tile) else {
-                        continue;
-                    };
-                    let (xs, ys) = span(
-                        p.cell[0] as f64 * lg,
-                        p.cell[1] as f64 * lg,
-                        ts.tile_size[0] as f64,
-                        ts.tile_size[1] as f64,
-                    );
-                    for y in ys {
-                        for x in xs.clone() {
-                            blend(&mut px, x, y, c, p.alpha * op);
-                        }
-                    }
-                }
-            }
-            if def.is_auto()
-                && let Some(b) = bakes.as_ref().and_then(|b| b.get(&def.slug))
-            {
-                for p in &b.placements {
-                    let Some(ts) = doc.project.tileset(p.tileset.as_str()) else {
-                        continue;
-                    };
-                    let Some(c) = self.tile_color(doc, &p.tileset, p.tile) else {
-                        continue;
-                    };
-                    let (xs, ys) = span(
-                        p.px[0] as f64,
-                        p.px[1] as f64,
-                        ts.tile_size[0] as f64,
-                        ts.tile_size[1] as f64,
-                    );
-                    for y in ys {
-                        for x in xs.clone() {
-                            blend(&mut px, x, y, c, p.alpha * op);
-                        }
-                    }
-                }
-            }
-            if let Some(el) = l.entities_layer(def.slug.as_str()) {
-                for e in &el.entities {
-                    let (xs, ys) = span(
-                        e.cell[0] as f64 * lg + e.offset_px[0] as f64,
-                        e.cell[1] as f64 * lg + e.offset_px[1] as f64,
-                        lg,
-                        lg,
-                    );
-                    for y in ys {
-                        for x in xs.clone() {
-                            blend(&mut px, x, y, [255, 200, 80, 255], op);
-                        }
-                    }
-                }
-            }
-        }
-        let rgba: Vec<u8> = px.into_iter().flatten().collect();
-        egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
-    }
-}
-
 // ---- the pane ----
 
 /// The camera bookmarks under the levels: the toolbar ★ window's list
@@ -534,6 +299,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
         doc,
         view,
         levels: ls,
+        thumbs,
         pending,
         actions,
         ..
@@ -553,7 +319,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
     }
     let problems = problem_counts(doc);
     let ctx = ui.ctx().clone();
-    let mut budget = THUMBS_PER_FRAME;
+    let look = LayerLook::of(doc, view);
     let can_drag = ls.can_drag();
     let mut drawn: Vec<(LevelIx, egui::Rect)> = Vec::new();
     let mut clicked: Option<LevelIx> = None;
@@ -622,22 +388,13 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
                             rect.min + Vec2::new(2.0, 2.0),
                             Vec2::new(ROW_H * 1.5, ROW_H - 4.0),
                         );
-                        if let Some(tex) = ls.thumbs.get(&ctx, doc, view, ix, ls.rev, &mut budget) {
-                            let [tw, th] = tex.size();
-                            let s = (thumb.width() / tw as f32).min(thumb.height() / th as f32);
-                            let r = egui::Rect::from_center_size(
-                                thumb.center(),
-                                Vec2::new(tw as f32 * s, th as f32 * s),
-                            );
-                            p.image(
-                                tex.id(),
-                                r,
-                                egui::Rect::from_min_max(
-                                    egui::pos2(0.0, 0.0),
-                                    egui::pos2(1.0, 1.0),
-                                ),
-                                Color32::WHITE,
-                            );
+                        let src = LevelThumb {
+                            doc,
+                            ix,
+                            look: &look,
+                        };
+                        if let Some(tex) = thumbs.get(&ctx, &src) {
+                            let r = crate::thumbs::draw_fitted(p, &tex, thumb);
                             p.rect_stroke(
                                 r,
                                 0.0,
@@ -1024,11 +781,11 @@ mod tests {
             [SelItem::Level(Id::new("shaft22222").unwrap())]
         );
         // Thumbnails were made for the rows on screen.
-        assert_eq!(st.levels.thumbs.made, 2);
+        assert_eq!(st.thumbs.rendered, 2);
         // Idle frames make none and rebuild no rows.
         let builds = st.levels.builds;
         d.frame(&mut st, vec![]);
-        assert_eq!(st.levels.thumbs.made, 2);
+        assert_eq!(st.thumbs.rendered, 2);
         assert_eq!(st.levels.builds, builds);
         // Rename by hand: the editor and its command.
         let doc = st.doc.as_ref().unwrap();
