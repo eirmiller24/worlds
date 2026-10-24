@@ -114,7 +114,14 @@ fn shot() -> String {
 }
 
 fn worlds() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_worlds"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_worlds"));
+    // Never the real preferences file: a directory with none in it.
+    c.env("WORLDS_CONFIG_DIR", no_config_dir());
+    c
+}
+
+fn no_config_dir() -> PathBuf {
+    std::env::temp_dir().join("worlds-tests-no-config")
 }
 
 /// `worlds <args>`: (exit code, stderr).

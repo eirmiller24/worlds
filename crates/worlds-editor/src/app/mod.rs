@@ -1364,6 +1364,7 @@ impl EditorApp {
             UiStep::SaveAssembly(s) => self.save_assembly_step(s),
             UiStep::Library(l) => self.library_step(l),
             UiStep::Levels(l) => self.levels_step(l),
+            UiStep::Preferences(p) => self.preferences_step(p),
         }
     }
 
@@ -3899,7 +3900,7 @@ impl EditorApp {
             .clicked()
         };
         let mut acts = Vec::new();
-        ui.menu_button(egui::RichText::new("Worlds").strong(), |ui| {
+        let menu = ui.menu_button(egui::RichText::new("Worlds").strong(), |ui| {
             if entry(ui, true, "Open project…".into(), &k(Cmd::Open)) {
                 acts.push(Action::OpenDialog);
             }
@@ -3955,6 +3956,7 @@ impl EditorApp {
                 ui.close();
             }
         });
+        fields::mark(ui, "menu:worlds", menu.response.rect);
         self.st.actions.extend(acts);
     }
 

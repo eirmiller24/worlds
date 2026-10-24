@@ -284,9 +284,16 @@ fn game() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/game/game.worlds")
 }
 
+/// Where the spawned editors look for preferences: a directory with none
+/// in it, never the real config dir.
+fn no_config_dir() -> PathBuf {
+    std::env::temp_dir().join("worlds-tests-no-config")
+}
+
 /// Run the `worlds` binary; (exit code, stdout, stderr).
 fn worlds(args: &[&std::ffi::OsStr]) -> (i32, String, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_worlds"))
+        .env("WORLDS_CONFIG_DIR", no_config_dir())
         .args(args)
         .output()
         .unwrap();
@@ -426,6 +433,7 @@ fn serve_lets_an_agent_paint() {
 
     let after_ui = tmp.path().join("serve_after.png");
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_worlds"))
+        .env("WORLDS_CONFIG_DIR", no_config_dir())
         .args([
             os("--screenshot"),
             after_ui.as_os_str(),
@@ -732,6 +740,7 @@ fn serve_stops_cleanly_on_sigterm() {
     let (tmp, dir) = temp_copy(&game());
     let out = tmp.path().join("sigterm.png");
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_worlds"))
+        .env("WORLDS_CONFIG_DIR", no_config_dir())
         .args([
             os("--screenshot"),
             out.as_os_str(),
@@ -958,6 +967,7 @@ fn window_exits_cleanly_on_signals_under_xvfb() {
         let mut cmd = std::process::Command::new("xvfb-run");
         cmd.args(["-a", "-s", "-screen 0 1280x800x24"])
             .arg(env!("CARGO_BIN_EXE_worlds"))
+            .env("WORLDS_CONFIG_DIR", no_config_dir())
             .arg(&dir)
             .env_remove("WAYLAND_DISPLAY")
             // xvfb-run sends the command's stderr (the log) to its stdout.

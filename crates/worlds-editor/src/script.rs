@@ -275,6 +275,9 @@ pub enum UiStep {
     /// `"ui": "levels"`: the Levels pane with a search, a sort, every
     /// world, a click on a level.
     Levels(LevelsStep),
+    /// `"ui": "preferences"`: the Preferences window, searched, optionally
+    /// waiting for a key.
+    Preferences(PreferencesStep),
 }
 
 /// `{ "ui": "import_project", "source": dir, "selection"?, "policy"?,
@@ -319,6 +322,19 @@ pub struct LevelsStep {
     pub select: Option<String>,
     #[serde(default)]
     pub frame: Option<String>,
+}
+
+/// `{ "ui": "preferences", "search"?: text, "capture"?: id }`: open the
+/// Preferences window with that search text, and with `capture` start a
+/// Rebind of that command (the window then waits for a key), so a
+/// `--screenshot` shows it. An unknown command id is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreferencesStep {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub capture: Option<String>,
 }
 
 /// `{ "ui": "find", "query": "...", "kind"?: "all" | "entities" |

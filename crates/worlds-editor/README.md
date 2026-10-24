@@ -86,6 +86,7 @@ This creates its own wgpu device (no window and no display, so no `xvfb-run` nee
   | `{ "ui": "find", "query": "...", "kind"?: "all" \| "entities" \| "levels" \| "notes" \| "tiles", "select_all"?: true, "replace"?: { "field", "value" } }` | the Find pane in front with that query and kind (default `all`) and its results (see "The Find pane"); `select_all` presses Select all (every result selected, the first result's level active), `replace` presses Replace with that field and value text (one entry, "Replace item in 2 entities"). A query that doesn't parse or that the kind doesn't take, Select all with no result, and a Replace no result's type can take are errors |
   | `{ "ui": "history", "expand"?: true, "jump"?: n }` | the History pane in front (see "The History pane"); `expand` opens every agent batch's list of writes; `jump` undoes or redoes until `n` entries are done, as a click on an entry does (`0`: the "Opened" row). A `jump` past the history's length is an error |
   | `{ "ui": "levels", "search"?: text, "sort"?: "order" \| "name" \| "position", "all_worlds"?: bool, "select"?: slug, "frame"?: slug }` | the Levels pane in front with that search (default none), sort (default `order`) and grouping (default the focused tab's world only) (see "The Levels pane"); `select` clicks that level's row: it becomes the active level and the selection; `frame` double clicks it: that, and framed in the focused tab. An unknown sort or level is an error |
+  | `{ "ui": "preferences", "search"?: text, "capture"?: id }` | the Preferences window open (see "Preferences") with that search text; `capture` starts a Rebind of that command (`undo`, `view.fit_world`, ...), so the picture shows the window waiting for a key. The window reads the preferences file as the run does (`--screenshot` never writes it). An unknown id is an error |
   | `{ "ui": "reference", "add": path, "level"?: slug, "world"?: slug, "px"?: [x, y], "scale"?, "opacity"?, "locked"? }` | what "Add reference image…" does with that PNG (relative to the current directory; one outside the project is copied into `art/` right away, as `add_tileset` does): one `add_reference` entry at the level (default the active one, else the world), its corner at `px` (default the level's corner, or the active level's in the world), opacity 0.5 unless given; the new reference is selected, the References pseudo-layer active and the Inspector in front. An unreadable image, an unknown level or world, or both keys, is an error |
   | `{ "ui": "import_project", "source", "selection"?, "policy"?, "search"?, "apply"?: true }` | the Import from Worlds project dialog on the project in `source` (relative to the current directory) with `project.import_plan`'s `selection` and `policy` and the search text, so a `--screenshot` shows the plan; `apply` then clicks Apply (one entry, `Import from <name>`; the plan's files are copied into `art/` first, the one other file a run without `--save` writes). This project itself, a source that doesn't load, a refused plan or nothing to apply is an error |
 
@@ -122,7 +123,9 @@ Tests and local runs write reference shots to `crates/worlds-editor/screenshots/
 
 ## Using it
 
-The toolbar starts with the **Worlds** menu: Open project…, Import from Worlds project…, Reload from disk, Save (with a • while there are unsaved edits), Undo and Redo (each entry names what it would undo: "Undo Paint collision"), and Commands… (the command palette). After it come the world switcher and bookmarks (see "Worlds" and "Map tabs and bookmarks") and the tools.
+The toolbar starts with the **Worlds** menu: Open project…, Import from Worlds project…, Reload from disk, Save (with a • while there are unsaved edits), Undo and Redo (each entry names what it would undo: "Undo Paint collision"), Commands… (the command palette) and, last, Preferences… (see "Preferences"). Each entry shows its key as you have it. After the menu come the world switcher and bookmarks (see "Worlds" and "Map tabs and bookmarks") and the tools.
+
+The keys below are the defaults. Every command with a key can be given another one (or none) in Preferences (Ctrl+, the Worlds menu or "Preferences…" in the command palette; see "Preferences"), and the menu, tooltips and the palette then print yours. The clipboard keys, Escape, Enter in prompts and fields, Space to pan and the mouse modifiers stay as they are. On a Mac, Ctrl in this table is Cmd.
 
 | Input | Does |
 | --- | --- |
@@ -171,6 +174,7 @@ The toolbar starts with the **Worlds** menu: Open project…, Import from Worlds
 | Ctrl+L | the Levels pane in front, its search box focused (see "The Levels pane") |
 | Ctrl+P | command palette (fuzzy), including New level, Delete level, Crop level to content, New world…, Rename world…, Delete world…, New / Duplicate / Close viewport, Link cameras, Bookmark this view… and every bookmark |
 | Ctrl+O, Ctrl+R (F5) | open, reload |
+| Ctrl+, | Preferences: change any of these keys (see "Preferences") |
 | Ctrl+G, Ctrl+Shift+G | group the selected entities and annotations (one level's) as one object group / ungroup the selection's groups (see "Object groups") |
 | Ctrl+M | toggle the grid |
 | Ctrl+Shift+1..9 | jump to camera bookmark 1..9 in the focused map tab (see "Map tabs and bookmarks") |
@@ -412,6 +416,31 @@ The map is a dock tab like the other panes, and there can be any number of them:
 
 The live API's `view.focus`, `view.select` and `view.snapshot` take an optional `viewport`, and `view.list_viewports` and `view.open_viewport` list and open tabs ([api.md](../../docs/api.md#view)); MCP `screenshot` takes `viewport` too. `src/app/viewports.rs` has the tab plumbing, linked cameras, bookmarks and their script steps.
 
+## Preferences
+
+Preferences (Ctrl+, "Preferences…" at the bottom of the Worlds menu, or the command palette) is a window with one section for now, **Shortcuts**: every command a key can trigger, grouped (File, Edit, Selection, View, Tools, Turn, Bookmarks), with its keys. A search box filters by name, id or key (`ctrl+y`, `view.fit`). Per row:
+
+- **Rebind** waits for the next key press, modifiers included, and makes it the command's only key; **+** adds one more (Redo has two by default, Ctrl+Shift+Z and Ctrl+Y). Escape cancels the wait, so Escape itself can't be bound. Ctrl+C, Ctrl+X and Ctrl+V can't be captured either: the windowing layer turns them into clipboard events before the editor sees a key.
+- **Clear** leaves the command with no key, **Reset** puts its defaults back, and **Reset all** (at the top) does that for everything.
+- A ⚠ marks a key two commands share where both can fire (hover it for the other command), with a button to take the key off the other one. Keys that work everywhere (the Ctrl ones) clash with anything; keys that need the map clash with each other; a narrower map context shadows a plain map key on purpose and isn't a clash (R rotates a paste ghost while there is one, otherwise it is the Rectangle mode).
+- "Keys that can't be changed", at the bottom, lists the fixed ones and why.
+
+Changes apply at once (the next key press uses them, tooltips and the palette print them) and are saved right away to the preferences file, which is the user's, not the project's:
+
+| OS | File |
+| --- | --- |
+| Linux and BSDs | `$XDG_CONFIG_HOME/worlds/preferences.json`, else `~/.config/worlds/preferences.json` |
+| macOS | `~/Library/Application Support/worlds/preferences.json` |
+| Windows | `%APPDATA%\worlds\preferences.json` |
+
+`WORLDS_CONFIG_DIR=<dir>` replaces the `…/worlds` directory (portable installs, tests). The file holds only what differs from the defaults, so it stays small and a new default in a later version reaches everyone who didn't change that key; an empty list unbinds:
+
+```json
+{ "shortcuts": { "undo": ["Ctrl+U"], "view.grid": [] } }
+```
+
+Keys are command ids (`undo`, `tool.paint`, `view.fit_world`, `bookmark.jump_3`; hover a row's name for its id) and chords as the window prints them: modifiers `Ctrl` (also `Cmd` or `Command`: the platform's primary modifier, so one file means the same on every OS), `Control` (the Mac's Control key as a separate modifier), `Alt` (`Option`), `Shift`, then a key (`A`, `1`, `F5`, `PgDn`, `Del`, `Left`, `+`, `,`). A missing file is the defaults. One that can't be read or parsed is the defaults too, with a warning in the log, and is copied to `preferences.json.bad` before the first save over it; an unknown id or a chord that doesn't parse is skipped with a warning, and ids from a newer version are kept when the file is written. `--screenshot` runs read the file but never write it; the editor's tests point `AppOptions::preferences` at a temp file (or nowhere) and never touch the real one.
+
 ## Crate layout
 
 ```
@@ -420,6 +449,11 @@ src/
   lib.rs
   clipboard.rs       Copy, Cut, Paste of fragments: the grid marquee, the paste
                      ghost (PasteGhost, Transform: X, Y, R), level duplicate slugs
+  keymap.rs          every remappable shortcut (Cmd: id, name, default chords,
+                     context), Chord parse/print, Keymap: lookups both ways,
+                     conflicts; the fixed keys and why
+  prefs.rs           the user's preferences file: where it is per OS, load, save
+                     (only non-defaults)
   arrange.rs         selection transforms, arranging levels, level-edge snaps, the
                      context menu entries and the Paint strip's X/Y/R
   library.rs         the Library (assemblies) in the Palette, the Save as assembly
@@ -473,7 +507,10 @@ src/
                      the Inspector
     layer_actions.rs duplicate, merge down, move to layer, add reference, the history
                      jump: their actions and --script steps
-    actions.rs       Action enum (toolbar/shortcuts/palette) + fuzzy_score
+    actions.rs       Action enum (toolbar/shortcuts/palette) + fuzzy_score; the
+                     palette's catalog, its keys read from the keymap
+    preferences.rs   the Preferences window: shortcuts table, search, rebind
+                     capture, clear/reset, conflict markers; its script step
     watch.rs         notify watcher with 100 ms debounce; entities/*.json disk changes
     theme.rs         dark theme, one accent, 8 px spacing
   viewport/
@@ -539,6 +576,12 @@ tests/viewports.rs        WORLDS_GPU_TESTS=1: two map tabs side by side on two w
 tests/levels_groups_ui.rs WORLDS_GPU_TESTS=1: "ui": "levels", PgDn after a reorder,
                           a drag snapped to a grid-vania lattice and refused in a strip,
                           a group selected by a click, Ctrl+G, Delete drops a member
+tests/preferences_ui.rs   WORLDS_GPU_TESTS=1: Ctrl+, opens Preferences, Rebind captures
+                          Ctrl+U for Undo (Ctrl+Z then does nothing, Ctrl+U undoes), the
+                          palette prints it, a clash and its one-click fix, the file in a
+                          temp config dir (only the change), Reset all; headless reads
+                          the file but never writes it. src/keymap.rs and src/prefs.rs have
+                          the unit tests (chords, defaults, conflicts, the file)
 tests/project_setup.rs    WORLDS_GPU_TESTS=1: a fresh project set up in the Project pane
                           (empty-map hint, a level moved with no layer, + Layer, + Tileset,
                           settings, saved files)

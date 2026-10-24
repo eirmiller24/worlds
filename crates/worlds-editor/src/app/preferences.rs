@@ -163,7 +163,8 @@ impl EditorApp {
             .id(egui::Id::new("preferences window"))
             .open(&mut open)
             .collapsible(false)
-            .default_size([620.0, 560.0])
+            .fade_in(false)
+            .default_size([640.0, 560.0])
             .default_pos(ctx.content_rect().center() - egui::vec2(310.0, 280.0))
             .show(ctx, |ui| {
                 ui.heading("Shortcuts");
@@ -215,29 +216,31 @@ impl EditorApp {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         let mut shown = 0;
-                        for g in Group::ALL {
-                            let rows: Vec<Cmd> = Cmd::all()
-                                .iter()
-                                .copied()
-                                .filter(|&c| c.group() == g && matches(km, c, &win.search))
-                                .collect();
-                            if rows.is_empty() {
-                                continue;
-                            }
-                            shown += rows.len();
-                            ui.add_space(6.0);
-                            ui.strong(g.name());
-                            egui::Grid::new(("prefs group", g))
-                                .num_columns(3)
-                                .striped(true)
-                                .min_col_width(80.0)
-                                .show(ui, |ui| {
+                        // One grid for every group, so the columns line up
+                        // down the whole list.
+                        egui::Grid::new("prefs shortcuts")
+                            .num_columns(3)
+                            .striped(true)
+                            .min_col_width(80.0)
+                            .show(ui, |ui| {
+                                for g in Group::ALL {
+                                    let rows: Vec<Cmd> = Cmd::all()
+                                        .iter()
+                                        .copied()
+                                        .filter(|&c| c.group() == g && matches(km, c, &win.search))
+                                        .collect();
+                                    if rows.is_empty() {
+                                        continue;
+                                    }
+                                    shown += rows.len();
+                                    ui.strong(g.name());
+                                    ui.end_row();
                                     for c in rows {
                                         changed |= row(ui, km, win, &conflicts, c);
                                         ui.end_row();
                                     }
-                                });
-                        }
+                                }
+                            });
                         if shown == 0 {
                             ui.weak("No command matches");
                         }
@@ -275,6 +278,30 @@ impl EditorApp {
         {
             self.st.toast(format!("Preferences not saved: {e}"), true);
         }
+    }
+
+    /// `"ui": "preferences"`: see [`crate::script::PreferencesStep`].
+    pub(super) fn preferences_step(
+        &mut self,
+        p: &crate::script::PreferencesStep,
+    ) -> Result<(), String> {
+        let capture = match &p.capture {
+            Some(id) => {
+                Some(Cmd::from_id(id).ok_or_else(|| format!("no shortcut command {id:?}"))?)
+            }
+            None => None,
+        };
+        self.prefs_win.show();
+        if let Some(s) = &p.search {
+            self.prefs_win.search = s.clone();
+        }
+        self.prefs_win.capture = capture.map(|cmd| Capture { cmd, add: false });
+        Ok(())
+    }
+
+    /// The Preferences window's state (tests).
+    pub fn preferences_state(&self) -> &PrefsWindow {
+        &self.prefs_win
     }
 }
 
