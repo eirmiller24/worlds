@@ -232,6 +232,7 @@ pub fn is_write(method: &str) -> bool {
             | "reference.update"
             | "reference.remove"
             | "project.import"
+            | "level.set_void"
     )
 }
 
@@ -499,6 +500,7 @@ fn write_builder(method: &str) -> Option<Builder> {
         "reference.add" => references::add,
         "reference.update" => references::update,
         "reference.remove" => references::remove,
+        "level.set_void" => level::set_void,
         _ => return None,
     })
 }

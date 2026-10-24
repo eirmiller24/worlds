@@ -36,8 +36,12 @@ pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, R
         .filter(|w| p.world.as_ref().is_none_or(|x| *x == w.slug))
         .flat_map(|w| {
             w.levels.iter().map(move |l| {
-                json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": w.slug,
-                    "world_px": l.world_px, "size": l.size, "depth": l.depth })
+                let mut v = json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": w.slug,
+                    "world_px": l.world_px, "size": l.size, "depth": l.depth });
+                if l.has_void() {
+                    v["void"] = json!(l.void);
+                }
+                v
             })
         })
         .collect();
@@ -305,6 +309,23 @@ pub(crate) fn crop(project: &Project, method: &str, p: Value) -> Result<Write, R
         .crop_level(&world.slug, &p.level)
         .map_err(|e| RpcError::command(&e))?;
     Ok(Write::one(cmd.unwrap_or_else(Command::noop)))
+}
+
+/// `level.set_void { level, void }` → `set_level_void`: the rects of
+/// project-grid cells cut out of the level's box (`[]`: a rectangle).
+pub(crate) fn set_void(_: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        level: Slug,
+        void: Vec<worlds_core::command::Rect>,
+    }
+    let p: P = params::parse(method, p)?;
+    Ok(Write::one(Command::SetLevelVoid {
+        level: p.level,
+        void: p.void,
+        restore: false,
+    }))
 }
 
 /// `level.update { level, slug?, name?, depth?, bg_color?, tags? }`.

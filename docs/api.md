@@ -2299,6 +2299,57 @@ A plan made before the project changed is refused; plan again:
   "data": { "expected": 67, "current": 68 } } }
 ```
 
+### non-rectangular levels
+
+A level can be any shape built from its box: `level.json` `void` lists rects `[x, y, width, height]` of project-grid cells cut out of it ([format.md](format.md#non-rectangular-levels-void)). `project.describe`, `level.list` and `level.get` report `void` when a level has one (`level.get`'s `level` is `level.json`, so `void` is there; the text view adds `, void [...]` to the size line and draws void cells as `*`, listed last in each legend as `* void`).
+
+| Write | Params | Command |
+| --- | --- | --- |
+| `level.set_void` | `{ level, void }`; `void` replaces the level's rects, `[]` makes it a rectangle | `set_level_void`: clears the grid cells, overrides and tiles that fall in the new void; refused (`command_error` `invalid`) while an entity sits there, for a rect that is empty or reaches outside the box, and when no cell would be left. Reports `level_meta` part `void`, then a `grid` or `tiles` per layer it cleared |
+
+The void reads as outside the level for every write: `grid.set_cells` and `grid.line` drop their non-empty cells there (clearing a void cell is allowed, to clean up a file), as do `tiles.set` and `tiles.stamp` with their placements; `grid.fill_rect` fills only the level's cells of its rect, `grid.flood_fill` doesn't cross the void and `grid.replace_value` leaves it alone; `entity.add` and `entity.move` refuse a void cell (`invalid`); `level.resize` moves and clips the rects with the content; `level.create` and `level.replace` take `void` in `level` (as in `level.json`), checked like `level.set_void`'s, with grid cells and tiles in it dropped and entities there refused. `rules.regions` treats the void as the level's border.
+
+Cutting the top-right corner out of `crevasse`, which clears the walls there:
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "method": "level.set_void", "params": { "level": "crevasse", "void": [[16, 0, 4, 2]] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "result": { "rev": 75, "status": "applied", "label": "claude-code: Shape level crevasse",
+  "changes": [
+    { "change": "level_meta", "world": "main", "level": "crevasse", "part": "void" },
+    { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [16, 0, 4, 2] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "method": "level.get", "params": { "level": "crevasse", "layers": ["collision"], "format": "text", "notes": "none" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "result": { "rev": 75, "text": "level crevasse \"Crevasse\" world main id crevasse22 tags [\"forest\"]\nsize 20x5 cells of 16 px, world_px [0, 0], depth 0, bg #202020, void [[16, 0, 4, 2]]\nfields: biome = [\"flooded\"]\nrule state main_tiling: seed 9 optional_groups [flooded_decor, pillars]\n\nint_grid collision (20x5 cells of 16 px)\nlegend: . empty, # solid, f fortified, o oneway, ~ water, L ramp_l, * void\n  0         1\n  01234567890123456789\n0 ################****\n1 #..#ooo#.....~~~****\n2 #.~~~.#..###.#.#...#\n3 #L..~~##......######\n4 ####################\n\nentities: 3\n  doorcrev22 locked_door in objects at [18, 3] size [1, 2] fields {\"exit_to\": \"doorshaft2\", \"facing\": \"east\", \"key_item\": \"brass_key\", \"script\": \"scripts/door.gd\", \"speed\": 2, \"sprite\": {\"tile\": [4, 4], \"tileset\": \"castle_main\"}, \"tint\": \"#ff8080\", \"waypoints\": [[1, 1], [2, 1]]}\n  75rk7gzrhn floor_button in objects at [2, 1] fields {\"target\": \"5w6isso7ut\"}\n  5w6isso7ut locked_door in objects at [8, 1] fields {\"exit_to\": \"doorshaft2\"}\n" } }
+```
+
+A fill across the corner fills only the level's cells, and an entity can't go there:
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "method": "grid.fill_rect", "params": { "level": "crevasse", "layer": "collision", "rect": [12, 1, 8, 1], "value": "solid" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "result": { "rev": 76, "status": "applied", "label": "claude-code: Fill rectangle on collision",
+  "changes": [ { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [12, 1, 4, 1] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "method": "entity.add", "params": { "level": "crevasse", "entity": { "type": "floor_button", "cell": [18, 0] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "error": { "code": -32004, "message": "cell [18, 0] of layer objects is in the void of level crevasse (cut out of its shape); pick a cell of the level",
+  "data": { "kind": "invalid", "message": "cell [18, 0] of layer objects is in the void of level crevasse (cut out of its shape); pick a cell of the level" } } }
+```
+
 ## Headless mode
 
 `worlds_server::headless` runs the same method handler over a `Project` loaded from a directory, with its own `History` and `BakeCache`: `headless::Session` answers calls in-process with no socket, and `headless::run` (the `worlds-server <dir>` binary) serves it over the same WebSocket and `server.json` as the editor (the docs test uses that). Differences from the editor:
