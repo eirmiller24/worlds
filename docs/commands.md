@@ -321,6 +321,14 @@ Annotations live at world scope (`world.json`, world pixels) or level scope (`no
   "note": { "id": "wingnote22", "kind": "note", "title": "Needs a key room", "px": [40, 24], "tags": ["todo"] } }
 ```
 
+A connector names the rooms (or entities) it joins; its ends are computed from them ([format.md](format.md#connectors)):
+
+```json
+{ "op": "add_note", "scope": { "world": "main" },
+  "note": { "id": "conndrop22", "kind": "connector", "label": "one-way drop",
+    "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" }, "waypoints": [[360, 40]] } }
+```
+
 - **Inverse:** `remove_note`. **Changes:** `note`.
 
 ### update_note

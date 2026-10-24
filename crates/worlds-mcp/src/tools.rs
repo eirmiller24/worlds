@@ -212,6 +212,9 @@ struct Geometry {
     px: Option<[i64; 2]>,
     points: Option<Vec<[i64; 2]>>,
     rect: Option<[i64; 4]>,
+    from: Option<Value>,
+    to: Option<Value>,
+    waypoints: Option<Vec<[i64; 2]>>,
 }
 
 #[derive(Deserialize)]
@@ -231,6 +234,8 @@ struct AddNote {
     closed: Option<bool>,
     group: Option<String>,
     label: Option<String>,
+    connector_label: Option<String>,
+    style: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -277,6 +282,10 @@ struct NotePatch {
     geometry: Option<Geometry>,
     #[serde(rename = "move")]
     move_by: Option<[i64; 2]>,
+    #[serde(default, deserialize_with = "present")]
+    connector_label: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    style: Option<Option<String>>,
 }
 
 #[derive(Deserialize)]
@@ -845,9 +854,29 @@ fn split_text(text: &str) -> (Option<String>, Option<String>) {
     ((!title.is_empty()).then_some(title), body)
 }
 
-/// The one geometry key given (`px`, `points` or `rect`) with its value.
+/// The geometry keys given with their values: one of `px`, `points` or
+/// `rect`, or a connector's `from`, `to` and `waypoints` (any of them).
 fn geometry_keys(g: &Geometry) -> Result<Map<String, Value>, String> {
     let mut m = Map::new();
+    let connector = [
+        ("from", g.from.clone()),
+        ("to", g.to.clone()),
+        ("waypoints", g.waypoints.as_ref().map(|w| json!(w))),
+    ];
+    if connector.iter().any(|(_, v)| v.is_some()) {
+        if g.px.is_some() || g.points.is_some() || g.rect.is_some() {
+            return Err(
+                "geometry: a connector's from, to and waypoints don't go with px, points or rect"
+                    .into(),
+            );
+        }
+        for (k, v) in connector {
+            if let Some(v) = v {
+                m.insert(k.into(), v);
+            }
+        }
+        return Ok(m);
+    }
     if let Some(px) = g.px {
         m.insert("px".into(), json!(px));
     }
@@ -858,7 +887,10 @@ fn geometry_keys(g: &Geometry) -> Result<Map<String, Value>, String> {
         m.insert("rect".into(), json!(rect));
     }
     if m.len() != 1 {
-        return Err("geometry needs exactly one of px, points or rect".into());
+        return Err(
+            "geometry needs exactly one of px, points or rect (a connector: from, to and waypoints)"
+                .into(),
+        );
     }
     Ok(m)
 }
@@ -1171,6 +1203,8 @@ impl Engine {
             ("pin_label", a.pin_label.is_some(), "pin"),
             ("closed", a.closed.is_some(), "guide"),
             ("group", a.group.is_some(), "guide"),
+            ("connector_label", a.connector_label.is_some(), "connector"),
+            ("style", a.style.is_some(), "connector"),
         ];
         for (key, given, kind) in per_kind {
             if given && a.kind != kind {
@@ -1181,6 +1215,8 @@ impl Engine {
         put(&mut note, "label", &a.pin_label);
         put(&mut note, "closed", &a.closed);
         put(&mut note, "group", &a.group);
+        put(&mut note, "label", &a.connector_label);
+        put(&mut note, "style", &a.style);
         for (k, v) in geometry_keys(&a.geometry)? {
             note[k.as_str()] = v;
         }
@@ -1208,7 +1244,7 @@ impl Engine {
         // Guides are reference lines, not work items: left out unless asked
         // for by kind or group.
         if a.kind.is_none() && a.group.is_none() {
-            p["kinds"] = json!(["note", "pin", "path", "region"]);
+            p["kinds"] = json!(["note", "pin", "path", "region", "connector"]);
         }
         let r = self.read("notes.list", p)?;
         self.json_result(json!({ "rev": r["rev"], "notes": r["notes"] }))
@@ -1250,6 +1286,11 @@ impl Engine {
         put(&mut patch, "label", &pt.pin_label);
         put(&mut patch, "closed", &pt.closed);
         put(&mut patch, "group", &pt.group);
+        if pt.pin_label.is_some() && pt.connector_label.is_some() {
+            return Err("give pin_label (a pin) or connector_label (a connector), not both".into());
+        }
+        put(&mut patch, "label", &pt.connector_label);
+        put(&mut patch, "style", &pt.style);
         if let Some(g) = &pt.geometry {
             for (k, v) in geometry_keys(g)? {
                 patch[k.as_str()] = v;
@@ -1263,7 +1304,7 @@ impl Engine {
         }
         let has_patch = patch.as_object().is_some_and(|m| !m.is_empty());
         if !has_patch && pt.move_by.is_none() {
-            return Err("patch is empty: give text, title, body, tags, color, links, status, export, locked, icon, pin_label, closed, group, geometry or move".into());
+            return Err("patch is empty: give text, title, body, tags, color, links, status, export, locked, icon, pin_label, closed, group, connector_label, style, geometry or move".into());
         }
         let label = Self::label("update_note", a.label.as_deref(), &a.id);
         let mut writes = Vec::new();

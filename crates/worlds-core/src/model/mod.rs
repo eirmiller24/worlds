@@ -8,6 +8,7 @@
 
 mod annotation;
 mod common;
+mod connector;
 mod defs;
 mod derived;
 mod entity;
@@ -21,8 +22,11 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use annotation::{Annotation, GuideGroup, Link, NoteStatus, Shape, bbox_of, parse_link};
+pub use annotation::{
+    Annotation, ConnectorStyle, Endpoint, GuideGroup, Link, NoteStatus, Shape, bbox_of, parse_link,
+};
 pub use common::{Color, Flip, TileRef};
+pub use connector::{Anchor, connector_polyline, nearest_edge_point};
 pub use defs::{EnumDef, EnumValue, TilesetDef};
 pub use derived::DerivedCycle;
 pub use entity::{

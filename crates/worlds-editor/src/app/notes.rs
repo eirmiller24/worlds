@@ -222,7 +222,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
             .selected_text(st.notes.kind.clone().unwrap_or_else(|| "any kind".into()))
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut st.notes.kind, None, "any kind");
-                for k in ["note", "pin", "path", "region", "guide"] {
+                for k in ["note", "pin", "path", "region", "guide", "connector"] {
                     ui.selectable_value(&mut st.notes.kind, Some(k.to_string()), k);
                 }
             });

@@ -115,6 +115,17 @@ enum Kind {
         start: CellHit,
         world: bool,
     },
+    /// Select: drag a geometry handle of the one selected annotation,
+    /// applied on release as one entry.
+    MoveVertex {
+        start: CellHit,
+        handle: crate::annot::Handle,
+    },
+    /// Select: Alt+click on a segment of the one selected annotation adds a
+    /// point there on release, one entry.
+    InsertVertex {
+        start: CellHit,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -835,8 +846,11 @@ impl Editing {
         let doc = &*cx.doc;
         // A world marquee or a drag of the selection needs no level (only
         // world px count): they work in a project with none.
-        let worldly =
-            tool == Tool::Select && matches!(grab, Grab::WorldMarquee | Grab::Selection { .. });
+        let worldly = tool == Tool::Select
+            && matches!(
+                grab,
+                Grab::WorldMarquee | Grab::Selection { .. } | Grab::Vertex(_) | Grab::InsertVertex
+            );
         // Without a layer ([`crate::tools::NO_LAYER`]: a project with none)
         // only the Select tool works, in cells of the project grid.
         let no_layer = at.layer >= doc.project.layers.len();
@@ -861,6 +875,8 @@ impl Editing {
                         start: at,
                         was_selected,
                     },
+                    Grab::Vertex(handle) => Kind::MoveVertex { start: at, handle },
+                    Grab::InsertVertex => Kind::InsertVertex { start: at },
                     _ => Kind::Marquee {
                         start: at,
                         world: true,
@@ -908,9 +924,22 @@ impl Editing {
                 };
                 self.gesture = Some(g);
             }
+            Tool::Select if matches!(grab, Grab::Vertex(_) | Grab::InsertVertex) => {
+                // Applied on release as one entry.
+                g.kind = match grab {
+                    Grab::Vertex(handle) => Kind::MoveVertex { start: at, handle },
+                    _ => Kind::InsertVertex { start: at },
+                };
+                self.gesture = Some(g);
+            }
             Tool::Select => {
                 let (kind, label) = match grab {
-                    Grab::None | Grab::Marquee | Grab::WorldMarquee | Grab::Selection { .. } => {
+                    Grab::None
+                    | Grab::Marquee
+                    | Grab::WorldMarquee
+                    | Grab::Selection { .. }
+                    | Grab::Vertex(_)
+                    | Grab::InsertVertex => {
                         return;
                     }
                     Grab::Level => (
@@ -1084,6 +1113,14 @@ impl Editing {
                 self.close();
                 return;
             }
+            Kind::MoveVertex { start, handle } => {
+                self.move_vertex(cx, start, &at, *handle, modifiers);
+                return;
+            }
+            Kind::InsertVertex { start } => {
+                self.insert_vertex(cx, start, modifiers);
+                return;
+            }
         };
         if let Some(cmd) = cmd {
             self.push_or_status(cx, cmd);
@@ -1212,6 +1249,89 @@ impl Editing {
         match r {
             Ok(()) => cx.view.selection.set(moved_tiles),
             Err(e) => cx.view.set_status(format!("Can't move there: {e}"), true),
+        }
+    }
+
+    /// The release of a handle drag: [`crate::annot::plan_vertex_move`] as
+    /// one entry. A release where the press was (a click) only highlights
+    /// the handle (done at the press).
+    fn move_vertex(
+        &mut self,
+        cx: &mut CommandContext<'_>,
+        start: &CellHit,
+        at: &CellHit,
+        handle: crate::annot::Handle,
+        modifiers: egui::Modifiers,
+    ) {
+        let d_raw = [
+            at.world_px[0] - start.world_px[0],
+            at.world_px[1] - start.world_px[1],
+        ];
+        if d_raw == [0.0, 0.0] {
+            return;
+        }
+        let pixel = crate::tools::pixel_mod(modifiers);
+        let plan = match crate::annot::plan_vertex_move(cx.doc, cx.view, handle, d_raw, pixel) {
+            Ok(p) => p,
+            Err(e) => {
+                cx.view.set_status(e, true);
+                return;
+            }
+        };
+        let Some(cmd) = plan.command else {
+            return;
+        };
+        let r = self.push(
+            cx,
+            Command::Batch {
+                label: plan.label,
+                commands: vec![cmd],
+            },
+        );
+        self.entry_done(r.is_ok());
+        if let Err(e) = r {
+            cx.view.set_status(e, true);
+        }
+    }
+
+    /// The release of an Alt+click on a segment of the one selected
+    /// annotation: [`crate::annot::plan_vertex_insert`] at the press, one
+    /// entry; the new point is highlighted.
+    fn insert_vertex(
+        &mut self,
+        cx: &mut CommandContext<'_>,
+        start: &CellHit,
+        modifiers: egui::Modifiers,
+    ) {
+        let pixel = crate::tools::pixel_mod(modifiers);
+        let zoom = cx.view.zoom;
+        let Some(planned) =
+            crate::annot::plan_vertex_insert(cx.doc, cx.view, start.world_px, zoom, pixel)
+        else {
+            return;
+        };
+        let (cmd, handle) = match planned {
+            Ok(x) => x,
+            Err(e) => {
+                cx.view.set_status(e, true);
+                return;
+            }
+        };
+        let id = match &cmd {
+            Command::UpdateNote { id, .. } => id.clone(),
+            _ => return,
+        };
+        let r = self.push(
+            cx,
+            Command::Batch {
+                label: format!("Add a point to {id}"),
+                commands: vec![cmd],
+            },
+        );
+        self.entry_done(r.is_ok());
+        match r {
+            Ok(()) => cx.view.vertex = Some((id, handle)),
+            Err(e) => cx.view.set_status(e, true),
         }
     }
 

@@ -683,13 +683,13 @@ An entity on the wire: `{ id, type, level, world, layer, cell, offset_px, size, 
 
 ### notes
 
-A note on the wire: `{ scope, note }`, `scope` being `{ "world": slug }` or `{ "level": slug }` and `note` the annotation in file form (pixels: world pixels at world scope, level pixels at level scope). Annotations are notes, pins, paths, regions and guides; guides are world-scope reference lines, grouped by an optional `group` naming one of the world's `guide_groups` ([format.md](format.md)).
+A note on the wire: `{ scope, note }`, `scope` being `{ "world": slug }` or `{ "level": slug }` and `note` the annotation in file form (pixels: world pixels at world scope, level pixels at level scope). Annotations are notes, pins, paths, regions, guides and connectors; guides are world-scope reference lines, grouped by an optional `group` naming one of the world's `guide_groups`, and a connector joins two levels or entities (`from`, `to`), its ends computed from where they are ([format.md](format.md#connectors)).
 
-**Locked annotations.** The commands ignore `locked`; this API enforces it. Moving a locked annotation (changing its geometry: `px`, `points`, `rect`, `closed`, or a guide's `group`) with `notes.update` or `notes.move`, or removing one with `notes.remove`, needs `confirm: true` ([Confirmation](#confirmation)); without it the error is `needs_confirm` with the reason "note guidestem2 is locked; moving it needs confirm: true". Changing its text, tags, color, links, status, export flag, a pin's icon or label, or `locked` itself never does.
+**Locked annotations.** The commands ignore `locked`; this API enforces it. Moving a locked annotation (changing its geometry: `px`, `points`, `rect`, `closed`, a guide's `group`, or a connector's `from`, `to` or `waypoints`) with `notes.update` or `notes.move`, or removing one with `notes.remove`, needs `confirm: true` ([Confirmation](#confirmation)); without it the error is `needs_confirm` with the reason "note guidestem2 is locked; moving it needs confirm: true". Changing its text, tags, color, links, status, export flag, a pin's icon or label, a connector's label or style, or `locked` itself never does.
 
 | Method | Params | Result / command |
 | --- | --- | --- |
-| `notes.list` | `{ scope?, tag?, status?, kind?, kinds?, group?, export? }`; `status`: `"open"`, `"done"` or `"all"` (default); `kind` one kind, `kinds` any of several (`["note", "pin", "path", "region"]` leaves guides out); `group`: only the guides of that guide group; `export`: only annotations with that `export` flag. Every kind is listed by default, guides included | `{ rev, notes }`, world notes first, then levels in `level.list` order |
+| `notes.list` | `{ scope?, tag?, status?, kind?, kinds?, group?, export? }`; `status`: `"open"`, `"done"` or `"all"` (default); `kind` one kind, `kinds` any of several (`["note", "pin", "path", "region", "connector"]` leaves guides out); `group`: only the guides of that guide group; `export`: only annotations with that `export` flag. Every kind is listed by default, guides included | `{ rev, notes }`, world notes first, then levels in `level.list` order |
 | `notes.add` | `{ scope, note, index? }`; `note.id` optional; a guide may name a `group` | `add_note`; result has `id` |
 | `notes.update` | `{ id, note }` (wholesale) or `{ id, patch }` (top-level keys merged in, geometry keys included; `null` removes an optional key; `kind` can't change), plus `confirm?` for a locked one | `update_note` |
 | `notes.move` | `{ ids: [id], delta: [dx, dy], confirm? }`: every point of each annotation moves by `delta` pixels | `batch` of `update_note`, labelled "Move note \<id\>" or "Move \<n\> notes" |
@@ -850,6 +850,19 @@ A group its guides still name can't go, and a locked note isn't removed without 
 ```json
 { "jsonrpc": "2.0", "id": 100, "error": { "code": -32002, "message": "note guidestem2 is locked; removing it needs confirm: true",
   "data": { "reason": "note guidestem2 is locked; removing it needs confirm: true" } } }
+```
+
+A connector from a room to a door entity, through one waypoint (shown, not replayed):
+
+```json norun
+{ "jsonrpc": "2.0", "id": 101, "method": "notes.add", "params": { "scope": { "world": "main" },
+  "note": { "id": "connshaft2", "kind": "connector", "title": "Drop", "label": "one-way drop",
+    "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" }, "waypoints": [[360, 40]] } } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 101, "result": { "rev": 29, "status": "applied", "label": "claude-code: Add connector", "id": "connshaft2",
+  "changes": [ { "change": "note", "world": "main", "level": null, "id": "connshaft2" } ] } }
 ```
 
 ### defs

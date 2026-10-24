@@ -21,7 +21,7 @@ use crate::model::{
     RuleEntry, RuleOutput, RuleSet, Select, Shape, Spacing, Symmetry, TemplateOutput, TemplateRef,
     TileMode, TileRef, World, Write, glyph_problem,
 };
-use crate::model::{Link, parse_link};
+use crate::model::{Endpoint, Link, parse_link};
 
 /// One problem found by [`validate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1744,6 +1744,46 @@ impl<'a> Validator<'a> {
             let dir = format!("worlds/{}/levels/{}", w.slug, l.slug);
             self.level(&dir, l);
             self.level_regions(&format!("{dir}/level.json"), w, l);
+        }
+        for n in &w.notes {
+            self.connector_ends(&f, &format!("notes[{}]", n.id), n, w);
+        }
+        for l in &w.levels {
+            let f = format!("worlds/{}/levels/{}/notes.json", w.slug, l.slug);
+            for n in &l.notes {
+                self.connector_ends(&f, &format!("notes[{}]", n.id), n, w);
+            }
+        }
+    }
+
+    /// A connector's `from` and `to` must name a level or an entity of the
+    /// connector's own world.
+    fn connector_ends(&mut self, f: &str, at: &str, n: &Annotation, w: &World) {
+        let Shape::Connector { from, to, .. } = &n.shape else {
+            return;
+        };
+        for (key, end) in [("from", from), ("to", to)] {
+            let what = match end {
+                Endpoint::Level(s) => format!("level {:?}", s.as_str()),
+                Endpoint::Entity(id) => format!("entity {id}"),
+            };
+            match self.p.endpoint_anchor(end) {
+                None => self.push(
+                    f,
+                    format!("{at}.{key}"),
+                    format!("{what} does not exist: the connector's end dangles"),
+                ),
+                Some((_, ew, _)) if ew.slug != w.slug => self.push(
+                    f,
+                    format!("{at}.{key}"),
+                    format!(
+                        "{what} is in world {:?}, not the connector's world {:?}",
+                        ew.slug.as_str(),
+                        w.slug.as_str()
+                    ),
+                ),
+                Some(_) => {}
+            }
         }
     }
 

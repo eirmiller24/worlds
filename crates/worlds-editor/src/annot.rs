@@ -1,7 +1,9 @@
 //! Annotations in the editor: finding them, hit-testing them, the
-//! Note and Measure tools, and the selection edits that work across kinds
+//! Note and Measure tools, the selection edits that work across kinds
 //! (move, nudge, duplicate, delete of entities, annotations, tile stacks
-//! and levels).
+//! and levels), and the Select tool's geometry handles on one selected
+//! annotation (drag a vertex, Alt+click a segment to add one, Delete the
+//! highlighted one).
 //!
 //! Everything here is plain functions of the document and the view, shared
 //! by the viewport (mouse), the app (keys, the Notes pane) and `--script`
@@ -13,7 +15,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use worlds_core::command::NoteScope;
-use worlds_core::{Annotation, Command, Id, NoteStatus, Shape, Slug, TilePlacement};
+use worlds_core::{
+    Annotation, Command, Endpoint, Id, NoteStatus, Shape, Slug, TilePlacement, bbox_of,
+};
 
 use crate::doc::{Document, LevelIx};
 use crate::tools::in_layer;
@@ -131,8 +135,12 @@ pub fn find_note<'a>(doc: &'a Document, id: &Id) -> Option<NoteRef<'a>> {
     })
 }
 
-/// The points of an annotation in world px, as built.
+/// The points of an annotation in world px, as built. A connector's are
+/// its line ([`connector_line`]): the computed ends with the waypoints.
 pub fn world_points(doc: &Document, r: NoteRef<'_>) -> Vec<[i64; 2]> {
+    if matches!(r.note.shape, Shape::Connector { .. }) {
+        return connector_line(doc, r);
+    }
     let o = offset(doc, r.at, r.note);
     r.note
         .shape
@@ -142,8 +150,55 @@ pub fn world_points(doc: &Document, r: NoteRef<'_>) -> Vec<[i64; 2]> {
         .collect()
 }
 
+/// Where a connector end is, in world px (`None`: it names nothing).
+pub fn end_anchor(doc: &Document, e: &Endpoint) -> Option<worlds_core::Anchor> {
+    doc.project.endpoint_anchor(e).map(|a| a.0)
+}
+
+/// A connector's line in world px: its `from` end, the waypoints, its `to`
+/// end ([`worlds_core::connector_polyline`]), so it follows the rooms and
+/// entities it joins. An end that names nothing is left out (validation
+/// reports it).
+pub fn connector_line(doc: &Document, r: NoteRef<'_>) -> Vec<[i64; 2]> {
+    let Shape::Connector {
+        from,
+        to,
+        waypoints,
+        ..
+    } = &r.note.shape
+    else {
+        return Vec::new();
+    };
+    let o = offset(doc, r.at, r.note);
+    let wp: Vec<[i64; 2]> = waypoints
+        .iter()
+        .map(|p| [p[0] + o[0], p[1] + o[1]])
+        .collect();
+    match (end_anchor(doc, from), end_anchor(doc, to)) {
+        (Some(a), Some(b)) => worlds_core::connector_polyline(a, b, &wp),
+        (a, b) => {
+            let mut out = Vec::new();
+            if let Some(a) = a {
+                out.push(a.end_toward(wp.first().copied().unwrap_or(a.point)));
+            }
+            out.extend_from_slice(&wp);
+            if let Some(b) = b {
+                out.push(b.end_toward(wp.last().copied().unwrap_or(b.point)));
+            }
+            out
+        }
+    }
+}
+
 /// The bounding rect of an annotation in world px, as built.
 pub fn world_bbox(doc: &Document, r: NoteRef<'_>) -> Option<WRect> {
+    if matches!(r.note.shape, Shape::Connector { .. }) {
+        let [x, y, w, h] = bbox_of(&connector_line(doc, r))?;
+        return Some(WRect::from_pos_size(
+            [x as f64, y as f64],
+            [w as f64, h as f64],
+        ));
+    }
     let o = offset(doc, r.at, r.note);
     let [x, y, w, h] = r.note.bbox()?;
     Some(WRect::from_pos_size(
@@ -173,7 +228,7 @@ pub fn path_length(points: &[[i64; 2]]) -> f64 {
 pub fn segments(doc: &Document, r: NoteRef<'_>) -> Vec<([f64; 2], [f64; 2])> {
     let closed = match &r.note.shape {
         Shape::Note { .. } | Shape::Pin { .. } => return Vec::new(),
-        Shape::Path { .. } => false,
+        Shape::Path { .. } | Shape::Connector { .. } => false,
         Shape::Region { .. } => true,
         Shape::Guide { closed, .. } => *closed,
     };
@@ -277,13 +332,14 @@ pub fn point_note_at(doc: &Document, view: &ViewState, wp: [f64; 2], zoom: f64) 
     })
 }
 
-/// The path, guide or region outline within [`LINE_HIT_PX`] of `wp`,
-/// topmost first.
+/// The connector, path, guide or region outline within [`LINE_HIT_PX`] of
+/// `wp`, topmost first.
 pub fn line_note_at(doc: &Document, view: &ViewState, wp: [f64; 2], zoom: f64) -> Option<Id> {
     let tol = LINE_HIT_PX / zoom;
     let notes = all_notes(doc);
-    // Drawn order: regions, guides, paths; so paths are hit first.
-    for kind in ["path", "guide", "region"] {
+    // Drawn order: regions, guides, paths, connectors; so connectors are
+    // hit first.
+    for kind in ["connector", "path", "guide", "region"] {
         for r in notes.iter().rev() {
             if r.note.shape.name() != kind || !shown(view, r.note, false) {
                 continue;
@@ -431,6 +487,17 @@ pub struct Drawing {
     /// A measurement that was finished: it stays drawn until Escape or
     /// another tool.
     pub done: bool,
+    /// A connector being drawn: its ends (`points` are its waypoints).
+    pub connector: Option<ConnectorDraft>,
+}
+
+/// The ends of a connector being drawn with the Note tool: the first click
+/// set `from`; a click on another room or an entity sets `to` (Enter
+/// finishes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectorDraft {
+    pub from: Endpoint,
+    pub to: Option<Endpoint>,
 }
 
 /// A Note-tool point: half the project grid, or with Ctrl the pixel.
@@ -534,7 +601,8 @@ fn add_note(
 
 /// A Note- or Measure-tool click at world pixel `wp`: a note or pin is
 /// added at once; a path or polygon gets a vertex (the first one starts
-/// the drawing and decides its scope); a measurement gets a point.
+/// the drawing and decides its scope); a measurement gets a point; a
+/// connector is [`tool_click_shift`] without Shift.
 pub fn tool_click(
     doc: &Document,
     view: &mut ViewState,
@@ -542,7 +610,65 @@ pub fn tool_click(
     level_under: Option<LevelIx>,
     ctrl: bool,
 ) -> Option<Command> {
+    tool_click_shift(doc, view, wp, level_under, ctrl, false)
+}
+
+/// What a Connector click at `wp` lands on: an entity of a visible layer
+/// in the level under it, else that level.
+pub fn connector_target(
+    doc: &Document,
+    view: &ViewState,
+    wp: [f64; 2],
+    level_under: Option<LevelIx>,
+) -> Option<Endpoint> {
+    let ix = level_under?;
+    match crate::viewport::entity_at(doc, view, ix, wp) {
+        Some(id) => Some(Endpoint::Entity(id)),
+        None => Some(Endpoint::Level(doc.level(ix).slug.clone())),
+    }
+}
+
+/// The level a connector end is in (an entity's level).
+pub fn end_level(doc: &Document, e: &Endpoint) -> Option<LevelIx> {
+    match e {
+        Endpoint::Level(s) => doc.level_ix(s.as_str()),
+        Endpoint::Entity(id) => doc.find_entity(id).map(|f| f.0),
+    }
+}
+
+/// [`tool_click`] with Shift held. With the Connector kind: the first
+/// click on a room or an entity starts the connector there (`from`); after
+/// it, a click on an entity, or in a level other than the one `from` is
+/// in, sets `to` (a later one replaces it); any other click, and any click
+/// with Shift, adds a waypoint. Enter finishes.
+pub fn tool_click_shift(
+    doc: &Document,
+    view: &mut ViewState,
+    wp: [f64; 2],
+    level_under: Option<LevelIx>,
+    ctrl: bool,
+    shift: bool,
+) -> Option<Command> {
     let p = snap_point(doc, wp, ctrl);
+    if view.tool == crate::tools::Tool::Note
+        && let Some(d) = &view.drawing
+        && let Some(c) = &d.connector
+    {
+        let target = connector_target(doc, view, wp, level_under).filter(|t| {
+            !shift
+                && match t {
+                    Endpoint::Entity(_) => *t != c.from,
+                    Endpoint::Level(_) => end_level(doc, t) != end_level(doc, &c.from),
+                }
+        });
+        let d = view.drawing.as_mut()?;
+        let c = d.connector.as_mut()?;
+        match target {
+            Some(t) => c.to = Some(t),
+            None => d.points.push(p),
+        }
+        return None;
+    }
     if view.tool == crate::tools::Tool::Measure {
         match &mut view.drawing {
             Some(d) if d.measure && !d.done => d.points.push(p),
@@ -553,6 +679,7 @@ pub fn tool_click(
                     level: None,
                     points: vec![p],
                     done: false,
+                    connector: None,
                 })
             }
         }
@@ -589,8 +716,49 @@ pub fn tool_click(
                 level,
                 points: vec![p],
                 done: false,
+                connector: None,
             });
             None
+        }
+        NoteKind::Connector => {
+            let Some(from) = connector_target(doc, view, wp, level_under) else {
+                view.set_status("A connector starts on a room or an entity: click one", true);
+                return None;
+            };
+            view.active_level = end_level(doc, &from).or(view.active_level);
+            view.drawing = Some(Drawing {
+                measure: false,
+                kind,
+                level: None,
+                points: Vec::new(),
+                done: false,
+                connector: Some(ConnectorDraft { from, to: None }),
+            });
+            None
+        }
+    }
+}
+
+/// A connector being drawn, in world px: its `from` end, the waypoints,
+/// then its `to` end, or with no `to` yet the pointer (when given).
+pub fn draft_line(doc: &Document, d: &Drawing, pointer: Option<[i64; 2]>) -> Vec<[i64; 2]> {
+    let Some(c) = &d.connector else {
+        return Vec::new();
+    };
+    let mut mid = d.points.clone();
+    let to = c.to.as_ref().and_then(|t| end_anchor(doc, t));
+    if to.is_none() {
+        mid.extend(pointer);
+    }
+    let Some(a) = end_anchor(doc, &c.from) else {
+        return mid;
+    };
+    match to {
+        Some(b) => worlds_core::connector_polyline(a, b, &mid),
+        None => {
+            let mut out = vec![a.end_toward(mid.first().copied().unwrap_or(a.point))];
+            out.extend(mid);
+            out
         }
     }
 }
@@ -652,6 +820,31 @@ pub fn finish_drawing(doc: &Document, view: &mut ViewState) -> Option<Command> {
         });
         return None;
     }
+    if let Some(c) = &d.connector {
+        let Some(to) = c.to.clone() else {
+            view.set_status(
+                "Click a second room or entity for the connector's end, then Enter",
+                true,
+            );
+            view.drawing = Some(Drawing { points: pts, ..d });
+            return None;
+        };
+        // Level scope when both ends are in one level (and World isn't
+        // forced), else the world of its start.
+        let (la, lb) = (end_level(doc, &c.from), end_level(doc, &to));
+        let level = la.filter(|_| la == lb && !view.note_tool.world);
+        if let Some(ix) = la {
+            view.active_level = Some(ix);
+        }
+        let shape = Shape::Connector {
+            from: c.from.clone(),
+            to,
+            waypoints: pts,
+            label: None,
+            style: Default::default(),
+        };
+        return add_note(doc, view, level, shape, "Connector");
+    }
     let (need, shape, title) = match d.kind {
         NoteKind::Region => (
             3,
@@ -688,6 +881,13 @@ pub fn drawing_backspace(view: &mut ViewState) -> bool {
     };
     if d.done {
         return false;
+    }
+    if let Some(c) = &mut d.connector {
+        // A connector: the last waypoint, then its end, then the drawing.
+        if d.points.pop().is_none() && c.to.take().is_none() {
+            view.drawing = None;
+        }
+        return true;
     }
     d.points.pop();
     if d.points.is_empty() {
@@ -1454,4 +1654,369 @@ fn shift_moved_tiles(
             other => other.clone(),
         })
         .collect()
+}
+
+// ---------------------------------------------------------- geometry handles
+
+/// Hit distance to a geometry handle, screen px.
+pub const HANDLE_PX: f64 = 6.0;
+
+/// A geometry handle of the one selected annotation ([`handles`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Handle {
+    /// Point `i`: of a path, guide or polygon region's `points`, of a
+    /// connector's `waypoints`.
+    Vertex(usize),
+    /// A rect region's corner or edge middle: per axis the edge that moves
+    /// (`-1` left/top, `1` right/bottom, `0` neither), as a level's resize
+    /// handles.
+    Rect([i8; 2]),
+}
+
+/// The annotation the Select tool shows handles on: the selection is
+/// exactly one annotation, and it is visible.
+pub fn edited_note<'a>(doc: &'a Document, view: &ViewState) -> Option<NoteRef<'a>> {
+    let [crate::view::SelItem::Note(id)] = view.selection.items.as_slice() else {
+        return None;
+    };
+    find_note(doc, id).filter(|r| shown(view, r.note, false))
+}
+
+/// The handles of an annotation, world px as built: each vertex of a path,
+/// guide or polygon region, each waypoint of a connector (its ends follow
+/// what they name and aren't handles), the corners and edge middles of a
+/// rect region. Notes and pins have none: they are dragged whole.
+pub fn handles(doc: &Document, r: NoteRef<'_>) -> Vec<(Handle, [f64; 2])> {
+    let o = offset(doc, r.at, r.note);
+    let w = |p: &[i64; 2]| [(p[0] + o[0]) as f64, (p[1] + o[1]) as f64];
+    let vertices = |points: &[[i64; 2]]| -> Vec<(Handle, [f64; 2])> {
+        points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (Handle::Vertex(i), w(p)))
+            .collect()
+    };
+    match &r.note.shape {
+        Shape::Note { .. } | Shape::Pin { .. } => Vec::new(),
+        Shape::Region {
+            rect: Some([x, y, rw, rh]),
+            ..
+        } => {
+            let mut out = Vec::new();
+            for ey in [-1i8, 0, 1] {
+                for ex in [-1i8, 0, 1] {
+                    if ex == 0 && ey == 0 {
+                        continue;
+                    }
+                    let px = [
+                        (x + o[0]) as f64 + (ex + 1) as f64 / 2.0 * *rw as f64,
+                        (y + o[1]) as f64 + (ey + 1) as f64 / 2.0 * *rh as f64,
+                    ];
+                    out.push((Handle::Rect([ex, ey]), px));
+                }
+            }
+            out
+        }
+        Shape::Path { points } | Shape::Guide { points, .. } | Shape::Region { points, .. } => {
+            vertices(points)
+        }
+        Shape::Connector { waypoints, .. } => vertices(waypoints),
+    }
+}
+
+/// The handle of the [`edited_note`] within [`HANDLE_PX`] screen px of
+/// `wp` (the nearest), with the annotation's id.
+pub fn handle_at(
+    doc: &Document,
+    view: &ViewState,
+    wp: [f64; 2],
+    zoom: f64,
+) -> Option<(Id, Handle)> {
+    let r = edited_note(doc, view)?;
+    let tol = HANDLE_PX / zoom.max(1e-9);
+    handles(doc, r)
+        .into_iter()
+        .map(|(h, p)| (h, (p[0] - wp[0]).hypot(p[1] - wp[1])))
+        .filter(|(_, d)| *d <= tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| (r.note.id.clone(), h))
+}
+
+/// "path x is locked ..." for an edit the handles refuse.
+fn locked_refusal(a: &Annotation) -> String {
+    format!(
+        "{} {} is locked: untick Locked in the Inspector to edit it",
+        a.shape.name(),
+        a.id
+    )
+}
+
+/// Where a dragged vertex lands, world px: on half the project grid, or
+/// with `pixel` (Ctrl) on the pixel; with "Snap to guides" on, each axis
+/// snaps instead to the x (y) of a vertical (horizontal) guide segment or
+/// a guide vertex within [`SNAP_PX`] screen px (visible guides as built,
+/// not the one being edited). Also returns what it snapped to.
+pub fn snap_vertex(
+    doc: &Document,
+    view: &ViewState,
+    editing: &Id,
+    target: [f64; 2],
+    pixel: bool,
+) -> ([i64; 2], Vec<SnapHit>) {
+    let mut p = snap_point(doc, target, pixel);
+    let mut hits = Vec::new();
+    if !view.annotations.snap_to_guides {
+        return (p, hits);
+    }
+    let tol = SNAP_PX / view.zoom.max(1e-9);
+    let mut cand: [Vec<(i64, Option<Seg>)>; 2] = [Vec::new(), Vec::new()];
+    for r in all_notes(doc) {
+        if !matches!(r.note.shape, Shape::Guide { .. })
+            || r.note.id == *editing
+            || !shown(view, r.note, false)
+        {
+            continue;
+        }
+        for q in world_points(doc, r) {
+            cand[0].push((q[0], None));
+            cand[1].push((q[1], None));
+        }
+        for s in segments(doc, r) {
+            for (axis, c) in cand.iter_mut().enumerate() {
+                if (s.0[axis] - s.1[axis]).abs() < 0.5 {
+                    c.push((s.0[axis].round() as i64, Some(s)));
+                }
+            }
+        }
+    }
+    for (axis, cands) in cand.iter().enumerate() {
+        // The nearest; a segment over a lone vertex at the same distance.
+        let best = cands
+            .iter()
+            .map(|&(c, seg)| ((target[axis] - c as f64).abs(), c, seg))
+            .filter(|(d, _, _)| *d <= tol)
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(b.2.is_some().cmp(&a.2.is_some())));
+        if let Some((_, c, seg)) = best {
+            p[axis] = c;
+            hits.push(SnapHit {
+                axis,
+                at: c,
+                segment: seg,
+            });
+        }
+    }
+    (p, hits)
+}
+
+/// What dragging a handle applies on release ([`plan_vertex_move`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VertexPlan {
+    /// One `update_note`, or `None` when the drag changes nothing.
+    pub command: Option<Command>,
+    pub label: String,
+    /// The annotation as the release leaves it (for the preview).
+    pub note: Annotation,
+    pub snaps: Vec<SnapHit>,
+}
+
+/// A handle `h` of the [`edited_note`] dragged by `d_raw` world px: the
+/// vertex (or waypoint) moves to where [`snap_vertex`] puts it; a rect
+/// region's handle moves its edges there (the rect is kept the right way
+/// round; one with no width or height is refused). Refused for a locked
+/// annotation (its handles show, but don't edit).
+pub fn plan_vertex_move(
+    doc: &Document,
+    view: &ViewState,
+    h: Handle,
+    d_raw: [f64; 2],
+    pixel: bool,
+) -> Result<VertexPlan, String> {
+    let r = edited_note(doc, view).ok_or("Select one annotation to edit its points")?;
+    let start = handles(doc, r)
+        .into_iter()
+        .find(|(x, _)| *x == h)
+        .map(|(_, p)| p)
+        .ok_or("That point is gone")?;
+    let a = r.note;
+    let target = [start[0] + d_raw[0], start[1] + d_raw[1]];
+    let (p, snaps) = snap_vertex(doc, view, &a.id, target, pixel);
+    let o = offset(doc, r.at, a);
+    let p = [p[0] - o[0], p[1] - o[1]];
+    let mut note = a.clone();
+    match (&mut note.shape, h) {
+        (
+            Shape::Path { points }
+            | Shape::Guide { points, .. }
+            | Shape::Region {
+                points, rect: None, ..
+            }
+            | Shape::Connector {
+                waypoints: points, ..
+            },
+            Handle::Vertex(i),
+        ) if i < points.len() => points[i] = p,
+        (
+            Shape::Region {
+                rect: Some(rect), ..
+            },
+            Handle::Rect(e),
+        ) => {
+            let [x, y, w, hh] = *rect;
+            let (mut x0, mut y0, mut x1, mut y1) = (x, y, x + w, y + hh);
+            match e[0] {
+                -1 => x0 = p[0],
+                1 => x1 = p[0],
+                _ => {}
+            }
+            match e[1] {
+                -1 => y0 = p[1],
+                1 => y1 = p[1],
+                _ => {}
+            }
+            let nr = [x0.min(x1), y0.min(y1), (x1 - x0).abs(), (y1 - y0).abs()];
+            if nr[2] <= 0 || nr[3] <= 0 {
+                return Err("A region needs a width and a height".into());
+            }
+            *rect = nr;
+        }
+        _ => return Err("That point is gone".into()),
+    }
+    let label = match h {
+        Handle::Vertex(i) => format!("Move point {i} of {}", a.id),
+        Handle::Rect(_) => format!("Resize region {}", a.id),
+    };
+    if note == *a {
+        return Ok(VertexPlan {
+            command: None,
+            label,
+            note,
+            snaps,
+        });
+    }
+    if a.locked {
+        return Err(locked_refusal(a));
+    }
+    Ok(VertexPlan {
+        command: Some(Command::UpdateNote {
+            id: a.id.clone(),
+            note: note.clone(),
+        }),
+        label,
+        note,
+        snaps,
+    })
+}
+
+/// Where an Alt+click at `wp` adds a point to the [`edited_note`]: the
+/// segment within [`LINE_HIT_PX`] screen px of it (`None` when there is
+/// none, so the click selects as usual). Returns the `update_note` with
+/// the new point (on half the project grid, Ctrl: the pixel) inserted
+/// between the segment's ends, and its handle. A rect region has no
+/// points to add to, and a locked annotation is refused.
+pub fn plan_vertex_insert(
+    doc: &Document,
+    view: &ViewState,
+    wp: [f64; 2],
+    zoom: f64,
+    pixel: bool,
+) -> Option<Result<(Command, Handle), String>> {
+    let r = edited_note(doc, view)?;
+    let tol = LINE_HIT_PX / zoom.max(1e-9);
+    let k = segments(doc, r)
+        .iter()
+        .enumerate()
+        .map(|(k, (a, b))| (k, seg_dist(wp, *a, *b)))
+        .filter(|(_, d)| *d <= tol)
+        .min_by(|a, b| a.1.total_cmp(&b.1))?
+        .0;
+    let a = r.note;
+    if a.locked {
+        return Some(Err(locked_refusal(a)));
+    }
+    let o = offset(doc, r.at, a);
+    let p = snap_point(doc, wp, pixel);
+    let p = [p[0] - o[0], p[1] - o[1]];
+    let mut note = a.clone();
+    // Segment k joins point k and k + 1 (the last of a closed outline joins
+    // the last point back to the first: the new one goes at the end). A
+    // connector's line starts at its `from` end, so segment k ends at
+    // waypoint k.
+    let i = match &mut note.shape {
+        Shape::Region { rect: Some(_), .. } => {
+            return Some(Err(
+                "A rect region has no points to add to: drag its edges and corners".into(),
+            ));
+        }
+        Shape::Path { points } | Shape::Guide { points, .. } | Shape::Region { points, .. } => {
+            let i = (k + 1).min(points.len());
+            points.insert(i, p);
+            i
+        }
+        Shape::Connector { waypoints, .. } => {
+            let i = k.min(waypoints.len());
+            waypoints.insert(i, p);
+            i
+        }
+        Shape::Note { .. } | Shape::Pin { .. } => return None,
+    };
+    Some(Ok((
+        Command::UpdateNote {
+            id: a.id.clone(),
+            note,
+        },
+        Handle::Vertex(i),
+    )))
+}
+
+/// Delete with a highlighted point ([`ViewState::vertex`]) of the
+/// [`edited_note`]: the `update_note` without it, and its label. A path
+/// (and an open guide) keeps at least 2 points, a polygon (a closed guide)
+/// 3; a rect's handles and a locked annotation are refused. `None` when no
+/// point of the edited annotation is highlighted (Delete deletes the
+/// selection).
+pub fn plan_vertex_delete(
+    doc: &Document,
+    view: &ViewState,
+) -> Option<Result<(Command, String), String>> {
+    let r = edited_note(doc, view)?;
+    let (id, h) = view.vertex.as_ref()?;
+    if *id != r.note.id {
+        return None;
+    }
+    let a = r.note;
+    let Handle::Vertex(i) = *h else {
+        return Some(Err(
+            "A rect region's corners and edges can't be removed".into()
+        ));
+    };
+    if a.locked {
+        return Some(Err(locked_refusal(a)));
+    }
+    let mut note = a.clone();
+    let (points, min, what) = match &mut note.shape {
+        Shape::Path { points } => (points, 2, "A path"),
+        Shape::Guide {
+            points,
+            closed: true,
+            ..
+        } => (points, 3, "A closed guide"),
+        Shape::Guide { points, .. } => (points, 2, "A guide"),
+        Shape::Region { points, .. } => (points, 3, "A polygon region"),
+        Shape::Connector { waypoints, .. } => (waypoints, 0, "A connector"),
+        Shape::Note { .. } | Shape::Pin { .. } => return None,
+    };
+    if i >= points.len() {
+        return None;
+    }
+    if points.len() <= min {
+        return Some(Err(format!("{what} keeps at least {min} points")));
+    }
+    points.remove(i);
+    Some(Ok((
+        Command::UpdateNote {
+            id: a.id.clone(),
+            note,
+        },
+        format!("Remove point {i} of {}", a.id),
+    )))
 }

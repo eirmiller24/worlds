@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use worlds_core::command::NoteScope;
 use worlds_core::{
-    Annotation, Command, CommandError, GuideGroup, Id, NoteStatus, Project, Shape, Slug,
+    Annotation, Command, CommandError, Endpoint, GuideGroup, Id, NoteStatus, Project, Shape, Slug,
 };
 
 use super::params::{self, default_world, ensure_id, find_level};
@@ -17,7 +17,7 @@ use super::{Confirm, Write};
 use crate::rpc::RpcError;
 
 /// The annotation kinds, as `kind` names them.
-const KINDS: [&str; 5] = ["note", "pin", "path", "region", "guide"];
+const KINDS: [&str; 6] = ["note", "pin", "path", "region", "guide", "connector"];
 
 /// Every note with its scope: world notes first, then levels in
 /// `level.list` order.
@@ -64,15 +64,28 @@ fn check_kind(method: &str, k: &str) -> Result<(), RpcError> {
     }
 }
 
-/// What a move changes: the kind, every point, `closed` and the guide
-/// group. Text, tags, status, color, links, export, `locked` and a pin's
-/// icon and label are not geometry.
-fn placement(n: &Annotation) -> (&'static str, Vec<[i64; 2]>, bool, Option<&Slug>) {
+/// What a move changes: the kind, every point, `closed`, the guide group
+/// and a connector's ends. Text, tags, status, color, links, export,
+/// `locked`, a pin's icon and label and a connector's label and style are
+/// not geometry.
+type Placement<'a> = (
+    &'static str,
+    Vec<[i64; 2]>,
+    bool,
+    Option<&'a Slug>,
+    Option<(&'a Endpoint, &'a Endpoint)>,
+);
+
+fn placement(n: &Annotation) -> Placement<'_> {
     let (closed, group) = match &n.shape {
         Shape::Guide { closed, group, .. } => (*closed, group.as_ref()),
         _ => (false, None),
     };
-    (n.shape.name(), n.shape.points(), closed, group)
+    let ends = match &n.shape {
+        Shape::Connector { from, to, .. } => Some((from, to)),
+        _ => None,
+    };
+    (n.shape.name(), n.shape.points(), closed, group, ends)
 }
 
 /// `needs_confirm` for touching locked notes: "note x is locked; moving it

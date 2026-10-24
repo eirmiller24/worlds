@@ -1037,7 +1037,7 @@ Coordinates are pixels: world pixels in `world.json`, pixels from the level's to
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `id` | id | required | Unique across the project |
-| `kind` | string | required | `note`, `pin`, `path`, `region` or `guide` |
+| `kind` | string | required | `note`, `pin`, `path`, `region`, `guide` or `connector` |
 | `title` | string | none | |
 | `body` | string | none | Markdown |
 | `tags` | array of strings | `[]` | |
@@ -1051,14 +1051,34 @@ Coordinates are pixels: world pixels in `world.json`, pixels from the level's to
 | `rect` | `[x, y, w, h]` | | `region`, instead of `points` |
 | `closed` | bool | `false` | `guide`: join the last point to the first |
 | `icon` | string | | `pin`: icon name (below) |
-| `label` | string | | `pin`: short label |
-| `group` | slug | none | `guide`: the `world.json` guide group it belongs to (last key) |
+| `label` | string | | `pin`: short label; `connector`: text along the line |
+| `group` | slug | none | `guide`: the `world.json` guide group it belongs to |
+| `from` | end | | `connector` (required): where it starts, `{ "level": slug }` or `{ "entity": id }` |
+| `to` | end | | `connector` (required): where it ends, as `from` |
+| `waypoints` | array of `[x, y]` | `[]` | `connector`: points the line passes through, in pixels |
+| `style` | string | `"arrow"` | `connector`: `"arrow"` (an arrowhead at `to`), `"line"` or `"double"` (both ends) (last key) |
 
-Geometry by kind: `note` and `pin` need `px`; `path` and `guide` need 2+ `points`; `region` needs either `rect` (positive width and height) or 3+ `points`. A level-scope `note` or `pin` must sit inside its level; paths and regions may extend past it. `guide` is world scope only, `locked` in practice, and never exported. A geometry key on the wrong kind (`px` on a `path`, `group` on a `pin`) is a load error; a wrong point count is a validation problem.
+Geometry by kind: `note` and `pin` need `px`; `path` and `guide` need 2+ `points`; `region` needs either `rect` (positive width and height) or 3+ `points`; `connector` needs `from` and `to` ([below](#connectors)). A level-scope `note` or `pin` must sit inside its level; paths and regions may extend past it. `guide` is world scope only, `locked` in practice, and never exported. A geometry key on the wrong kind (`px` on a `path`, `group` on a `pin`) is a load error; a wrong point count is a validation problem.
 
 Pin icon names the editor draws: `pin` (the default), `statue`, `pool`, `door`, `star`, `chest`, `skull`, `eye`, `flag`, `key`. Any other name is kept and drawn as `pin`.
 
 Guides are locked reference lines that levels are built along and snap to, placed by hand or written by a tool (`add_note`). They aren't todo items: tools that count or list notes for an agent leave them out unless asked.
+
+### Connectors
+
+A connector is a planning line from one room (or a door entity) to another, with an optional label such as "needs double jump" or "one-way drop". Its ends are anchored, not stored: `from` and `to` name a level by slug or an entity by id, and the line is computed from where they are, so moving a room or an entity moves the line. In world pixels:
+
+- an **entity** end is the entity's pivot (`level.world_px + (cell + pivot) * layer grid + offset_px`, rounded);
+- a **level** end is the point of the level's edge nearest the next point along the line: the first waypoint for `from` (the last one for `to`), or with no waypoints the other end's center (a level's, `world_px + size * grid / 2`) or pivot. A point outside the level is clamped onto its rect; one inside goes straight out to the nearest edge.
+
+So two rooms side by side, `[0, 0, 100, 100]` and `[200, 0, 100, 100]` with no waypoints, are joined from `[100, 50]` to `[200, 50]`; a waypoint at `[150, -50]` makes it `[100, 0]`, `[150, -50]`, `[200, 0]`.
+
+```json
+{ "id": "conncrev22", "kind": "connector", "title": "Back up", "label": "needs double jump",
+  "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" }, "waypoints": [[360, 40]], "style": "double" }
+```
+
+`waypoints` are pixels like any geometry (world pixels in `world.json`, level pixels in `notes.json`); a level-scope connector's waypoints move with its level, and its ends may name other levels. Both ends should be in the connector's world. Old projects have no connectors and load unchanged; `from`, `to`, `waypoints` and `style` on another kind are a load error.
 
 ## export/ (generated)
 
@@ -1139,10 +1159,17 @@ The export carries geometry plus tags, and no game meaning: what an annotation i
 ```
 
 - Where: world-scope ones in `world.json` `worlds[].notes`; level-scope ones in that level's `levels/<slug>.json` `notes`, moved to world pixels. Every coordinate is in world pixels, so a reader can merge both lists.
-- Kinds: `note` (text at a point), `pin`, `path`, `region` (`rect` or `points`, never both). Never `guide`: guides don't export, and validation reports one flagged `export`.
+- Kinds: `note` (text at a point), `pin`, `path`, `region` (`rect` or `points`, never both), `connector`. Never `guide`: guides don't export, and validation reports one flagged `export`.
 - Keys: `{ id, kind, title?, body?, tags?, color?, links?, status?, px | points | rect, icon?, label? }`; `tags` and `links` are left out when empty, `status` when open.
 - `links` keep the file strings. An exported annotation's `note:` links always point at exported annotations (validation reports one that doesn't), so they resolve inside the export; `entity:<id>` resolves through the level files' `entities[].id`, `level:<slug>` through `world.json` `levels[].slug`.
 - Order: file order (world notes, then each level's), stable across bakes.
+- Connectors: like paths, with their ends resolved. `from` and `to` name levels by slug and entities by id, an entity end with the slug of the level holding it (`{ "entity": "doorshaft2", "level": "shaft" }`); `waypoints` are in world pixels; and `points` is the line as drawn, in world pixels: the two computed ends with the waypoints between (so it has `waypoints + 2` points and reads like a path's). A connector whose end names nothing (validation reports it) isn't exported. These keys are new in export format 1, which readers that ignore unknown keys don't notice; `check-export` takes `points` and an entity end's `level` out before reading the rest as an annotation, and checks that `points` has the right length and that the levels and entities named are in the export.
+
+```
+{ "id": "conncrev22", "kind": "connector", "title": "Back up", "label": "needs double jump",
+  "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2", "level": "shaft" },
+  "waypoints": [[360, 40]], "style": "double", "points": [[320, 40], [360, 40], [360, 208]] }
+```
 
 Tags are free-form: any tag is allowed, and only the region check of [validation](#validation-reference) reads them (a level tagged like a region annotation should lie inside it). The editor treats one specially: `todo` marks a note as a work item, not something for the game.
 
@@ -1215,8 +1242,8 @@ Line by line:
 - **`auto <layer>`**: auto layers are generated, so the view only says where from.
 - **`tiles <layer> (...): <n> tiles`**, then one placement per line in file order (row, then column): `[x, y] <tileset> [col, row]`, then ` flip x|y|xy|t|xt|yt|xyt` and ` alpha <a>` when not the default.
 - **`entities: <n>`**, then one per line in file order: `<id> <type> in <layer> at [x, y]`, then ` offset_px [x, y]`, ` size [w, h]`, ` fields <compact JSON>` when set.
-- **`notes: <n>`**, then one per line in file order: `<id> <kind> open|done`, the geometry (` at [x, y]` for notes and pins, ` points [...]` for paths, guides and polygon regions, ` rect [x, y, w, h]` for rect regions, ` closed` for a closed guide, ` icon` and ` label` for pins), then ` title`, ` tags`, ` links`, ` export`, ` locked`, ` body` and (guides) ` group` when set. Strings are JSON strings, so a body's newlines read as `\n`; tags and links are JSON arrays.
-- **`world notes over this level: <n> (world pixels)`**: the world-scope annotations other than guides whose bounding box meets the level's rect in the world, one per line in the same form as `notes:` (coordinates are world pixels), then **`guides over this level: <n> (list_notes kind guide)`**: only a count of the world's guides over the level, where they are built (group offset applied). Both lines are always there (with `0`), so the shape is predictable. Notes filtered out of `notes:` (done ones, for the MCP `read_level`) are filtered out here too; with no notes section at all, neither line is printed.
+- **`notes: <n>`**, then one per line in file order: `<id> <kind> open|done`, the geometry (` at [x, y]` for notes and pins, ` points [...]` for paths, guides and polygon regions, ` rect [x, y, w, h]` for rect regions, ` closed` for a closed guide, ` icon` and ` label` for pins, ` from <end> to <end>` with ` waypoints [...]`, ` label` and ` style` when set for connectors, each end as `level:<slug>` or `entity:<id>`), then ` title`, ` tags`, ` links`, ` export`, ` locked`, ` body` and (guides) ` group` when set. Strings are JSON strings, so a body's newlines read as `\n`; tags and links are JSON arrays.
+- **`world notes over this level: <n> (world pixels)`**: the world-scope annotations other than guides whose bounding box (a connector's: of its line, ends included) meets the level's rect in the world, one per line in the same form as `notes:` (coordinates are world pixels), then **`guides over this level: <n> (list_notes kind guide)`**: only a count of the world's guides over the level, where they are built (group offset applied). Both lines are always there (with `0`), so the shape is predictable. Notes filtered out of `notes:` (done ones, for the MCP `read_level`) are filtered out here too; with no notes section at all, neither line is printed.
 
 ## Validation reference
 
@@ -1233,10 +1260,10 @@ Line by line:
 - tile placements and entity cells inside the level;
 - duplicate slugs and ids (layers, values and groups, tilesets, enums and their values, entity types, fields, rule groups, stamps, worlds, levels, entity ids, note ids; in a rules file, rule slugs, reference slugs and expanded slugs together; template rule slugs within a template);
 - field values and defaults against their field type, `min`/`max`, `regex` (the whole value must match), enum values, path extensions, nullability (per element for arrays); `point` and `entity_ref` defaults again in each level or entity that inherits them; a `regex` that doesn't compile;
-- annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;
+- annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); a connector end (`notes[<id>].from`, `notes[<id>].to`) naming no level or entity ("level "x" does not exist: the connector's end dangles"), or one in another world than the connector's; an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;
 - entity types: a `category` is a path of non-empty segments separated by `/`, with no `/` at either end and no whitespace around a segment (`Puzzle/Doors`, not `/Puzzle`, `Puzzle//Doors` or `Puzzle / Doors`); no tag appears twice in one type's `tags`;
 - layer slugs that collide with file names (`level`, `entities`, `notes`, `macros` for `int_grid`/`tiles` layers, `macros` for `auto` layers);
 - shape rules: at most one `@` per pattern, odd pattern sizes unless the pattern has `@`, rows of one length, at least one tile alternative with weights of 1 or more, `pivot` only in stamp mode, `rotate` only with square tiles (the output's tileset and every level substitute for it), annotation point counts, guides only at world scope, entity `limit`s, numbers that must be in 0..1;
 - enum sources (only when asked): `--enum-source theme=data/themes.json` compares a project enum with the game data file it mirrors. The values are the keys of the object at the JSON pointer (`#/tracks`; the whole file without one; keys starting with `_` are comments and skipped) or the strings of an array there. Each value the enum has and the file doesn't (`enums.json` `enums[<i>].values[<j>]`: "enum theme has "none", which data/themes.json doesn't (enum source drift)"), and each the file has and the enum doesn't (`enums[<i>]`: "enum theme lacks "jungle", which data/themes.json has (enum source drift)"), is a problem. `--enum-extra theme=none` names values only the enum may have (for example a "no theme" value). The file is relative to the current directory. Repeatable; an unknown enum, an unreadable file, a pointer that finds nothing, any other shape, or an `--enum-extra` for an enum no `--enum-source` compares is a usage error. A typical game check: `--enum-source theme=data/themes.json --enum-extra theme=none --enum-source music=data/music.json#/tracks`.
 
-Load errors stop the load and name the file and JSON path: bad JSON, unknown keys, a key of another kind even at its default (`values` on a `tiles` layer, `min` on a `bool` field, `px` on a `path`), wrong types, `format` other than 1, a reserved glyph, a malformed tile alternative, an output mixing tiles and stamp, a rule key on a template reference or a reference key on a rule, a rule with both or neither of `match` and `region`, both or neither of `out` and `write`, `place` without `region` (or `region` without `place`), a pattern-rule key on a region rule, `place` with both or neither of `along` and `across`, `[x, y]` with `along` or `min_length`/`against` with `across`, a region bound of 0, a negative or fractional `pass`, an empty `require` list, a region rule or `write` in a template, `"overrides"` missing on a derived layer's file, present on another file or `false`, `!` in a file of a layer that isn't derived or in a legend, a cell test that isn't `*`, `+`, `.`, a slug, `!slug`, `[a|b]` or `![a|b]`, an IntGrid row with an unknown glyph or a different length, an IntGrid legend that disagrees with `layers.json`, a slug that doesn't match its file name, an unknown file in a level directory.
+Load errors stop the load and name the file and JSON path: bad JSON, unknown keys, a key of another kind even at its default (`values` on a `tiles` layer, `min` on a `bool` field, `px` on a `path`, `from` on a `path`), wrong types, `format` other than 1, a reserved glyph, a malformed tile alternative, an output mixing tiles and stamp, a rule key on a template reference or a reference key on a rule, a rule with both or neither of `match` and `region`, both or neither of `out` and `write`, `place` without `region` (or `region` without `place`), a pattern-rule key on a region rule, `place` with both or neither of `along` and `across`, `[x, y]` with `along` or `min_length`/`against` with `across`, a region bound of 0, a negative or fractional `pass`, an empty `require` list, a region rule or `write` in a template, `"overrides"` missing on a derived layer's file, present on another file or `false`, `!` in a file of a layer that isn't derived or in a legend, a cell test that isn't `*`, `+`, `.`, a slug, `!slug`, `[a|b]` or `![a|b]`, an IntGrid row with an unknown glyph or a different length, an IntGrid legend that disagrees with `layers.json`, a slug that doesn't match its file name, an unknown file in a level directory.

@@ -70,6 +70,15 @@
 //! in the middle of each cell. `shift` and `alt` are held throughout.
 //! `handle` (`[-1..1, -1..1]`, the edges that move) makes a select gesture
 //! a resize instead of a move.
+//!
+//! A `vertex` gesture edits one annotation's geometry with the Select
+//! tool's handles ([`VertexStep`]):
+//!
+//! ```json
+//! { "gesture": "vertex", "note": "pathcrev22", "vertex": 1, "world_px": [[300, 96]] }
+//! { "gesture": "vertex", "note": "pathcrev22", "insert": [150, 64] }
+//! { "gesture": "vertex", "note": "pathcrev22", "vertex": 1, "delete": true }
+//! ```
 
 use std::path::Path;
 
@@ -94,6 +103,40 @@ pub enum ScriptStep {
         redo: bool,
         n: usize,
     },
+    /// `{ "gesture": "vertex", "note": id, ... }`: the Select tool on one
+    /// annotation's geometry handles.
+    Vertex(VertexStep),
+}
+
+/// The Select tool's geometry handles on one annotation, through the same
+/// press and drag as the mouse (`note` becomes the selection first):
+///
+/// - `"vertex": i` (a point of a path, guide or polygon, a connector's
+///   waypoint) or `"handle": [ex, ey]` (a rect region's corner or edge,
+///   `-1..1` per axis) with `world_px`: pressed on that handle and dragged
+///   through the points, released at the last (one `update_note`);
+/// - the same with `"delete": true` and no `world_px`: the handle clicked
+///   (highlighted), then the Delete key;
+/// - `"insert": [x, y]`: an Alt+click there, on a segment, adds a point.
+///
+/// `ctrl` holds Ctrl (pixels instead of half the project grid).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VertexStep {
+    pub gesture: String,
+    pub note: String,
+    #[serde(default)]
+    pub vertex: Option<usize>,
+    #[serde(default)]
+    pub handle: Option<[i8; 2]>,
+    #[serde(default)]
+    pub world_px: Vec<[f64; 2]>,
+    #[serde(default)]
+    pub insert: Option<[f64; 2]>,
+    #[serde(default)]
+    pub delete: bool,
+    #[serde(default)]
+    pub ctrl: bool,
 }
 
 /// The Note tool (or the Measure tool) through the real path, in world px:
@@ -106,7 +149,9 @@ pub enum ScriptStep {
 pub struct NoteGestureStep {
     /// `note` or `measure`.
     pub gesture: String,
-    /// `note`, `pin`, `path` or `region` (Note tool; default `note`).
+    /// `note`, `pin`, `path`, `region` or `connector` (Note tool; default
+    /// `note`). A connector is a click per point (the first on a room or
+    /// entity, then waypoints and the other end), then `end`.
     #[serde(default)]
     pub kind: Option<String>,
     pub world_px: Vec<[f64; 2]>,
@@ -130,6 +175,10 @@ pub struct NoteGestureStep {
     /// `"escape"` or `"none"` (left in progress).
     #[serde(default)]
     pub end: Option<String>,
+    /// The clicks (indexes into `world_px`) made with Shift held: a
+    /// connector's waypoint even on a room or entity.
+    #[serde(default)]
+    pub shift: Vec<usize>,
 }
 
 /// A Select press and drag in world px, exactly as the mouse does it
@@ -614,6 +663,7 @@ fn parse_step(v: serde_json::Value) -> anyhow::Result<ScriptStep> {
     if let Some(g) = gesture {
         return Ok(match g.as_str() {
             "note" | "measure" => ScriptStep::NoteGesture(serde_json::from_value(v)?),
+            "vertex" => ScriptStep::Vertex(serde_json::from_value(v)?),
             "select" if v.get("world_px").is_some() => {
                 let s: WorldSelectStep = serde_json::from_value(v)?;
                 if !s.press {

@@ -549,3 +549,43 @@ fn format_md_json_example_is_real() {
     let (_, real) = check_json(&fixtures().join("flip_out_of_range"), &[]);
     assert_eq!(example, real);
 }
+
+/// An exported connector (format.md, "Annotations in the export"): its
+/// export-only keys (`points`, an entity end's `level`) are read, checked
+/// and set aside, and the rest parses as an annotation.
+#[test]
+fn connectors_in_the_export() {
+    let with = |c: Value| {
+        let (t, dir) = case("clean_minimal");
+        edit(&dir.join("world.json"), |w| {
+            w["worlds"][0]["notes"] = json!([c]);
+        });
+        (t, dir)
+    };
+    let good = json!({ "id": "connroomaa", "kind": "connector", "label": "drop",
+        "from": { "level": "room" }, "to": { "entity": "spawnaaaaa", "level": "room" },
+        "waypoints": [[40, -20]], "points": [[40, 0], [40, -20], [48, 96]] });
+    let (_t, dir) = with(good.clone());
+    let (code, v) = check_json(&dir, &[]);
+    assert_eq!(code, Some(0), "{v:#}");
+    let mut short = good.clone();
+    short["points"] = json!([[40, 0], [48, 96]]);
+    let (_t, dir) = with(short);
+    let (kind, at, msg) = one_problem(&dir);
+    assert_eq!(kind, "format");
+    assert_eq!(at, "world.json: worlds[main].notes[connroomaa].points");
+    assert!(msg.contains("3 [x, y]"), "{msg}");
+    let mut gone = good.clone();
+    gone["to"] = json!({ "entity": "goneaaaaaa", "level": "room" });
+    let (_t, dir) = with(gone);
+    let (kind, at, msg) = one_problem(&dir);
+    assert_eq!(kind, "reference");
+    assert_eq!(at, "world.json: worlds[main].notes[connroomaa].to");
+    assert_eq!(msg, "entity goneaaaaaa is not in the export");
+    let mut extra = good;
+    extra["from"] = json!({ "level": "room", "entity": "spawnaaaaa", "px": [0, 0] });
+    let (_t, dir) = with(extra);
+    let (kind, _, msg) = one_problem(&dir);
+    assert_eq!(kind, "format");
+    assert!(msg.contains("not an annotation"), "{msg}");
+}

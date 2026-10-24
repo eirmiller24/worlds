@@ -232,7 +232,12 @@ impl Ghost {
             Change::Note { id, .. } => {
                 let bbox = |p: &Project| -> Option<WRect> {
                     let (a, o) = find_note(p, id)?;
-                    let [x, y, w, h] = a.bbox()?;
+                    // A connector's box is its line's, ends included.
+                    let ([x, y, w, h], o) =
+                        match p.find_note(id).and_then(|n| p.connector_points(n)) {
+                            Some(line) => (worlds_core::bbox_of(&line)?, [0, 0]),
+                            None => (a.bbox()?, o),
+                        };
                     Some(WRect::from_pos_size(
                         [(x + o[0]) as f64 - 2.0, (y + o[1]) as f64 - 2.0],
                         [w as f64 + 4.0, h as f64 + 4.0],
