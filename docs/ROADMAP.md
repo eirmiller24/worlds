@@ -92,9 +92,7 @@ Shipped: the editor README's "Random and scatter brushes" (Paint strip, palette,
 
 ### 2.7 Layer operations
 
-**What.** Duplicate a layer (definition and every level's content, `<slug>_copy`), merge a tiles layer into the one below it (per level, the upper's stacks over the lower's), and move the selected tiles or entities to another layer of the same kind.
-
-**Commands.** `duplicate_layer { layer, slug }`; merge and move are batches of `set_tiles`, `remove_entity`, `add_entity` and `remove_layer_def`.
+Shipped: `duplicate_layer` in [commands.md](commands.md#layer-operations) (merge down and move to layer are `layer_ops` batches there), `defs.duplicate`, `defs.merge_down`, `tiles.move_to_layer` and `entity.move_to_layer` in [api.md](api.md#layer-operations), `layer_operation` in [mcp.md](mcp.md#layer_operation), the Layers pane's menu in the [editor README](../crates/worlds-editor/README.md#layer-operations).
 
 ### 2.8 Level resize with an anchor, crop to content
 
@@ -129,13 +127,7 @@ Finding your way around a big project, and planning on the map.
 
 ### 3.4 Reference images
 
-**What.** Put a sketch, a concept painting or a screenshot of the old game behind the grid, position and scale it, set its opacity, lock it. Level scope or world scope. Never exported (a game background is a different feature; see stretch goals).
-
-**Format.** `level.json` and `world.json` grow `references: [{ "id", "image", "px", "scale", "opacity", "locked", "visible" }]`, the image a path under the project like tileset images. Validation reports a missing file.
-
-**Commands.** `add_reference`, `update_reference`, `remove_reference`.
-
-**Editor.** A "References" pseudo-layer at the bottom of the Layers pane with the usual eye and lock; drag to move, corner handles to scale, Inspector for exact values. Images hot-reload like tilesets.
+Shipped: the format in [format.md](format.md#reference-images), `add_reference`, `update_reference`, `remove_reference` in [commands.md](commands.md#reference-image-commands), `reference.*` in [api.md](api.md#reference-images), the MCP tools in [mcp.md](mcp.md#add_reference), the References pseudo-layer, map and Inspector in the [editor README](../crates/worlds-editor/README.md#reference-images).
 
 ### 3.5 Zoom range
 
@@ -151,7 +143,7 @@ Shipped: the `connector` kind is specified in [format.md](format.md#connectors) 
 
 ### 3.8 History pane
 
-**What.** The undo log as a list: label, origin (user, agent, disk), time, files touched; click to undo or redo to that point. The log already exists; this is a view of it. Agent batches expand to show their commands.
+Shipped: the History pane in the [editor README](../crates/worlds-editor/README.md#the-history-pane); entries' time, files and parts in [commands.md](commands.md#undo-and-redo).
 
 ### 3.9 World layout modes
 
