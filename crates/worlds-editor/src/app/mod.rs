@@ -719,10 +719,13 @@ impl EditorApp {
         }
         let problems = problems::LiveProblems::new(0, opts.headless);
         let autosaver = crate::autosave::Autosaver::new(opts.autosave);
+        let mut library = crate::library::LibraryState::default();
+        library.thumbs.headless = opts.headless;
         EditorApp {
             st: EditorState {
                 viewport,
                 log,
+                library,
                 ..Default::default()
             },
             problems,
@@ -2881,7 +2884,7 @@ impl EditorApp {
         self.st.view.paste = Some(crate::clipboard::PasteGhost::new(frag));
         self.st.view.set_status(
             format!(
-                "Paste {n} item{}: click to place, Escape cancels",
+                "Paste {n} item{}: click to place; X, Y mirror and R rotates it; Escape cancels",
                 if n == 1 { "" } else { "s" }
             ),
             false,

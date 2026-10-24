@@ -56,9 +56,14 @@ impl EditorApp {
                 match p.turn(&doc.project, op) {
                     Ok(()) => {
                         let what = p.transform.describe();
-                        self.st
-                            .view
-                            .set_status(format!("Paste {what}: click to place"), false);
+                        let it = match &p.assembly {
+                            Some(s) => format!("Assembly {s}"),
+                            None => "Paste".into(),
+                        };
+                        self.st.view.set_status(
+                            format!("{it} {what}: click to place, X/Y/R turn it again"),
+                            false,
+                        );
                     }
                     Err(e) => self.st.view.set_status(e, true),
                 }

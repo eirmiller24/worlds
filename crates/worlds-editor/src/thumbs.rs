@@ -68,12 +68,19 @@ pub fn render(
         ((w_px * scale).round() as u32).max(1),
         ((h_px * scale).round() as u32).max(1),
     );
-    let bg = project
-        .bg_color
-        .as_ref()
-        .map(|c| parse_color(c.as_str()))
-        .unwrap_or([0x20, 0x22, 0x2c, 0xff]);
-    let mut img = RgbaImage::from_pixel(w, h, Rgba([bg[0], bg[1], bg[2], 0xff]));
+    // A light neutral ground, so dark wall colors and empty cells read
+    // apart at thumbnail size, with a faint line every project cell.
+    let mut img = RgbaImage::from_pixel(w, h, Rgba([0x7a, 0x7e, 0x8c, 0xff]));
+    if g * scale >= 4.0 {
+        for y in 0..h {
+            for x in 0..w {
+                let on = |v: u32| ((v as f64 / scale) % g) < 1.0 / scale;
+                if on(x) || on(y) {
+                    blend(img.get_pixel_mut(x, y), [0x60, 0x64, 0x70, 0x60]);
+                }
+            }
+        }
+    }
     let fill = |img: &mut RgbaImage, x0: f64, y0: f64, x1: f64, y1: f64, c: [u8; 4]| {
         let (x0, y0) = (
             (x0 * scale).floor().max(0.0) as u32,
@@ -203,8 +210,8 @@ pub fn render(
 /// Alpha-blend `c` over `p`.
 fn blend(p: &mut Rgba<u8>, c: [u8; 4]) {
     let a = c[3] as u32;
-    for i in 0..3 {
-        p.0[i] = ((c[i] as u32 * a + p.0[i] as u32 * (255 - a)) / 255) as u8;
+    for (d, s) in p.0.iter_mut().zip(c).take(3) {
+        *d = ((s as u32 * a + *d as u32 * (255 - a)) / 255) as u8;
     }
     p.0[3] = 0xff;
 }
@@ -254,6 +261,9 @@ pub struct Thumbs {
     images: Images,
     /// How many thumbnails were rendered (not read from the cache; tests).
     pub rendered: usize,
+    /// Headless (`--screenshot`): read the cache, never write it (nothing
+    /// is written into the project unless `--save`).
+    pub headless: bool,
 }
 
 impl Thumbs {
@@ -278,10 +288,17 @@ impl Thumbs {
             return t.clone();
         }
         let path = file_of(project_dir, a);
-        if !path.exists() {
-            self.rendered += 1;
-        }
-        let img = load_or_render(project_dir, project, a, &mut self.images);
+        let img = match image::open(&path) {
+            Ok(i) => i.to_rgba8(),
+            Err(_) => {
+                self.rendered += 1;
+                if self.headless {
+                    render(project_dir, project, a, &mut self.images)
+                } else {
+                    load_or_render(project_dir, project, a, &mut self.images)
+                }
+            }
+        };
         let ci = egui::ColorImage::from_rgba_unmultiplied(
             [img.width() as usize, img.height() as usize],
             img.as_raw(),

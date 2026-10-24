@@ -62,25 +62,11 @@ Shipped: `duplicate_level` is in [commands.md](commands.md#duplicate_level), `le
 
 ### 2.3 Assemblies (prefabs)
 
-**What.** Save a selection as a named, reusable piece of content: a doorway with its door, switch and wiring; a furnished room corner; an encounter. Place it from a palette like a stamp. Independent copies in v1 (edits to a placed copy do not touch the assembly); linked instances with overrides are a stretch goal.
-
-**Format.** `assemblies/<slug>.json`: the fragment shape of 2.1 plus `slug`, `name`, `category` (a `/` path like entity categories), `tags`, `doc`, and a thumbnail rendered into `.worlds/thumbs/`. Committed with the project so a team shares them; importable with 1.3.
-
-**Commands.** `set_assembly { assembly }`, `remove_assembly { slug }`, `rename_assembly`. Placing one is a paste (2.1), so it is a batch of existing commands with the undo label "Place assembly doorway".
-
-**API / MCP.** `defs.get/set/rename` grow a kind `assembly`. MCP: `edit_definitions` takes assemblies; `place_assembly { level, slug, cell }`; `save_assembly { selection, slug, ... }`. `describe_project` lists them.
-
-**Editor.** "Save selection as assembly…" (Ctrl+Shift+S in the map, or the context menu): slug, name, category, tags. A Library part of the Palette with the same search, favorites and category tree as entities, thumbnails from the cache. Click to arm the brush, place with a click; mirror and rotate before placing as for a paste.
+Shipped: `assemblies/<slug>.json` is in [format.md](format.md#assembliesslugjson), `set_assembly`, `remove_assembly`, `rename_assembly` and placing (a paste) in [commands.md](commands.md#assembly-commands), `defs.*` kind `assembly`, `edit.save_assembly` and `edit.place_assembly` in [api.md](api.md#assemblies-and-transforms), MCP `save_assembly`, `place_assembly` and assemblies in `edit_definitions` and `describe_project` in [mcp.md](mcp.md#save_assembly), Save selection as assembly (Ctrl+Shift+S) and the Palette's Library with cached thumbnails in the [editor README](../crates/worlds-editor/README.md) (rename and removal of what an assembly names do not follow into it yet: validation reports them).
 
 ### 2.4 Selection and brush transforms
 
-**What.** Mirror and rotate what you are about to place or what you have selected, and arrange levels.
-
-- **Brush transforms**: X mirrors the tile stamp or paste ghost left-right, Y top-bottom, R rotates a quarter turn (square tiles only, as rules already require for `rotate`). Shown in the Paint strip.
-- **Selection transforms**: Mirror X, Mirror Y, Rotate 90 on the selection, about its bounding box. Tiles turn with flip bits; int_grid cells move; entities move to the mirrored cell and keep their size and fields (the editor cannot know which field means "facing"); annotations' geometry turns. One batch, one entry.
-- **Align and distribute levels**: align selected levels' left, right, top, bottom, horizontal or vertical centers; distribute them with equal gaps horizontally or vertically; "butt together" closes gaps in a direction. Each is one batch of `move_level`. While dragging a level, snap to other levels' edges as it already snaps to guides.
-
-**Decisions.** No free rotation; everything is on the grid. Entity fields are never changed by a transform; a status message says so when a transformed entity has an enum field whose values look directional.
+Shipped: `worlds_core::transform` (fragments, selections, arranging levels) in [commands.md](commands.md#transforms), `edit.paste`/`edit.place_assembly` `flip`, `edit.transform` and `level.arrange` in [api.md](api.md#assemblies-and-transforms), MCP `arrange_levels` and `flip` in [mcp.md](mcp.md#arrange_levels), X/Y/R on the paste ghost and the tile stamp, Mirror X/Y and Rotate 90 on the selection, Arrange levels and level-edge snapping in the [editor README](../crates/worlds-editor/README.md).
 
 ### 2.5 Graphical geometry editing
 
