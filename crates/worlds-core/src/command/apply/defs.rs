@@ -1805,3 +1805,32 @@ impl Project {
         })
     }
 }
+
+impl Project {
+    /// Every tileset reference with what holds it, for
+    /// [`crate::merge`]'s dependencies. Level fields' types and defaults
+    /// (one site for all of them) are left out: the merge reads those
+    /// itself.
+    pub(crate) fn tileset_refs(&mut self) -> Vec<(crate::merge::Owner, Slug)> {
+        use crate::merge::Owner;
+        let mut out = Vec::new();
+        self.visit_tilesets(&mut |site, s| {
+            let owner = match site {
+                Site::Def(DefKind::Rules, layer) => Some(Owner::Layer(layer.clone())),
+                Site::Def(kind, slug) => Some(Owner::Def(*kind, slug.clone())),
+                Site::Template(name) => Some(Owner::Template(name.clone())),
+                Site::Reference { layer, .. } => Some(Owner::Layer(layer.clone())),
+                Site::LevelFields => None,
+                Site::Placement { level, .. }
+                | Site::State { level, .. }
+                | Site::Instance { level, .. }
+                | Site::LevelField { level, .. } => Some(Owner::Level(level.clone())),
+            };
+            if let Some(o) = owner {
+                out.push((o, s.clone()));
+            }
+            None
+        });
+        out
+    }
+}
