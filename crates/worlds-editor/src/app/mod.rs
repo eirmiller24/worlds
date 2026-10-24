@@ -24,6 +24,7 @@ pub mod project_pane;
 pub mod recovery;
 pub mod references;
 pub mod rules;
+pub mod shape_inspector;
 #[cfg(test)]
 pub(crate) mod testkit;
 pub mod theme;
@@ -3156,7 +3157,9 @@ impl EditorApp {
             ctx.input_mut(|i| {
                 use egui::Modifiers as M;
                 for t in Tool::ALL {
-                    if i.consume_key(M::NONE, t.key()) {
+                    if let Some(k) = t.key()
+                        && i.consume_key(M::NONE, k)
+                    {
                         acts.push(Action::SetTool(t));
                     }
                 }

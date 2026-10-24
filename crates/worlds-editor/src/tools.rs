@@ -39,6 +39,11 @@ pub enum Tool {
     Note,
     /// Measure distances, in tiles and pixels; never a command (M).
     Measure,
+    /// Shape the active level (non-rectangular levels): a drag cuts a
+    /// rectangle of project cells out of it, Shift-drag fills one back in,
+    /// each one `set_level_void`. Entered from a level's context menu; no
+    /// key, no toolbar button, not in [`Tool::ALL`].
+    Shape,
 }
 
 impl Tool {
@@ -67,6 +72,7 @@ impl Tool {
             Tool::Entity => "Entity",
             Tool::Note => "Note",
             Tool::Measure => "Measure",
+            Tool::Shape => "Shape",
         }
     }
 
@@ -83,11 +89,13 @@ impl Tool {
             Tool::Entity => "T",
             Tool::Note => "N",
             Tool::Measure => "M",
+            Tool::Shape => "",
         }
     }
 
-    pub fn key(self) -> egui::Key {
-        match self {
+    /// The tool's key; `None` for [`Tool::Shape`], which has none.
+    pub fn key(self) -> Option<egui::Key> {
+        Some(match self {
             Tool::Select => egui::Key::V,
             Tool::Brush => egui::Key::B,
             Tool::Rect => egui::Key::R,
@@ -98,7 +106,8 @@ impl Tool {
             Tool::Entity => egui::Key::T,
             Tool::Note => egui::Key::N,
             Tool::Measure => egui::Key::M,
-        }
+            Tool::Shape => return None,
+        })
     }
 
     /// The Paint group's modes, in the mode strip's order. The toolbar shows
@@ -722,6 +731,72 @@ pub fn hit_grid(doc: &Document, layer: usize, ix: LevelIx) -> (u32, [u32; 2]) {
 /// Whether a cell is inside a layer of `size` cells.
 pub fn in_layer(c: [i32; 2], size: [u32; 2]) -> bool {
     c[0] >= 0 && c[1] >= 0 && (c[0] as u32) < size[0] && (c[1] as u32) < size[1]
+}
+
+/// Whether cell `c` of project layer `layer` (or the project grid, for
+/// [`NO_LAYER`]) is part of level `ix`: inside it and, in a non-rectangular
+/// level, not in its void.
+pub fn cell_in_level(doc: &Document, layer: usize, ix: LevelIx, c: [i32; 2]) -> bool {
+    let (g, size) = hit_grid(doc, layer, ix);
+    let level = doc.level(ix);
+    in_layer(c, size)
+        && !doc
+            .project
+            .cell_void_of(g, level.size, &level.void, c[0] as i64, c[1] as i64)
+}
+
+/// A non-rectangular level's void after a Shape gesture over the project
+/// cells `r` (`[x0, y0, x1, y1)`, clipped to the level): cut that rect out,
+/// or with `fill` put it back in. A cut drops the rects it covers; a fill
+/// splits each rect it overlaps into the parts outside it. `None` when the
+/// void doesn't change.
+pub fn shape_void(
+    void: &[worlds_core::command::Rect],
+    size: [u32; 2],
+    r: [i32; 4],
+    fill: bool,
+) -> Option<Vec<worlds_core::command::Rect>> {
+    use worlds_core::command::Rect;
+    let r = clip_rect(r, size);
+    if r[0] >= r[2] || r[1] >= r[3] {
+        return None;
+    }
+    let [x0, y0, x1, y1] = r.map(|v| v as u32);
+    let covers = |v: &Rect| v.x >= x0 && v.y >= y0 && v.x + v.w <= x1 && v.y + v.h <= y1;
+    let mask = worlds_core::cell_mask_of(size, void);
+    let cell = |x: u32, y: u32| mask[(y * size[0] + x) as usize];
+    let out: Vec<Rect> = if fill {
+        let mut out = Vec::new();
+        for v in void {
+            let (vx1, vy1) = (v.x + v.w, v.y + v.h);
+            if v.x >= x1 || vx1 <= x0 || v.y >= y1 || vy1 <= y0 {
+                out.push(*v);
+                continue;
+            }
+            // The parts of `v` above, below, left and right of the fill.
+            let (iy0, iy1) = (v.y.max(y0), vy1.min(y1));
+            for p in [
+                Rect::new(v.x, v.y, v.w, iy0 - v.y),
+                Rect::new(v.x, iy1, v.w, vy1 - iy1),
+                Rect::new(v.x, iy0, x0.saturating_sub(v.x).min(v.w), iy1 - iy0),
+                Rect::new(x1.max(v.x), iy0, vx1.saturating_sub(x1.max(v.x)), iy1 - iy0),
+            ] {
+                if !p.is_empty() {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    } else {
+        // Already all void: nothing to cut.
+        if (y0..y1).all(|y| (x0..x1).all(|x| !cell(x, y))) {
+            return None;
+        }
+        let mut out: Vec<Rect> = void.iter().filter(|v| !covers(v)).copied().collect();
+        out.push(Rect::new(x0, y0, x1 - x0, y1 - y0));
+        out
+    };
+    (out != void).then_some(out)
 }
 
 /// A tile stamp: a `[col, row, w, h]` block of atlas tiles, laid out on a

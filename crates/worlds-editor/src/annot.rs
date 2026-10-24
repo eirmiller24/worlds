@@ -1125,10 +1125,24 @@ pub fn drag_delta(
         }
     }
     for axis in 0..2 {
-        let edges = [bbox.min[axis], bbox.max[axis]];
+        // The bounding box's edges, and a non-rectangular level's inner
+        // edges too (the x of each vertical edge of its outline, the y of
+        // each horizontal one): the notch of an L snaps like its sides.
+        let mut edges = vec![bbox.min[axis], bbox.max[axis]];
+        for &ix in levels {
+            if doc.level(ix).has_void() {
+                edges.extend(
+                    crate::viewport::level_outline(doc, ix)
+                        .iter()
+                        .map(|p| p[axis]),
+                );
+            }
+        }
+        edges.sort_by(f64::total_cmp);
+        edges.dedup();
         let mut best: Option<(f64, i64, Option<Seg>, f64)> = None;
         for &(c, seg) in &cand[axis] {
-            for e in edges {
+            for &e in &edges {
                 let dist = (e + d_raw[axis] - c as f64).abs();
                 // Prefer a segment over a lone vertex at the same distance.
                 let better = match &best {

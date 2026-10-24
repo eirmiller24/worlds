@@ -151,6 +151,9 @@ enum Kind {
     InsertVertex {
         start: CellHit,
     },
+    /// Shape: a rect of project cells cut out of the level (Shift: filled
+    /// back in) on release, one `set_level_void`.
+    Shape,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +173,9 @@ struct Gesture {
     seed: u64,
     /// Tiles layers: the chance in percent that a cell is painted.
     density: u8,
+    /// A non-rectangular level's void in the layer's cells, row-major
+    /// (`None`: a rectangle): painting clips there as at the level's edge.
+    void: Option<Arc<Vec<bool>>>,
 }
 
 /// One entry the user recorded, or one undo or redo step: what the live
@@ -522,7 +528,11 @@ impl Editing {
                 Change::LevelMeta { level, part, .. } => {
                     if matches!(
                         part,
-                        LevelPart::Position | LevelPart::Size | LevelPart::All | LevelPart::Depth
+                        LevelPart::Position
+                            | LevelPart::Size
+                            | LevelPart::All
+                            | LevelPart::Depth
+                            | LevelPart::Void
                     ) && let Some(ix) = doc.level_ix(level.as_str())
                     {
                         cx.invalidate.push(Invalidation::Level(ix));
@@ -912,7 +922,7 @@ impl Editing {
         // Without a layer ([`crate::tools::NO_LAYER`]: a project with none)
         // only the Select tool works, in cells of the project grid.
         let no_layer = at.layer >= doc.project.layers.len();
-        if no_layer && tool != Tool::Select {
+        if no_layer && !matches!(tool, Tool::Select | Tool::Shape) {
             return;
         }
         if at.level >= doc.levels.len() {
@@ -930,6 +940,7 @@ impl Editing {
                 last: at.cell,
                 seed: 0,
                 density: 100,
+                void: None,
                 kind: match grab {
                     Grab::Selection { was_selected } => Kind::MoveSelection {
                         start: at,
@@ -951,6 +962,12 @@ impl Editing {
             Some(def) => (def.slug.clone(), doc.project.layer_cells(def, level)),
             None => (Slug::new("none").expect("a valid slug"), level.size),
         };
+        let void = doc
+            .project
+            .layers
+            .get(at.layer)
+            .and_then(|def| doc.project.layer_void(def, level))
+            .map(Arc::new);
         let mut g = Gesture {
             tool,
             world,
@@ -966,10 +983,19 @@ impl Editing {
                 .seed
                 .unwrap_or_else(crate::tools::fresh_seed),
             density: cx.view.palette.density.clamp(1, 100),
+            void,
         };
         self.taken.clear();
         match tool {
             Tool::Hand => {}
+            Tool::Shape => {
+                // Cells of the project grid; one entry on release.
+                g.size = level.size;
+                g.kind = Kind::Shape;
+                self.history
+                    .begin_gesture(format!("Shape level {}", level.slug), Origin::User);
+                self.gesture = Some(g);
+            }
             Tool::Select if matches!(grab, Grab::Marquee | Grab::WorldMarquee) => {
                 // A marquee changes the selection, not the project: no
                 // history gesture.
@@ -1207,6 +1233,17 @@ impl Editing {
                 self.insert_vertex(cx, start, modifiers);
                 return;
             }
+            Kind::Shape => cx.doc.level_ix(g.level.as_str()).and_then(|ix| {
+                let l = cx.doc.level(ix);
+                let r = cell_rect(g.origin, at.cell);
+                crate::tools::shape_void(&l.void, l.size, r, modifiers.shift).map(|void| {
+                    Command::SetLevelVoid {
+                        level: g.level.clone(),
+                        void,
+                        restore: false,
+                    }
+                })
+            }),
         };
         if let Some(cmd) = cmd {
             self.push_or_status(cx, cmd);
@@ -1236,6 +1273,12 @@ impl Editing {
             if !in_layer(p.cell, g.size) {
                 return Err(format!(
                     "Cell {}, {} is outside level {}",
+                    p.cell[0], p.cell[1], g.level
+                ));
+            }
+            if in_void(g, p.cell) {
+                return Err(format!(
+                    "Cell {}, {} is cut out of level {} (its void)",
                     p.cell[0], p.cell[1], g.level
                 ));
             }
@@ -1776,7 +1819,9 @@ fn paint_command(
     let Kind::Paint(paint) = &g.kind else {
         return None;
     };
-    let inside = |c: &&[i32; 2]| in_layer(**c, g.size);
+    // Clipped at the level's edge, and at its void (a non-rectangular level).
+    let open = |c: [i32; 2]| in_layer(c, g.size) && !in_void(g, c);
+    let inside = |c: &&[i32; 2]| open(**c);
     let u = |c: [i32; 2]| [c[0] as u32, c[1] as u32];
     match paint {
         Paint::Value(v) => {
@@ -1822,7 +1867,7 @@ fn paint_command(
                     }
                 }
                 for (c, t) in tiles {
-                    if in_layer(c, g.size) {
+                    if open(c) {
                         out.insert(u(c), t);
                     }
                 }
@@ -1911,6 +1956,13 @@ fn paint_command(
     }
 }
 
+/// Whether layer cell `c` (inside the layer) is in the gesture level's void.
+fn in_void(g: &Gesture, c: [i32; 2]) -> bool {
+    g.void
+        .as_ref()
+        .is_some_and(|v| in_layer(c, g.size) && v[(c[1] as u32 * g.size[0] + c[0] as u32) as usize])
+}
+
 /// Fill (or outline) the cell rect `[x0, y0, x1, y1)`, clipped to the layer.
 fn rect_command(
     g: &Gesture,
@@ -1955,7 +2007,7 @@ fn fill_command(
     cell: [i32; 2],
     taken: &mut HashSet<[i32; 2]>,
 ) -> Option<Command> {
-    if !in_layer(cell, g.size) {
+    if !in_layer(cell, g.size) || in_void(g, cell) {
         return None;
     }
     let Kind::Paint(paint) = &g.kind else {
@@ -1971,7 +2023,7 @@ fn fill_command(
             .filter(|d| d.is_derived())
     {
         let grid = doc.derived_effective(ix, def);
-        let region = value_region(&grid, g.size, cell);
+        let region = value_region_in(&grid, g.size, cell, g.void.as_deref().map(|v| &v[..]));
         return paint_command(g, &region, true, taken);
     }
     if let Paint::Value(v) = paint {
@@ -1982,7 +2034,14 @@ fn fill_command(
             value: v.clone(),
         });
     }
-    let region = tile_region(doc, ix, &g.layer, g.size, cell);
+    let region = tile_region(
+        doc,
+        ix,
+        &g.layer,
+        g.size,
+        cell,
+        g.void.as_deref().map(|v| &v[..]),
+    );
     paint_command(g, &region, true, taken)
 }
 
@@ -1993,7 +2052,22 @@ pub fn value_region(
     size: [u32; 2],
     start: [i32; 2],
 ) -> Vec<[i32; 2]> {
+    value_region_in(grid, size, start, None)
+}
+
+/// [`value_region`] in a non-rectangular level: cells `void` marks are
+/// walls the region doesn't cross.
+pub fn value_region_in(
+    grid: &worlds_core::IntGridLayer,
+    size: [u32; 2],
+    start: [i32; 2],
+    void: Option<&[bool]>,
+) -> Vec<[i32; 2]> {
     let at = |c: [i32; 2]| grid.index_at(c[0] as u32, c[1] as u32).unwrap_or(0);
+    let open = |c: [i32; 2]| {
+        in_layer(c, size)
+            && !void.is_some_and(|v| v[(c[1] as u32 * size[0] + c[0] as u32) as usize])
+    };
     let target = at(start);
     let mut seen = HashSet::from([start]);
     let mut queue = VecDeque::from([start]);
@@ -2002,7 +2076,7 @@ pub fn value_region(
         out.push(c);
         for d in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
             let n = [c[0] + d[0], c[1] + d[1]];
-            if in_layer(n, size) && !seen.contains(&n) && at(n) == target {
+            if open(n) && !seen.contains(&n) && at(n) == target {
                 seen.insert(n);
                 queue.push_back(n);
             }
@@ -2023,14 +2097,20 @@ fn with_dependents(project: &worlds_core::Project, layers: BTreeSet<Slug>) -> Ve
     }
 }
 
-/// The 4-connected cells around `start` whose tile stack equals its stack.
+/// The 4-connected cells around `start` whose tile stack equals its stack
+/// (never crossing cells `void` marks).
 pub fn tile_region(
     doc: &Document,
     ix: LevelIx,
     layer: &Slug,
     size: [u32; 2],
     start: [i32; 2],
+    void: Option<&[bool]>,
 ) -> Vec<[i32; 2]> {
+    let open = |c: [i32; 2]| {
+        in_layer(c, size)
+            && !void.is_some_and(|v| v[(c[1] as u32 * size[0] + c[0] as u32) as usize])
+    };
     type Stack<'a> = Vec<(&'a Slug, [u32; 2], Option<worlds_core::Flip>, u64)>;
     let mut stacks: HashMap<[i32; 2], Stack<'_>> = HashMap::new();
     if let Some(t) = doc.level(ix).tiles_layer(layer.as_str()) {
@@ -2051,7 +2131,7 @@ pub fn tile_region(
         out.push(c);
         for d in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
             let n = [c[0] + d[0], c[1] + d[1]];
-            if in_layer(n, size) && !seen.contains(&n) && *stack(&n) == target {
+            if open(n) && !seen.contains(&n) && *stack(&n) == target {
                 seen.insert(n);
                 queue.push_back(n);
             }

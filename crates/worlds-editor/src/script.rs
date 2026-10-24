@@ -938,6 +938,10 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<ScriptStep>> {
 }
 
 pub fn parse_tool(s: &str) -> Option<Tool> {
+    // Shape has no key and isn't in `Tool::ALL`.
+    if s.eq_ignore_ascii_case("shape") {
+        return Some(Tool::Shape);
+    }
     Tool::ALL.into_iter().find(|t| {
         t.name().eq_ignore_ascii_case(s) || (s.eq_ignore_ascii_case("rect") && *t == Tool::Rect)
     })
@@ -946,13 +950,13 @@ pub fn parse_tool(s: &str) -> Option<Tool> {
 /// The pointer over cell `cell` of project layer `layer` in level `ix`.
 pub fn cell_hit(doc: &Document, ix: LevelIx, layer: usize, cell: [i32; 2]) -> CellHit {
     let level = doc.level(ix);
-    let (g, size) = crate::tools::hit_grid(doc, layer, ix);
+    let (g, _) = crate::tools::hit_grid(doc, layer, ix);
     let g = g as f64;
     CellHit {
         level: ix,
         layer,
         cell,
-        inside: crate::tools::in_layer(cell, size),
+        inside: crate::tools::cell_in_level(doc, layer, ix, cell),
         world_px: [
             level.world_px[0] as f64 + (cell[0] as f64 + 0.5) * g,
             level.world_px[1] as f64 + (cell[1] as f64 + 0.5) * g,
@@ -974,7 +978,7 @@ pub fn world_hit(doc: &Document, ix: LevelIx, layer: usize, wp: [f64; 2]) -> Cel
         };
     }
     let level = doc.level(ix);
-    let (g, size) = crate::tools::hit_grid(doc, layer, ix);
+    let (g, _) = crate::tools::hit_grid(doc, layer, ix);
     let g = g as f64;
     let cell = [
         ((wp[0] - level.world_px[0] as f64) / g).floor() as i32,
@@ -984,7 +988,7 @@ pub fn world_hit(doc: &Document, ix: LevelIx, layer: usize, wp: [f64; 2]) -> Cel
         level: ix,
         layer,
         cell,
-        inside: crate::tools::in_layer(cell, size),
+        inside: crate::tools::cell_in_level(doc, layer, ix, cell),
         world_px: wp,
     }
 }
@@ -1017,10 +1021,15 @@ pub fn gesture_events(
             .context("the project has no entities layer")?,
         // Select works with no layer at all, in project cells.
         None if tool == Tool::Select && doc.project.layers.is_empty() => crate::tools::NO_LAYER,
+        // Shape always works in cells of the project grid.
+        None if tool == Tool::Shape => crate::tools::NO_LAYER,
         None => active_layer.unwrap_or(0),
     };
     if layer >= doc.project.layers.len() && layer != crate::tools::NO_LAYER {
         bail!("the project has no layers");
+    }
+    if tool == Tool::Shape && step.layer.is_some() {
+        bail!("a shape gesture works in cells of the project grid: leave out `layer`");
     }
     if layer == crate::tools::NO_LAYER && step.brush.is_some() {
         bail!("`brush` needs a layer");
