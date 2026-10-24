@@ -154,9 +154,10 @@ pub fn plan_arrange(doc: &Document, view: &ViewState, op: ArrangeOp) -> Result<C
     transform::arrange_levels(&doc.project, &slugs, op).map_err(|e| format!("Can't arrange: {e}"))
 }
 
-/// The tile stamp's X, Y, R in the Paint strip (a tiles layer): lit when
-/// that part of the turn is on, a click is the key. A separate function so
-/// the strip's own layout stays the strip's.
+/// The tile stamp's X, Y, R in the Paint strip (a tiles layer): a click is
+/// the key, and the stamp's turn in words follows (accented when it isn't
+/// as picked). A separate function so the strip's own layout stays the
+/// strip's.
 pub fn turn_buttons(
     ui: &mut egui::Ui,
     flip: Option<worlds_core::Flip>,
@@ -164,38 +165,33 @@ pub fn turn_buttons(
 ) {
     use crate::app::actions::Action;
     use worlds_core::Flip;
-    let b = Flip::bits_of(flip);
     ui.separator();
-    for (label, on, op, tip) in [
+    ui.weak("Turn");
+    for (label, op, tip) in [
+        ("X", Flip::X, "Mirror the tile stamp left-right (X)"),
+        ("Y", Flip::Y, "Mirror the tile stamp top-bottom (Y)"),
         (
-            "⇆ X",
-            b & 1 != 0,
-            Flip::X,
-            "Mirror the tile stamp left-right (X)",
-        ),
-        (
-            "⇅ Y",
-            b & 2 != 0,
-            Flip::Y,
-            "Mirror the tile stamp top-bottom (Y)",
-        ),
-        (
-            "⟳ R",
-            b & 4 != 0,
+            "R",
             Flip::XT,
-            "Rotate the tile stamp 90° clockwise (R; square tiles)",
+            "Rotate the tile stamp 90° clockwise (R; square tiles only)",
         ),
     ] {
         if ui
-            .add(egui::Button::selectable(on, label).small())
-            .on_hover_text(format!(
-                "{tip}. Now: {}",
-                crate::clipboard::describe_flip(flip)
-            ))
+            .add(egui::Button::new(label).small())
+            .on_hover_text(tip)
             .clicked()
         {
             actions.push(Action::Turn(op));
         }
+    }
+    let what = match flip {
+        None => "as picked",
+        f => crate::clipboard::describe_flip(f),
+    };
+    if flip.is_some() {
+        ui.colored_label(ui.visuals().selection.stroke.color, what);
+    } else {
+        ui.weak(what);
     }
 }
 
