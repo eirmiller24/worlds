@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
 mod check_export;
+mod check_shape;
 mod enum_source;
 
 #[derive(Parser)]

@@ -57,9 +57,9 @@ def run(tileset, tile_size, tiles):
     return {"tileset": tileset, "image": "tiles.png", "tile_size": tile_size, "tiles": tiles}
 
 
-def wall_tiles():
+def wall_tiles(rows=COLLISION):
     out = []
-    for y, row in enumerate(COLLISION):
+    for y, row in enumerate(rows):
         for x, c in enumerate(row):
             if c == "#":
                 out.append([x * G, y * G, (x + y) % 4, 0, 0])
@@ -191,6 +191,73 @@ def c_dangling_note_link(w, e, l):
     ]
 
 
+# An L: the room's top-right 4x3 cells are cut out (void), its walls close
+# around the inside corner, and a second level, `annex`, sits in the notch.
+SHAPED = ["######....", "#....#....", "#....#....", "#....#####", "#.........", "##########"]
+SHAPED_VOID = [[6, 0, 4, 3]]
+SHAPED_OUTLINE = [[0, 0], [192, 0], [192, 96], [320, 96], [320, 192], [0, 192]]
+
+
+def c_shaped_level(w, e, l):
+    entry = w["worlds"][0]["levels"][0]
+    entry["void"] = SHAPED_VOID
+    entry["outline"] = SHAPED_OUTLINE
+    # The notch's wall (x 192) and floor (y 96) touch the annex.
+    entry["touching"] = [
+        {"level": "annex", "edge": "right", "span": [0, 96], "at": 192},
+        {"level": "annex", "edge": "top", "span": [192, 320], "at": 96},
+    ]
+    # Runs follow the outline: [first, end, at]; the gap in the right wall
+    # at row 4 is open (right edge at x 10).
+    entry["open_edges"] = {"left": [], "right": [[4, 5, 10]], "top": [], "bottom": []}
+    l["void"] = SHAPED_VOID
+    l["outline"] = SHAPED_OUTLINE
+    l["int_grids"]["collision"]["rows"] = SHAPED
+    layer(l, "walls")["tilesets"] = [run("tiles", [32, 32], wall_tiles(SHAPED))]
+    annex_rows = ["####", "#..#", "####"]
+    w["worlds"][0]["levels"].append({
+        "slug": "annex", "id": "annexaaaaa", "name": "Annex", "file": "levels/annex.json",
+        "rect": [192, 0, 4 * G, 3 * G], "depth": 0,
+        "touching": [
+            {"level": "room", "edge": "left", "span": [0, 96], "at": 192},
+            {"level": "room", "edge": "bottom", "span": [192, 320], "at": 96},
+        ],
+        "open_edges": {"left": [], "right": [], "top": [], "bottom": []},
+    })
+    return {"levels/annex.json": {
+        "format": 1, "slug": "annex", "id": "annexaaaaa", "name": "Annex", "world": "main",
+        "world_px": [192, 0], "size": [4, 3], "grid_size": G, "depth": 0, "bg_color": "#696A79",
+        "fields": {"display_name": "Annex", "music": "calm", "tint": None},
+        "fields_set": ["display_name"],
+        "int_grids": {"collision": {"name": "Collision", "grid_size": G, "legend": LEGEND,
+                                    "rows": annex_rows}},
+        "tile_layers": [
+            {"layer": "back", "name": "Back", "kind": "tiles", "grid_size": G, "tilesets": []},
+            {"layer": "walls", "name": "Walls", "kind": "auto", "grid_size": G,
+             "tilesets": [run("tiles", [32, 32], wall_tiles(annex_rows))]},
+            {"layer": "front", "name": "Front", "kind": "tiles", "grid_size": G, "tilesets": []},
+        ],
+        "entities": [], "notes": [],
+    }}
+
+
+def c_shaped_wrong_outline(w, e, l):
+    extra = c_shaped_level(w, e, l)
+    # The notch drawn one cell too shallow.
+    bad = [[0, 0], [192, 0], [192, 64], [320, 64], [320, 192], [0, 192]]
+    w["worlds"][0]["levels"][0]["outline"] = bad
+    l["outline"] = bad
+    return extra
+
+
+def c_shaped_wall_in_void(w, e, l):
+    extra = c_shaped_level(w, e, l)
+    rows = list(SHAPED)
+    rows[1] = "#....#..#."
+    l["int_grids"]["collision"]["rows"] = rows
+    return extra
+
+
 CASES = {
     "clean_minimal": (None, True, ""),
     "two_auto_layers": (c_two_auto, True, ""),
@@ -203,6 +270,9 @@ CASES = {
     "derived_int_grid": (c_derived_int_grid, True, ""),
     "annotations": (c_annotations, True, ""),
     "dangling_note_link": (c_dangling_note_link, True, ""),
+    "shaped_level": (c_shaped_level, True, ""),
+    "shaped_wrong_outline": (c_shaped_wrong_outline, False, "outline"),
+    "shaped_wall_in_void": (c_shaped_wall_in_void, False, "in the level's void"),
 }
 # A substring the warning carries (another reader running the same cases
 # words its own warnings, so it is the part any wording shares).
@@ -221,11 +291,13 @@ def main():
         if d.exists():
             shutil.rmtree(d)
         w, e, l = (copy.deepcopy(x) for x in base())
-        if change:
-            change(w, e, l)
+        # A change may return more files (path -> JSON) for extra levels.
+        extra = (change(w, e, l) if change else None) or {}
         dump(d / "world.json", w)
         dump(d / "enums.json", e)
         dump(d / "levels" / "room.json", l)
+        for rel, value in extra.items():
+            dump(d / rel, value)
         (d / "tiles.png").write_bytes(image)
         expect = {"accept": accept, "error_contains": error}
         if name in WARNINGS:

@@ -1,0 +1,170 @@
+{
+  "format": 1,
+  "name": "fixture",
+  "grid_size": 32,
+  "bg_color": "#696A79",
+  "collision_layer": "collision",
+  "blocking_values": [
+    "solid"
+  ],
+  "files": {
+    "enums": "enums.json"
+  },
+  "entity_types": [
+    {
+      "slug": "door",
+      "name": "Door",
+      "tags": [
+        "object"
+      ]
+    },
+    {
+      "slug": "enemy",
+      "name": "Enemy",
+      "tags": [
+        "enemy"
+      ]
+    },
+    {
+      "slug": "pickup",
+      "name": "Pickup",
+      "tags": [
+        "object",
+        "item"
+      ]
+    },
+    {
+      "slug": "spawn",
+      "name": "Spawn",
+      "tags": [
+        "marker"
+      ]
+    }
+  ],
+  "worlds": [
+    {
+      "slug": "main",
+      "notes": [],
+      "levels": [
+        {
+          "slug": "room",
+          "id": "roomaaaaaa",
+          "name": "Room",
+          "file": "levels/room.json",
+          "rect": [
+            0,
+            0,
+            320,
+            192
+          ],
+          "depth": 0,
+          "touching": [
+            {
+              "level": "annex",
+              "edge": "right",
+              "span": [
+                0,
+                96
+              ],
+              "at": 192
+            },
+            {
+              "level": "annex",
+              "edge": "top",
+              "span": [
+                192,
+                320
+              ],
+              "at": 96
+            }
+          ],
+          "open_edges": {
+            "left": [],
+            "right": [
+              [
+                4,
+                5,
+                10
+              ]
+            ],
+            "top": [],
+            "bottom": []
+          },
+          "void": [
+            [
+              6,
+              0,
+              4,
+              3
+            ]
+          ],
+          "outline": [
+            [
+              0,
+              0
+            ],
+            [
+              192,
+              0
+            ],
+            [
+              192,
+              64
+            ],
+            [
+              320,
+              64
+            ],
+            [
+              320,
+              192
+            ],
+            [
+              0,
+              192
+            ]
+          ]
+        },
+        {
+          "slug": "annex",
+          "id": "annexaaaaa",
+          "name": "Annex",
+          "file": "levels/annex.json",
+          "rect": [
+            192,
+            0,
+            128,
+            96
+          ],
+          "depth": 0,
+          "touching": [
+            {
+              "level": "room",
+              "edge": "left",
+              "span": [
+                0,
+                96
+              ],
+              "at": 192
+            },
+            {
+              "level": "room",
+              "edge": "bottom",
+              "span": [
+                192,
+                320
+              ],
+              "at": 96
+            }
+          ],
+          "open_edges": {
+            "left": [],
+            "right": [],
+            "top": [],
+            "bottom": []
+          }
+        }
+      ]
+    }
+  ]
+}

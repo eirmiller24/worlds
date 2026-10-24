@@ -1,0 +1,149 @@
+{
+  "format": 1,
+  "slug": "annex",
+  "id": "annexaaaaa",
+  "name": "Annex",
+  "world": "main",
+  "world_px": [
+    192,
+    0
+  ],
+  "size": [
+    4,
+    3
+  ],
+  "grid_size": 32,
+  "depth": 0,
+  "bg_color": "#696A79",
+  "fields": {
+    "display_name": "Annex",
+    "music": "calm",
+    "tint": null
+  },
+  "fields_set": [
+    "display_name"
+  ],
+  "int_grids": {
+    "collision": {
+      "name": "Collision",
+      "grid_size": 32,
+      "legend": {
+        "#": "solid",
+        "-": "oneway",
+        ".": null,
+        "~": "water"
+      },
+      "rows": [
+        "####",
+        "#..#",
+        "####"
+      ]
+    }
+  },
+  "tile_layers": [
+    {
+      "layer": "back",
+      "name": "Back",
+      "kind": "tiles",
+      "grid_size": 32,
+      "tilesets": []
+    },
+    {
+      "layer": "walls",
+      "name": "Walls",
+      "kind": "auto",
+      "grid_size": 32,
+      "tilesets": [
+        {
+          "tileset": "tiles",
+          "image": "tiles.png",
+          "tile_size": [
+            32,
+            32
+          ],
+          "tiles": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              32,
+              0,
+              1,
+              0,
+              0
+            ],
+            [
+              64,
+              0,
+              2,
+              0,
+              0
+            ],
+            [
+              96,
+              0,
+              3,
+              0,
+              0
+            ],
+            [
+              0,
+              32,
+              1,
+              0,
+              0
+            ],
+            [
+              96,
+              32,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              64,
+              2,
+              0,
+              0
+            ],
+            [
+              32,
+              64,
+              3,
+              0,
+              0
+            ],
+            [
+              64,
+              64,
+              0,
+              0,
+              0
+            ],
+            [
+              96,
+              64,
+              1,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "layer": "front",
+      "name": "Front",
+      "kind": "tiles",
+      "grid_size": 32,
+      "tilesets": []
+    }
+  ],
+  "entities": [],
+  "notes": []
+}
