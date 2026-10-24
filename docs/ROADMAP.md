@@ -120,9 +120,7 @@ Cells are relative to the fragment's origin. The same shape is what assemblies (
 
 ### 2.5 Graphical geometry editing
 
-**What.** Edit paths, regions and guides on the canvas instead of as JSON in the Inspector.
-
-**Editor.** With one annotation selected its vertices are handles: drag moves one (snapping to half the project grid, Ctrl for pixels, guides as today), Alt+click on a segment inserts a vertex, Delete with a vertex highlighted removes it (a path keeps at least 2, a polygon 3), rect regions get edge and corner handles, a note or pin's point is draggable as before. Each gesture is one `update_note`. The JSON editor stays for exact values. Locked annotations show handles but refuse edits, as the tools already do.
+Shipped: the Select tool's geometry handles and the `vertex` script gesture are specified in the editor README ("Notes and guides", `--script`).
 
 ### 2.6 Random and scatter brushes
 
@@ -189,11 +187,7 @@ Finding your way around a big project, and planning on the map.
 
 ### 3.7 Connectors between rooms
 
-**What.** A planning annotation that joins two things and follows them when they move: a line from one room (or a door entity) to another with optional waypoints and a label such as "needs double jump" or "one-way drop". Paths today are fixed polylines; a connector's ends are anchored.
-
-**Format.** A new annotation kind `connector` in `notes.json` or `world.json`: `{ "kind": "connector", "from": { "level": slug } | { "entity": id }, "to": ..., "waypoints": [[x, y], ...], "label"?: string, "style"?: "arrow" | "line" | "double" }` plus the common annotation keys (title, body, tags, color, status, export). Endpoint positions are computed (the nearest edge point of a level, the pivot of an entity), never stored, so moving a room moves the line. Exported like paths when flagged, with `from` and `to` resolved to level slugs and entity ids.
-
-**Validation.** A dangling endpoint is a problem. **Editor.** The Note tool gains Connector: click a room or entity, click another, Enter; waypoints are added and dragged as in 2.5. The Notes pane lists them under their kind.
+Shipped: the `connector` kind is specified in [format.md](format.md#connectors) (export, validation), [api.md](api.md#notes), [mcp.md](mcp.md#add_note) and the editor README ("Notes and guides").
 
 ### 3.8 History pane
 

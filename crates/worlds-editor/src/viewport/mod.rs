@@ -1620,10 +1620,7 @@ fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
                         );
                     }
                     if view.note_tool.kind == NoteKind::Connector {
-                        ui.weak(
-                            "click a room or entity, then another; clicks between (Shift: any) \
-                             add waypoints; Enter finishes",
-                        );
+                        ui.weak("click a room or entity, waypoints, the other end; Enter finishes");
                     }
                 });
             });

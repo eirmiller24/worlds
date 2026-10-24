@@ -247,6 +247,7 @@ Annotations are first-class objects, not entities in disguise, and live outside 
 | Path | polyline | a route through a chain of landmarks, a planned rope route, a measurement |
 | Region | polygon or rect | an area's extent, a zone levels should sit inside |
 | Guide | polyline or polygon, locked, world scope | reference lines to build along |
+| Connector | two rooms or entities + waypoints, ends computed | a planned way between rooms ("needs double jump") that follows them when they move |
 
 Every annotation has: id, kind, title, body (markdown), tags, color, `links` (entity ids, level slugs, URLs, other note ids), `status` (open or done), `export` (bool), `locked` (bool). World-scope ones live in `worlds/main/world.json`, level-scope ones in the level's `notes.json`.
 
