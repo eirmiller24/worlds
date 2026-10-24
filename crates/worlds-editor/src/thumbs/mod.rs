@@ -36,20 +36,25 @@
 //! the key. An assembly is at most [`render::ASSEMBLY_MAX_SIDE`] px, up to 4
 //! px per pixel of art, as the Library shows it.
 //!
-//! **Budget, not workers.** A level picture is about one write per cell per
-//! layer: a 40x23-cell room is about a thousand, a 256x256 one 65k, well
-//! under a millisecond either way (the bake already did the expensive part,
-//! the rules). So the cache draws on the UI thread, at most
-//! [`Budget::FRAME`] a frame (8 pictures or 4 ms, at least one), and only
-//! for what is asked for: the rows and levels on screen, so a thousand-level
-//! world fills in over a few frames, nearest first, and stays responsive.
-//! Until a new picture is drawn the old one is shown (no flicker), and a
-//! turned-away request asks for another frame. The worker pool would need a
-//! copy of the level and a hold on its bakes, and holding a bake from
-//! another thread would stop the command layer editing it in place (its
-//! `Arc` would be shared), costing more than the picture. Headless renders
-//! take [`Budget::UNLIMITED`]: a screenshot has every picture in its first
-//! frame.
+//! **Budget, not workers.** A level picture costs about one write per cell
+//! per layer plus one per tile, and the bake already did the expensive part
+//! (the rules). In a release build the game fixture's crevasse (64x28
+//! cells, ~300 baked tiles) takes 0.2 ms, its 14x7 level_3 5 µs; a
+//! 256x256-cell level would be some 7 ms. So the cache draws on the UI
+//! thread within [`Budget::FRAME`] (8 pictures or 4 ms a frame, at least
+//! one), and only what is asked for: the rows and levels on screen, so a
+//! thousand-level world fills in over a few frames while staying
+//! responsive, and levels off screen cost nothing. Until a new picture is
+//! drawn the old one stays (no flicker), a turned-away request asks for
+//! another frame, and a picture redrawn less than 250 ms ago waits (a
+//! brush stroke moves its level's key every frame; the thumbnail catches
+//! up four times a second instead of costing every frame). The worker pool
+//! would need a copy of the level and a hold on its bakes, and holding a
+//! bake from another thread would stop the command layer editing it in
+//! place (its `Arc` would be shared): every brush move would copy whole
+//! layers, costing far more than the picture. Headless renders take
+//! [`Budget::UNLIMITED`]: a screenshot has every picture, current, in its
+//! first frame.
 
 pub mod cache;
 pub mod render;

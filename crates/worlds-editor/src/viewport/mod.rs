@@ -4,8 +4,10 @@
 //! Drawing, back to front, within the viewport's egui painter:
 //!
 //! 1. Background, then one filled rect per visible level (its bg color).
-//! 2. Zoomed out (a cell smaller than [`DETAIL_CELL_PX`] screen px): level
-//!    names. Zoomed in: one paint callback that draws the visible chunks
+//! 2. Zoomed out (a cell smaller than [`DETAIL_CELL_PX`] screen px): each
+//!    level's thumbnail ([`crate::thumbs`], drawn with its fill in step 1,
+//!    its void transparent), then the level names on top. Zoomed in: one
+//!    paint callback that draws the visible chunks
 //!    of every int_grid, tiles and auto layer with instanced quads
 //!    ([`gpu`]), then entity boxes.
 //! 3. Overlays through egui: grid of the active level, level outlines,
