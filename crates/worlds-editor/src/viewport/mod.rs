@@ -3864,8 +3864,8 @@ fn draw_lattice(
     to_screen: &dyn Fn([f64; 2]) -> Pos2,
 ) {
     let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 170, 255, 70));
-    for axis in 0..2 {
-        let mut step = cell[axis].max(1.0);
+    for (axis, &c) in cell.iter().enumerate() {
+        let mut step = c.max(1.0);
         while step * zoom < LATTICE_MIN_PX {
             step *= 2.0;
         }

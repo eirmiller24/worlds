@@ -163,11 +163,10 @@ pub fn inspector_section(ui: &mut egui::Ui, st: &mut EditorState) -> usize {
     let mut loose = 0;
     for item in &view.selection.items {
         match group_of(doc, item) {
-            Some((ix, g)) => {
-                if !groups.iter().any(|(i, h)| *i == ix && h.id == g.id) {
-                    groups.push((ix, g));
-                }
+            Some((ix, g)) if !groups.iter().any(|(i, h)| *i == ix && h.id == g.id) => {
+                groups.push((ix, g));
             }
+            Some(_) => {}
             None if item_id(item).is_some() => loose += 1,
             None => {}
         }
@@ -275,12 +274,18 @@ mod tests {
         );
         // Not a member: alone.
         let door = SelItem::Entity(id("doorcrev22"));
-        assert_eq!(click_items(doc, &mut st.view, door.clone()), [door.clone()]);
+        assert_eq!(
+            click_items(doc, &mut st.view, door.clone()),
+            vec![door.clone()]
+        );
         // Entered: one member at a time, until a click elsewhere.
         assert!(enter(doc, &mut st.view, &btn));
-        assert_eq!(st.view.selection.items, [btn.clone()]);
+        assert_eq!(st.view.selection.items, vec![btn.clone()]);
         let note = SelItem::Note(id("notecrev22"));
-        assert_eq!(click_items(doc, &mut st.view, note.clone()), [note.clone()]);
+        assert_eq!(
+            click_items(doc, &mut st.view, note.clone()),
+            vec![note.clone()]
+        );
         click_items(doc, &mut st.view, door);
         assert_eq!(st.view.entered_group, None);
         assert_eq!(click_items(doc, &mut st.view, note).len(), 2);

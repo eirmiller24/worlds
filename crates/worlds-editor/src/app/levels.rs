@@ -341,16 +341,8 @@ impl Thumbs {
                         }
                     }
                     let n = (tw as u64 * th as u64).max(1);
-                    colors.push(if sum[3] == 0 {
-                        [0, 0, 0, 0]
-                    } else {
-                        [
-                            (sum[0] / sum[3]) as u8,
-                            (sum[1] / sum[3]) as u8,
-                            (sum[2] / sum[3]) as u8,
-                            (sum[3] / n) as u8,
-                        ]
-                    });
+                    let avg = |k: usize| sum[k].checked_div(sum[3]).unwrap_or(0) as u8;
+                    colors.push([avg(0), avg(1), avg(2), (sum[3] / n) as u8]);
                 }
             }
             Some(TileColors {
