@@ -79,6 +79,26 @@ pub fn describe(project: &Project, dir: &Path, rev: u64, mode: Mode) -> Value {
             .collect(),
     );
     out.insert("tilesets".into(), tilesets(project, dir));
+    out.insert(
+        "assemblies".into(),
+        project
+            .assemblies
+            .iter()
+            .map(|a| {
+                let mut o = json!({ "slug": a.slug, "name": a.name });
+                if let Some(c) = &a.category {
+                    o["category"] = json!(c);
+                }
+                o["tags"] = json!(a.tags);
+                if let Some(d) = &a.doc {
+                    o["doc"] = json!(d);
+                }
+                o["size"] = json!(a.size);
+                o["items"] = json!(a.item_count());
+                o
+            })
+            .collect(),
+    );
     let (open, done) = notes_count(
         project
             .worlds
@@ -118,16 +138,44 @@ fn worlds(project: &Project) -> Value {
                     o
                 })
                 .collect();
-            json!({
+            let mut o = json!({
                 "slug": w.slug,
                 "name": w.name.clone().unwrap_or_else(|| title_case(w.slug.as_str())),
                 "levels": w.levels.iter().map(|l| &l.slug).collect::<Vec<_>>(),
+                "level_count": w.levels.len(),
+                "bbox": world_bbox(project, w),
                 "notes": w.notes.iter().filter(|n| !is_guide(n)).count(),
                 "guides": w.notes.iter().filter(|n| is_guide(n)).count(),
                 "guide_groups": groups,
-            })
+            });
+            if !w.layout.is_default() {
+                o["layout"] = json!(w.layout);
+            }
+            o
         })
         .collect()
+}
+
+/// `[x, y, w, h]` in world pixels around every level of a world, `null`
+/// when it has none.
+pub fn world_bbox(project: &Project, w: &worlds_core::World) -> Value {
+    let g = project.grid_size as i64;
+    let mut it = w.levels.iter().map(|l| {
+        let [x, y] = l.world_px;
+        [x, y, x + l.size[0] as i64 * g, y + l.size[1] as i64 * g]
+    });
+    let Some(first) = it.next() else {
+        return Value::Null;
+    };
+    let [x0, y0, x1, y1] = it.fold(first, |a, b| {
+        [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[2].max(b[2]),
+            a[3].max(b[3]),
+        ]
+    });
+    json!([x0, y0, x1 - x0, y1 - y0])
 }
 
 /// `main` -> `Main`, `west_wing` -> `West wing`: the display name of a
@@ -180,13 +228,18 @@ fn levels(project: &Project) -> Value {
                 }
             }
             let (open, done) = notes_count(l.notes.iter());
-            out.push(json!({
+            let mut v = json!({
                 "slug": l.slug, "name": l.name, "id": l.id, "world": w.slug,
                 "world_px": l.world_px, "size": l.size,
                 "size_px": [l.size[0] as u64 * g as u64, l.size[1] as u64 * g as u64],
                 "depth": l.depth, "tags": l.tags, "content": content,
                 "notes": { "open": open, "done": done },
-            }));
+            });
+            // A non-rectangular level: its void rects (left out otherwise).
+            if l.has_void() {
+                v["void"] = json!(l.void);
+            }
+            out.push(v);
         }
     }
     Value::Array(out)

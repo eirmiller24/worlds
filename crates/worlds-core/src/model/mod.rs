@@ -8,12 +8,17 @@
 
 mod annotation;
 mod common;
+mod connector;
 mod defs;
 mod derived;
 mod entity;
 mod expand;
+mod group;
 mod layer;
+mod layout;
+mod reference;
 mod rules;
+pub(crate) mod void;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -21,8 +26,11 @@ use std::path::{Path, PathBuf};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use annotation::{Annotation, GuideGroup, Link, NoteStatus, Shape, bbox_of, parse_link};
+pub use annotation::{
+    Annotation, ConnectorStyle, Endpoint, GuideGroup, Link, NoteStatus, Shape, bbox_of, parse_link,
+};
 pub use common::{Color, Flip, TileRef};
+pub use connector::{Anchor, connector_polyline, nearest_edge_point, nearest_outline_point};
 pub use defs::{EnumDef, EnumValue, TilesetDef};
 pub use derived::DerivedCycle;
 pub use entity::{
@@ -30,11 +38,14 @@ pub use entity::{
     LimitBehavior, LimitScope,
 };
 pub use expand::{ExpandError, ExpandedGroup, ExpandedRule};
+pub use group::ObjectGroup;
 pub use layer::{
     AutoDef, DerivedOverrides, IntGridDef, IntGridGroup, IntGridLayer, IntGridValue, LayerDef,
     LayerKind, LayerState, Override, RESERVED_GLYPHS, TilePlacement, TilesDef, TilesLayer,
     glyph_problem,
 };
+pub use layout::{DEFAULT_LATTICE_CELLS, LayoutMode, WorldLayout, lattice_problem};
+pub use reference::Reference;
 pub use rules::{
     ANCHOR_GLYPH, Align, CellMatch, CellTest, Checker, Draw, Edge, GroupMode, Legend,
     LevelFieldRequirement, LevelTagRequirement, Macros, MatchSelect, Modulo, OutOfBounds, Output,
@@ -43,6 +54,7 @@ pub use rules::{
     Symmetry, Template, TemplateOutput, TemplateRef, TemplateRule, TemplateTilesOutput, TileAlt,
     TileMode, TilesOutput, Write,
 };
+pub use void::{VOID_GLYPH, cell_mask_of};
 
 use crate::id::{Id, Slug};
 
@@ -79,6 +91,13 @@ pub struct Project {
     /// The editor writes `export/` on every save (as `worlds-cli bake` does).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub export_on_save: bool,
+    /// `worlds`: the display order of the worlds, by slug. Optional: left
+    /// out, worlds are in slug order. A world it doesn't list comes after
+    /// the listed ones (in slug order), and validation reports it; so does
+    /// a listed slug with no world. The world commands write it as soon as
+    /// there is more than one world.
+    #[serde(rename = "worlds", default, skip_serializing_if = "Vec::is_empty")]
+    pub world_order: Vec<Slug>,
 
     /// `layers.json`, in draw order: first is drawn first (bottom).
     #[serde(skip)]
@@ -98,9 +117,13 @@ pub struct Project {
     /// `rules/macros.json`, if present.
     #[serde(skip)]
     pub macros: Option<Macros>,
-    /// `worlds/<slug>/`, sorted by slug.
+    /// `worlds/<slug>/`, in display order: the order of
+    /// [`Self::world_order`], then unlisted worlds by slug.
     #[serde(skip)]
     pub worlds: Vec<World>,
+    /// `assemblies/<slug>.json`, sorted by slug.
+    #[serde(skip)]
+    pub assemblies: Vec<crate::assembly::Assembly>,
 
     /// The project files this document knows exist on disk (loaded, or
     /// written by a save). `save` only deletes files listed here. Not part
@@ -284,6 +307,7 @@ impl Project {
             level_fields: Vec::new(),
             default_level_size: None,
             export_on_save: false,
+            world_order: Vec::new(),
             layers: Vec::new(),
             tilesets: Vec::new(),
             enums: Vec::new(),
@@ -291,6 +315,7 @@ impl Project {
             rules: Vec::new(),
             macros: None,
             worlds: vec![World::new(crate::id::slug("main"))],
+            assemblies: Vec::new(),
             files: ProjectFiles::default(),
         }
     }
@@ -331,6 +356,10 @@ impl Project {
         self.entities.iter().find(|e| e.slug == slug)
     }
 
+    pub fn assembly(&self, slug: &str) -> Option<&crate::assembly::Assembly> {
+        self.assemblies.iter().find(|a| a.slug == slug)
+    }
+
     /// The rule set of an `auto` layer.
     pub fn rules_for(&self, layer: &str) -> Option<&RuleSet> {
         self.rules.iter().find(|r| r.layer == layer)
@@ -338,6 +367,27 @@ impl Project {
 
     pub fn world(&self, slug: &str) -> Option<&World> {
         self.worlds.iter().find(|w| w.slug == slug)
+    }
+
+    /// The world holding the level `slug`, if any.
+    pub fn world_of_level(&self, slug: &str) -> Option<&World> {
+        self.worlds.iter().find(|w| w.level(slug).is_some())
+    }
+
+    /// Where a world sorts in the display order: its position in
+    /// [`Self::world_order`], or after every listed one.
+    fn world_rank(&self, slug: &Slug) -> (usize, Option<Slug>) {
+        match self.world_order.iter().position(|s| s == slug) {
+            Some(i) => (i, None),
+            None => (usize::MAX, Some(slug.clone())),
+        }
+    }
+
+    /// Put [`Self::worlds`] in display order (see [`Self::world_order`]).
+    pub fn sort_worlds(&mut self) {
+        let mut worlds = std::mem::take(&mut self.worlds);
+        worlds.sort_by_cached_key(|w| self.world_rank(&w.slug));
+        self.worlds = worlds;
     }
 
     /// Find a level by slug in any world.
@@ -440,7 +490,8 @@ impl Project {
     pub fn normalize(&mut self) {
         self.entities.sort_by(|a, b| a.slug.cmp(&b.slug));
         self.rules.sort_by(|a, b| a.layer.cmp(&b.layer));
-        self.worlds.sort_by(|a, b| a.slug.cmp(&b.slug));
+        self.sort_worlds();
+        self.assemblies.sort_by(|a, b| a.slug.cmp(&b.slug));
         for w in &mut self.worlds {
             w.normalize();
         }
@@ -455,13 +506,29 @@ pub struct World {
     pub slug: Slug,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// How the tools place the levels (free, a strip, a lattice). Left out
+    /// at its default (free).
+    #[serde(default, skip_serializing_if = "WorldLayout::is_default")]
+    pub layout: WorldLayout,
+    /// `levels`: the level order, by slug (the Levels pane, PgUp/PgDn, the
+    /// export and strip layouts follow it). Optional: left out, levels are
+    /// in slug order. A level it doesn't list comes after the listed ones
+    /// (in slug order), and validation reports it; so does a listed slug
+    /// with no level. `reorder_levels` writes it.
+    #[serde(rename = "levels", default, skip_serializing_if = "Vec::is_empty")]
+    pub level_order: Vec<Slug>,
     /// Named sets of guides, each with an offset, in insertion order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guide_groups: Vec<GuideGroup>,
     /// World-scope annotations (world pixel coordinates), in insertion order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Annotation>,
-    /// `levels/<slug>/`, sorted by slug.
+    /// World-scope reference images (world pixels), bottom first. Never
+    /// exported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<Reference>,
+    /// `levels/<slug>/`, in level order: the order of
+    /// [`Self::level_order`], then unlisted levels by slug.
     #[serde(skip)]
     pub levels: Vec<Level>,
 }
@@ -471,8 +538,11 @@ impl World {
         World {
             slug,
             name: None,
+            layout: WorldLayout::default(),
+            level_order: Vec::new(),
             guide_groups: Vec::new(),
             notes: Vec::new(),
+            references: Vec::new(),
             levels: Vec::new(),
         }
     }
@@ -485,8 +555,36 @@ impl World {
         self.guide_groups.iter().find(|g| g.slug == slug)
     }
 
+    /// Where a level sorts in the level order: its position in
+    /// [`Self::level_order`], or after every listed one, by slug.
+    fn level_rank(&self, slug: &Slug) -> (usize, Option<Slug>) {
+        match self.level_order.iter().position(|s| s == slug) {
+            Some(i) => (i, None),
+            None => (usize::MAX, Some(slug.clone())),
+        }
+    }
+
+    /// Put [`Self::levels`] in level order (see [`Self::level_order`]).
+    pub fn sort_levels(&mut self) {
+        let mut levels = std::mem::take(&mut self.levels);
+        levels.sort_by_cached_key(|l| self.level_rank(&l.slug));
+        self.levels = levels;
+    }
+
+    /// Where the world's strip layout puts each level, in level order
+    /// (`None` unless the layout is a strip).
+    pub fn strip_positions(&self, grid: u32) -> Option<Vec<[i64; 2]>> {
+        let g = grid as i64;
+        let sizes: Vec<[i64; 2]> = self
+            .levels
+            .iter()
+            .map(|l| [l.size[0] as i64 * g, l.size[1] as i64 * g])
+            .collect();
+        self.layout.strip_positions(&sizes)
+    }
+
     pub fn normalize(&mut self) {
-        self.levels.sort_by(|a, b| a.slug.cmp(&b.slug));
+        self.sort_levels();
         for l in &mut self.levels {
             l.normalize();
         }
@@ -521,6 +619,19 @@ pub struct Level {
     /// has seed 0, no optional groups and no tileset substitutions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub layers: BTreeMap<Slug, LayerState>,
+    /// Reference images under the layer stack (level pixels), bottom
+    /// first. Never exported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<Reference>,
+    /// Rectangles `[x, y, w, h]` in cells of the project grid cut out of the
+    /// level's box: a cell is in the level when it is inside `size` and in
+    /// no void rect. Empty for a rectangular level.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub void: Vec<crate::command::Rect>,
+    /// Object groups: named sets of the level's entities and annotations
+    /// that select and move together. Editor organisation; never exported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<ObjectGroup>,
 
     /// `<layer>.json` for (non-derived) int_grid layers, sorted by layer
     /// slug. A layer with no entry is all empty.
@@ -555,6 +666,9 @@ impl Level {
             tags: Vec::new(),
             fields: BTreeMap::new(),
             layers: BTreeMap::new(),
+            references: Vec::new(),
+            void: Vec::new(),
+            groups: Vec::new(),
             int_grids: Vec::new(),
             overrides: Vec::new(),
             tiles: Vec::new(),
@@ -580,6 +694,15 @@ impl Level {
 
     pub fn entities_layer(&self, layer: &str) -> Option<&EntitiesLayer> {
         self.entities.iter().find(|e| e.layer == layer)
+    }
+
+    pub fn group(&self, id: &Id) -> Option<&ObjectGroup> {
+        self.groups.iter().find(|g| g.id == *id)
+    }
+
+    /// The first group that has `member` (an entity or annotation id).
+    pub fn group_of(&self, member: &Id) -> Option<&ObjectGroup> {
+        self.groups.iter().find(|g| g.contains(member))
     }
 
     /// Every entity instance in the level, across entities layers.
@@ -624,6 +747,9 @@ impl Level {
             tags,
             fields,
             layers,
+            references,
+            void,
+            groups,
             int_grids,
             overrides,
             tiles,
@@ -642,6 +768,9 @@ impl Level {
             tags: tags.clone(),
             fields: fields.clone(),
             layers: layers.clone(),
+            references: references.clone(),
+            void: void.clone(),
+            groups: groups.clone(),
             int_grids: int_grids
                 .iter()
                 .filter(|g| file(&g.layer))

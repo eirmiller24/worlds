@@ -116,6 +116,12 @@ impl Rig {
             let l = self.doc.project.layers[plan.layer].slug.to_string();
             self.view.palette.brushes.insert(l, b);
         }
+        if let Some(d) = plan.density {
+            self.view.palette.density = d;
+        }
+        if let Some(s) = plan.seed {
+            self.view.palette.seed = Some(s);
+        }
         if let Some(b) = plan.entity_brush {
             self.view.entities.brush = Some(b);
         }
@@ -433,6 +439,171 @@ fn select_moves_and_resizes_levels() {
     r.undo();
     let l = r.doc.level(ix);
     assert_eq!((l.world_px, l.size), ([320, 80], [6, 8]));
+}
+
+/// `(cell, tile)` of every placement on decor_back in crevasse, in row `y`.
+fn decor_row(r: &Rig, y: u32) -> Vec<([u32; 2], [u32; 2])> {
+    let ix = r.doc.level_ix("crevasse").unwrap();
+    r.doc
+        .level(ix)
+        .tiles_layer("decor_back")
+        .map_or(vec![], |l| {
+            l.tiles
+                .iter()
+                .filter(|t| t.cell[1] == y)
+                .map(|t| (t.cell, t.tile))
+                .collect()
+        })
+}
+
+#[test]
+fn a_random_brush_picks_an_alternative_per_cell() {
+    let mut r = Rig::new();
+    // castle_main's 16 px tiles on the 8 px decor_back: one pick every
+    // second cell. Alternatives in every rule form; [2, 0] weighs 3.
+    let stroke = r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back",
+        "path": [[0, 8], [38, 8]],
+        "brush": { "tileset": "castle_main", "seed": 7,
+                   "tiles": [[0, 0], [1, 0, 1, 1], { "rect": [2, 0, 1, 1], "weight": 3 },
+                             { "stack": [[4, 0], [3, 0]] }] } }"#;
+    r.gesture(stroke);
+    assert_eq!(r.ed.history().undo_entries().len(), 1);
+    assert_eq!(r.ed.undo_label().as_deref(), Some("Paint decor_back"));
+    let row = decor_row(&r, 8);
+    let xs: BTreeMap<u32, Vec<[u32; 2]>> = row.iter().fold(BTreeMap::new(), |mut m, (c, t)| {
+        m.entry(c[0]).or_insert_with(Vec::new).push(*t);
+        m
+    });
+    assert_eq!(
+        xs.keys().copied().collect::<Vec<_>>(),
+        (0..20).map(|i| i * 2).collect::<Vec<_>>()
+    );
+    for (x, tiles) in &xs {
+        assert!(
+            [
+                vec![[0, 0]],
+                vec![[1, 0]],
+                vec![[2, 0]],
+                vec![[4, 0], [3, 0]]
+            ]
+            .contains(tiles),
+            "{x}: {tiles:?}"
+        );
+    }
+    let heavy = xs.values().filter(|t| **t == [[2, 0]]).count();
+    assert!(heavy > 5, "weight 3 of 6: {heavy} of 20");
+    assert!(xs.values().any(|t| t.len() == 2), "a stack");
+    // The same seed paints the same again.
+    r.undo();
+    assert!(decor_row(&r, 8).is_empty());
+    r.gesture(stroke);
+    assert_eq!(decor_row(&r, 8), row);
+}
+
+#[test]
+fn density_scatters_and_stamps_never_overlap() {
+    let mut r = Rig::new();
+    r.gesture(
+        r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back",
+            "path": [[0, 6], [39, 6]],
+            "brush": { "tileset": "castle_main", "tile": [5, 1], "density": 50, "seed": 3 } }"#,
+    );
+    let got: Vec<u32> = decor_row(&r, 6).iter().map(|(c, _)| c[0]).collect();
+    let want: Vec<u32> = (0..20)
+        .map(|i| i * 2)
+        .filter(|&x| worlds_editor::tools::density_keeps(3, [x as i32, 6], 50))
+        .collect();
+    assert_eq!(got, want);
+    assert!(!got.is_empty() && got.len() < 20, "{got:?}");
+    assert_eq!(r.view.palette.density, 50);
+    // A 2x1 stamp alternative (4 cells wide here) at full density: stamps
+    // edge to edge, none cut by the next.
+    r.gesture(
+        r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back",
+            "path": [[0, 4], [1, 4], [2, 4], [3, 4], [4, 4], [9, 4], [12, 4]],
+            "brush": { "tileset": "castle_main", "tiles": [[0, 0, 2, 1]], "density": 100 } }"#,
+    );
+    let row = decor_row(&r, 4);
+    let want: Vec<([u32; 2], [u32; 2])> = (0..8).map(|i| ([i * 2, 4], [i % 2, 0])).collect();
+    assert_eq!(row, want);
+    // A rectangle fills its lattice cells with picks; nothing outside it.
+    r.gesture(
+        r#"{ "gesture": "rect", "level": "crevasse", "layer": "decor_back",
+            "path": [[30, 0], [35, 3]],
+            "brush": { "tileset": "castle_main", "tiles": [[6, 0], [7, 0]] } }"#,
+    );
+    let ix = r.doc.level_ix("crevasse").unwrap();
+    let placed: Vec<_> = r
+        .doc
+        .level(ix)
+        .tiles_layer("decor_back")
+        .unwrap()
+        .tiles
+        .iter()
+        .filter(|t| t.cell[0] >= 30 && t.cell[1] <= 3)
+        .map(|t| (t.cell, t.tile))
+        .collect();
+    assert_eq!(placed.len(), 6, "{placed:?}");
+    for (c, t) in placed {
+        assert!(c[0] <= 34 && c[0] % 2 == 0 && c[1] % 2 == 0, "{c:?}");
+        assert!(t == [6, 0] || t == [7, 0]);
+    }
+    // Nothing to pick: refused.
+    let before = r.doc.project.clone();
+    r.gesture(
+        r#"{ "gesture": "brush", "level": "crevasse", "layer": "decor_back", "path": [[0, 0]],
+            "brush": { "tileset": "castle_main", "tiles": [{ "rect": [0, 0, 1, 1], "weight": 0 }] } }"#,
+    );
+    let status = r.view.status.as_ref().unwrap().text.clone();
+    assert!(status.contains("no tiles to pick"), "{status}");
+    assert_eq!(r.doc.project, before);
+}
+
+#[test]
+fn a_resize_that_would_strand_an_entity_is_refused_and_crop_fits_the_content() {
+    let mut r = Rig::new();
+    let ix = r.doc.level_ix("shaft").unwrap();
+    let before = r.doc.project.clone();
+    // shaft's door stands on [2, 7]: pulling the bottom edge up 2 cells
+    // would leave it outside.
+    r.gesture(
+        r#"{ "gesture": "select", "level": "shaft", "layer": "collision", "path": [[3, 8], [3, 6]], "handle": [0, 1] }"#,
+    );
+    let status = r.view.status.as_ref().unwrap().text.clone();
+    assert!(
+        status.contains("Not resized") && status.contains("doorshaft2"),
+        "{status}"
+    );
+    assert_eq!(r.doc.project, before);
+    assert!(!r.ed.can_undo());
+    // The right edge in by 3 keeps it inside.
+    r.gesture(
+        r#"{ "gesture": "select", "level": "shaft", "layer": "collision", "path": [[6, 3], [3, 3]], "handle": [1, 0] }"#,
+    );
+    assert_eq!(r.doc.level(ix).size, [3, 8]);
+    // Crop to content: one entry down to the door's 1x3.
+    let world = Slug::new("main").unwrap();
+    let shaft = Slug::new("shaft").unwrap();
+    let crop = worlds_editor::tools::crop_command(&r.doc.project, &world, &shaft).unwrap();
+    r.apply_cmd(crop);
+    let l = r.doc.level(ix);
+    assert_eq!((l.size, l.world_px), ([1, 3], [352, 160]));
+    assert_eq!(r.ed.undo_label().as_deref(), Some("Crop level shaft"));
+    assert!(r.inv.contains(&Invalidation::Level(ix)));
+    let again = worlds_editor::tools::crop_command(&r.doc.project, &world, &shaft).unwrap_err();
+    assert!(again.contains("already fits"), "{again}");
+    r.undo();
+    assert_eq!(r.doc.level(ix).size, [3, 8]);
+    // The Inspector's path: a resize with an anchor that strands nothing.
+    let cmd = worlds_editor::tools::resize_command(&r.doc.project, &world, &shaft, [5, 10], [1, 1])
+        .unwrap();
+    r.apply_cmd(cmd);
+    let l = r.doc.level(ix);
+    assert_eq!((l.size, l.world_px), ([5, 10], [288, 48]));
+    assert_eq!(l.all_entities().next().unwrap().cell, [4, 9]);
+    let e = worlds_editor::tools::resize_command(&r.doc.project, &world, &shaft, [2, 2], [-1, -1])
+        .unwrap_err();
+    assert!(e.contains("doorshaft2"), "{e}");
 }
 
 #[test]
@@ -1041,6 +1212,7 @@ fn level_operations_reindex_and_undo() {
         worlds_core::Command::DeleteLevel {
             world: Slug::new("main").unwrap(),
             level: Slug::new("well").unwrap(),
+            keep_layout: false,
         },
     )
     .unwrap();
@@ -1254,6 +1426,7 @@ mod live {
         own: OwnWrites,
         snaps: Option<SnapshotRenderer>,
         fx: HostEffects,
+        vp: worlds_editor::viewport::Viewport,
     }
 
     impl LiveRig {
@@ -1272,6 +1445,7 @@ mod live {
                 own: OwnWrites::default(),
                 snaps: None,
                 fx: HostEffects::default(),
+                vp: worlds_editor::viewport::Viewport::new(),
             }
         }
 
@@ -1281,6 +1455,7 @@ mod live {
                 doc: &mut self.rig.doc,
                 editing: &mut self.rig.ed,
                 view: &mut self.rig.view,
+                viewport: &mut self.vp,
                 invalidate: &mut self.rig.inv,
                 own_writes: &mut self.own,
                 snapshots: &mut self.snaps,
@@ -1300,6 +1475,7 @@ mod live {
                     doc: &mut self.rig.doc,
                     editing: &mut self.rig.ed,
                     view: &mut self.rig.view,
+                    viewport: &mut self.vp,
                     invalidate: &mut self.rig.inv,
                     own_writes: &mut self.own,
                     snapshots: &mut self.snaps,
@@ -1701,6 +1877,81 @@ mod live {
         assert!(a.server.pending().is_empty());
     }
 
+    /// Map tabs over the API: `view.open_viewport` adds a tab (focused
+    /// only when asked), `view.list_viewports` lists them, `view.focus` and
+    /// `view.select` with `viewport` act in that tab and leave the focused
+    /// one alone, an unknown id is `invalid params`.
+    #[test]
+    fn view_methods_act_in_the_named_map_tab() {
+        use worlds_editor::view::ViewportId;
+        let mut a = LiveRig::new();
+        let mut agent = Agent::connect(&a.server, "claude-code");
+        a.rig.view.active_level = a.rig.doc.level_ix("crevasse");
+        let r = a.call(&mut agent, "view.open_viewport", json!({ "world": "main" }));
+        assert_eq!(r["result"]["viewport"], 2, "{r}");
+        assert_eq!(
+            a.rig.view.focused,
+            ViewportId::FIRST,
+            "not focused unless asked"
+        );
+        let r = a.call(&mut agent, "view.list_viewports", json!({}));
+        let tabs = r["result"]["viewports"].as_array().unwrap().clone();
+        assert_eq!(tabs.len(), 2, "{r}");
+        assert_eq!(r["result"]["focused"], 1);
+        assert_eq!(tabs[0]["level"], "crevasse");
+        assert_eq!(tabs[1]["world"], "main");
+        assert_eq!(tabs[1]["level"], Value::Null);
+
+        let r = a.call(
+            &mut agent,
+            "view.focus",
+            json!({ "level": "shaft", "viewport": 2 }),
+        );
+        assert!(r.get("result").is_some(), "{r}");
+        assert_eq!(a.rig.view.active_level, a.rig.doc.level_ix("crevasse"));
+        assert_eq!(
+            a.rig.view.tab_active_level(ViewportId(2)),
+            a.rig.doc.level_ix("shaft")
+        );
+        // The fit waits in tab 2, not in the focused tab.
+        assert_eq!(a.vp.pending_fit(), None);
+        assert!(matches!(
+            a.rig.view.tabs[1].cam.pending_fit(),
+            Some(worlds_editor::viewport::Fit::Level(_))
+        ));
+        let r = a.call(
+            &mut agent,
+            "view.select",
+            json!({ "entities": ["doorcrev22"], "viewport": 2 }),
+        );
+        assert!(r.get("result").is_some(), "{r}");
+        assert_eq!(
+            a.rig.view.tab_active_level(ViewportId(2)),
+            a.rig.doc.level_ix("crevasse")
+        );
+        assert_eq!(a.rig.view.selection.entity_ids().len(), 1, "shared");
+        let r = a.call(
+            &mut agent,
+            "view.focus",
+            json!({ "level": "shaft", "viewport": 9 }),
+        );
+        assert_eq!(r["error"]["code"], -32602, "{r}");
+        let r = a.call(
+            &mut agent,
+            "view.open_viewport",
+            json!({ "world": "nowhere" }),
+        );
+        assert_eq!(r["error"]["data"]["kind"], "unknown_world", "{r}");
+        let r = a.call(
+            &mut agent,
+            "view.open_viewport",
+            json!({ "world": "main", "focus": true }),
+        );
+        assert_eq!(r["result"]["viewport"], 3, "{r}");
+        assert_eq!(a.rig.view.focused, ViewportId(3));
+        assert_eq!(a.rig.view.live, ViewportId(3));
+    }
+
     /// The editor's events: a user edit is `changed` with origin user, a
     /// user save is `saved` with the files, `view.select` moves the view
     /// and the selection is reported; an agent's `project.save` goes
@@ -1776,7 +2027,7 @@ mod live {
             Some("crevasse")
         );
         assert!(matches!(
-            a.fx.focus,
+            a.vp.pending_fit(),
             Some(worlds_editor::viewport::Fit::Rect(_))
         ));
 

@@ -323,6 +323,7 @@ fn renames_and_deletes_follow_the_level() {
         .apply(Command::DeleteLevel {
             world: p.worlds[0].slug.clone(),
             level: Slug::new("hall").unwrap(),
+            keep_layout: false,
         })
         .unwrap();
     assert!(

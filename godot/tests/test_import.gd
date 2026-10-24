@@ -42,6 +42,7 @@ func _check_export(dir: String) -> void:
 		_check_tiles(dir, slug, data, level)
 		_check_collision(dir, slug, b.world, data, level)
 		_check_entities(dir, slug, data, level)
+		_check_outline(dir, slug, data, level)
 		level.free()
 	for e in b.errors:
 		# Out-of-range flips are a refusal case; anything else is a bug.
@@ -123,6 +124,26 @@ func _check_entities(dir: String, slug: String, data: Dictionary, level: Node2D)
 
 ## Imports to scenes, twice (the second run must give the same files), and
 ## loads them back.
+## `worlds_outline`: the export's outline moved to the level's pixels, or
+## the box's corners for a rectangular level; a shaped level's background
+## is a polygon of it.
+func _check_outline(dir: String, slug: String, data: Dictionary, level: Node2D) -> void:
+	var got: PackedVector2Array = level.get_meta("worlds_outline")
+	var want := PackedVector2Array()
+	var g := int(data["grid_size"])
+	if data.has("outline"):
+		for p in data["outline"]:
+			want.append(Vector2(p[0] - data["world_px"][0], p[1] - data["world_px"][1]))
+		var bg := level.get_node_or_null("Background")
+		if bg != null:
+			_expect(bg is Polygon2D and bg.polygon == want, "%s %s: background isn't the outline" % [dir, slug])
+	else:
+		var s := Vector2(data["size"][0] * g, data["size"][1] * g)
+		want = PackedVector2Array([Vector2.ZERO, Vector2(s.x, 0), s, Vector2(0, s.y)])
+	_expect(got == want, "%s %s: worlds_outline %s, want %s" % [dir, slug, got, want])
+	_expect(level.get_meta("worlds_void") == data.get("void", []), "%s %s: worlds_void" % [dir, slug])
+
+
 func _check_scenes(dir: String) -> void:
 	var out := "user://worlds_test"
 	_wipe(out)

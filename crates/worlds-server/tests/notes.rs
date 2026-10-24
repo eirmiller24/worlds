@@ -434,11 +434,11 @@ impl Host for ViewHost {
     fn reload(&mut self) -> Result<(), RpcError> {
         self.inner.reload()
     }
-    fn focus(&mut self, target: &ViewTarget) -> Result<(), RpcError> {
+    fn focus(&mut self, target: &ViewTarget, _: Option<u32>) -> Result<(), RpcError> {
         self.focused.push(target.clone());
         Ok(())
     }
-    fn select(&mut self, selection: &Selection) -> Result<(), RpcError> {
+    fn select(&mut self, selection: &Selection, _: Option<u32>) -> Result<(), RpcError> {
         self.selected.push(selection.clone());
         Ok(())
     }
@@ -563,5 +563,89 @@ fn selection_events_carry_levels() {
     assert_eq!(
         message["params"],
         json!({ "level": "crevasse", "entities": [], "notes": ["pinstatue2"], "levels": ["crevasse", "shaft"] })
+    );
+}
+
+/// Connectors over the API: `notes.add` takes the kind, `notes.list`
+/// filters by it, a locked one needs `confirm` to change its ends or
+/// waypoints but not its label or style, and `project.validate` reports a
+/// dangling end.
+#[test]
+fn connectors_are_added_listed_and_locked_like_any_note() {
+    let (_t, mut s) = session();
+    let r = s
+        .call(
+            "notes.add",
+            json!({ "scope": { "world": "main" }, "note": { "id": "connshaft2", "kind": "connector",
+                "label": "one-way drop", "locked": true,
+                "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" },
+                "waypoints": [[360, 40]] } }),
+        )
+        .unwrap();
+    assert_eq!(r["label"], "claude-code: Add connector");
+    let l = s
+        .call("notes.list", json!({ "kind": "connector" }))
+        .unwrap();
+    assert_eq!(ids(&l), ["connshaft2"]);
+    assert_eq!(
+        l["notes"][0]["note"]["from"],
+        json!({ "level": "crevasse" })
+    );
+    let l = s
+        .call("notes.list", json!({ "kinds": ["note", "connector"] }))
+        .unwrap();
+    assert!(ids(&l).contains(&"connshaft2".to_string()));
+    // Locked: a new end or waypoint is a move, a label or style isn't.
+    for patch in [
+        json!({ "to": { "level": "shaft" } }),
+        json!({ "waypoints": [[360, 32]] }),
+    ] {
+        assert_eq!(
+            err(s.call(
+                "notes.update",
+                json!({ "id": "connshaft2", "patch": patch })
+            ))
+            .code,
+            code::NEEDS_CONFIRM
+        );
+    }
+    for patch in [json!({ "label": "drop" }), json!({ "style": "double" })] {
+        s.call(
+            "notes.update",
+            json!({ "id": "connshaft2", "patch": patch }),
+        )
+        .unwrap();
+    }
+    s.call(
+        "notes.move",
+        json!({ "ids": ["connshaft2"], "delta": [0, -8], "confirm": true }),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(note(s.project(), "connshaft2")).unwrap(),
+        json!({ "id": "connshaft2", "kind": "connector", "locked": true, "label": "drop",
+                "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" },
+                "waypoints": [[360, 32]], "style": "double" })
+    );
+    // A wrong key is refused; a dangling end is a validation problem.
+    assert!(
+        s.call(
+            "notes.add",
+            json!({ "scope": { "world": "main" }, "note": { "kind": "connector",
+                "from": { "level": "crevasse" }, "to": { "level": "shaft" }, "points": [[0, 0]] } }),
+        )
+        .is_err()
+    );
+    s.call(
+        "notes.add",
+        json!({ "scope": { "world": "main" }, "note": { "id": "conngone22", "kind": "connector",
+            "from": { "level": "crevasse" }, "to": { "level": "nowhere" } } }),
+    )
+    .unwrap();
+    let v = s.call("project.validate", json!({})).unwrap();
+    assert!(
+        v.to_string()
+            .contains("level \\\"nowhere\\\" does not exist: the connector's end dangles"),
+        "{v}"
     );
 }

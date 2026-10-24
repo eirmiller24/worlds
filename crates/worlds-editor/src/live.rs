@@ -16,29 +16,32 @@
 //! - `reload` re-reads the project and fixes up the view; the app finishes
 //!   it after the drain (scene, bakes, watcher) from [`HostEffects`];
 //! - `focus`, `select` and `snapshot` act on the view; `snapshot` renders
-//!   through [`SnapshotRenderer`].
+//!   through [`SnapshotRenderer`]. `focus` and `select` act in the map tab
+//!   the request names (swapped live for the call, [`crate::view::swap_live`]),
+//!   `list_viewports` and `open_viewport` read and add map tabs (the app
+//!   docks a new one next frame).
 
 use std::path::PathBuf;
 
 use worlds_core::command::{Change, CommandError, Entry, Origin};
 use worlds_core::{History, Problem};
-use worlds_server::{Doc, Host, RpcError, Selection, Snapshot, SnapshotRequest, ViewTarget};
+use worlds_server::{
+    Doc, Host, RpcError, Selection, Snapshot, SnapshotRequest, ViewTarget, ViewportInfo,
+};
 
 use crate::app::watch::OwnWrites;
 use crate::doc::Document;
 use crate::edit::Editing;
 use crate::snapshot::SnapshotRenderer;
 use crate::tools::{CommandContext, EditorCommands, Invalidation};
-use crate::view::{SelItem, ViewState};
-use crate::viewport::Fit;
+use crate::view::{SelItem, ViewState, ViewportId, swap_live};
 use crate::viewport::camera::WRect;
+use crate::viewport::{Fit, Viewport};
 
-/// What a drain did that the app finishes afterwards (it needs the
-/// viewport, the GPU or the server, which the host doesn't hold).
+/// What a drain did that the app finishes afterwards (it needs the GPU
+/// or the server, which the host doesn't hold).
 #[derive(Default)]
 pub struct HostEffects {
-    /// `view.focus`: frame this.
-    pub focus: Option<Fit>,
     /// `project.reload` replaced the document; this is the old one.
     pub reloaded: Option<Document>,
     /// A save recomputed the problems: send `problems`.
@@ -50,6 +53,8 @@ pub struct EditorHost<'a> {
     pub doc: &'a mut Document,
     pub editing: &'a mut Editing,
     pub view: &'a mut ViewState,
+    /// The map viewport (the live tab's camera; `view.focus` frames in it).
+    pub viewport: &'a mut Viewport,
     pub invalidate: &'a mut Vec<Invalidation>,
     pub own_writes: &'a mut OwnWrites,
     /// Created on the first `view.snapshot`.
@@ -140,7 +145,100 @@ impl Host for EditorHost<'_> {
         self.doc.problems = problems.to_vec();
     }
 
-    fn focus(&mut self, target: &ViewTarget) -> Result<(), RpcError> {
+    fn focus(&mut self, target: &ViewTarget, viewport: Option<u32>) -> Result<(), RpcError> {
+        self.in_viewport(viewport, |h| h.focus_here(target))
+    }
+
+    fn select(&mut self, selection: &Selection, viewport: Option<u32>) -> Result<(), RpcError> {
+        self.in_viewport(viewport, |h| h.select_here(selection))
+    }
+
+    fn viewports(&mut self) -> Result<Vec<ViewportInfo>, RpcError> {
+        let doc = &*self.doc;
+        let view = &*self.view;
+        Ok(view
+            .tabs
+            .iter()
+            .map(|t| {
+                let (cam, size) = view.tab_camera(self.viewport, t.id).unwrap_or_default();
+                let r = cam.visible(size);
+                let world = doc.project.worlds[view.tab_world_ix(doc, t.id)]
+                    .slug
+                    .clone();
+                ViewportInfo {
+                    id: t.id.0,
+                    world,
+                    level: view
+                        .tab_active_level(t.id)
+                        .filter(|&i| i < doc.levels.len())
+                        .map(|i| doc.level(i).slug.clone()),
+                    focused: t.id == view.focused,
+                    world_rect: [
+                        r.min[0].floor() as i64,
+                        r.min[1].floor() as i64,
+                        ((r.max[0].ceil() - r.min[0].floor()) as i64).max(1),
+                        ((r.max[1].ceil() - r.min[1].floor()) as i64).max(1),
+                    ],
+                    zoom: cam.zoom,
+                }
+            })
+            .collect())
+    }
+
+    fn open_viewport(&mut self, world: &worlds_core::Slug, focus: bool) -> Result<u32, RpcError> {
+        let id = self
+            .view
+            .new_tab(self.doc, self.viewport, Some(world.clone()), None);
+        if focus {
+            self.view.focus_tab(self.viewport, id);
+        }
+        Ok(id.0)
+    }
+
+    fn snapshot(&mut self, request: &SnapshotRequest) -> Result<Snapshot, RpcError> {
+        if self.snapshots.is_none() {
+            let r = SnapshotRenderer::new().map_err(|e| {
+                RpcError::unsupported(format!(
+                    "view.snapshot: this editor has no GPU adapter for offscreen rendering: {e:#}"
+                ))
+            })?;
+            *self.snapshots = Some(r);
+        }
+        // Never show an agent a layer older than its last edit: rebake the
+        // layers whose worker job hasn't landed yet (after a rule edit).
+        for (ix, layer) in self.doc.refresh_stale() {
+            self.invalidate
+                .push(Invalidation::Layer { level: ix, layer });
+        }
+        let r = self.snapshots.as_mut().expect("created above");
+        r.render(self.doc, self.view, request)
+    }
+}
+
+impl EditorHost<'_> {
+    /// Run `f` with map tab `viewport` live (`None`: the focused one, as
+    /// it already is), then the focused tab again. An unknown id is
+    /// `invalid params`.
+    fn in_viewport<R>(
+        &mut self,
+        viewport: Option<u32>,
+        f: impl FnOnce(&mut Self) -> Result<R, RpcError>,
+    ) -> Result<R, RpcError> {
+        let Some(id) = viewport.map(ViewportId) else {
+            return f(self);
+        };
+        if !self.view.has_tab(id) {
+            return Err(worlds_server::unknown_viewport(id.0));
+        }
+        swap_live(self.view, self.viewport, id);
+        let r = f(self);
+        let focused = self.view.focused;
+        swap_live(self.view, self.viewport, focused);
+        r
+    }
+
+    /// `view.focus` in the live tab.
+    fn focus_here(&mut self, target: &ViewTarget) -> Result<(), RpcError> {
         match target {
             ViewTarget::Level(slug) => {
                 let ix = self
@@ -148,7 +246,8 @@ impl Host for EditorHost<'_> {
                     .level_ix(slug.as_str())
                     .ok_or_else(|| RpcError::command(&CommandError::UnknownLevel(slug.clone())))?;
                 self.view.active_level = Some(ix);
-                self.effects.focus = Some(Fit::Level(ix));
+                self.view.sync_world(self.doc);
+                self.viewport.request_fit(Fit::Level(ix));
             }
             ViewTarget::WorldRect { world, rect } => {
                 if let Some(w) = world
@@ -161,7 +260,10 @@ impl Host for EditorHost<'_> {
                         "world_rect {rect:?} needs a positive width and height"
                     )));
                 }
-                self.effects.focus = Some(Fit::Rect(WRect::from_pos_size(
+                if let Some(w) = crate::snapshot::target_world(self.doc, target) {
+                    self.view.set_world(self.doc, w);
+                }
+                self.viewport.request_fit(Fit::Rect(WRect::from_pos_size(
                     [rect[0] as f64, rect[1] as f64],
                     [rect[2] as f64, rect[3] as f64],
                 )));
@@ -171,22 +273,32 @@ impl Host for EditorHost<'_> {
             ViewTarget::Note(id) => {
                 let (rect, level) = crate::annot::focus_rect(self.doc, id)
                     .ok_or_else(|| RpcError::command(&CommandError::UnknownNote(id.clone())))?;
+                if let Some(w) = crate::snapshot::target_world(self.doc, target) {
+                    self.view.set_world(self.doc, w);
+                }
                 if let Some(ix) = level {
                     self.view.active_level = Some(ix);
                 }
-                self.effects.focus = Some(Fit::Rect(rect));
+                self.viewport.request_fit(Fit::Rect(rect));
+            }
+            // A world: it is shown, fitted.
+            ViewTarget::World(w) => {
+                let wi = crate::snapshot::target_world(self.doc, target)
+                    .ok_or_else(|| RpcError::command(&CommandError::UnknownWorld(w.clone())))?;
+                self.view.set_world(self.doc, wi);
+                self.viewport.request_fit(Fit::World);
             }
         }
         Ok(())
     }
 
-    /// `view.select`: `level` alone makes that level active and clears
+    /// `view.select` in the live tab: `level` alone makes that level active and clears
     /// the selection; otherwise every listed entity, annotation and level
     /// is selected (in that order: entities, notes, levels; the first item
     /// is primary). The active level becomes the first entity's level, else
     /// the first level-scope note's level, else the first listed level,
     /// else stays. Every id is checked before the view changes.
-    fn select(&mut self, selection: &Selection) -> Result<(), RpcError> {
+    fn select_here(&mut self, selection: &Selection) -> Result<(), RpcError> {
         if let Some(slug) = &selection.level {
             let ix = self
                 .doc
@@ -229,38 +341,20 @@ impl Host for EditorHost<'_> {
         self.view.selection.set(items);
         Ok(())
     }
-
-    fn snapshot(&mut self, request: &SnapshotRequest) -> Result<Snapshot, RpcError> {
-        if self.snapshots.is_none() {
-            let r = SnapshotRenderer::new().map_err(|e| {
-                RpcError::unsupported(format!(
-                    "view.snapshot: this editor has no GPU adapter for offscreen rendering: {e:#}"
-                ))
-            })?;
-            *self.snapshots = Some(r);
-        }
-        // Never show an agent a layer older than its last edit: rebake the
-        // layers whose worker job hasn't landed yet (after a rule edit).
-        for (ix, layer) in self.doc.refresh_stale() {
-            self.invalidate
-                .push(Invalidation::Layer { level: ix, layer });
-        }
-        let r = self.snapshots.as_mut().expect("created above");
-        r.render(self.doc, self.view, request)
-    }
 }
 
 /// Carry the view over to a reloaded document: layer settings and the
-/// active layer by slug, the active level by slug, the selected entities
+/// active layer by slug, every map tab's active level by slug, the selected entities
 /// the new document still has (entities, annotations and levels by id,
 /// tile stacks still there), no pick or drawing in progress.
 pub fn sync_view_after_reload(view: &mut ViewState, old: &Document, new: &Document) {
     let old_active = view.active_layer;
     view.sync_layers(new, Some((old, old_active)));
-    view.active_level = view
-        .active_level
-        .filter(|&i| i < old.levels.len())
-        .and_then(|i| new.level_ix(old.level(i).slug.as_str()));
+    // Every tab's active level by slug.
+    let map: Vec<Option<usize>> = (0..old.levels.len())
+        .map(|i| new.level_ix(old.level(i).slug.as_str()))
+        .collect();
+    view.remap_levels(&map);
     view.selection.prune(&new.project);
     view.pick = None;
     view.drawing = None;

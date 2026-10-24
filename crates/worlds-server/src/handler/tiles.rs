@@ -3,6 +3,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use worlds_core::command::Rect;
+use worlds_core::find::{self, FindKind};
 use worlds_core::{Command, CommandError, Project, Slug, TilePlacement};
 
 use super::Write;
@@ -35,9 +36,81 @@ pub(crate) fn get(project: &Project, method: &str, p: Value) -> Result<Value, Rp
     Ok(json!({ "tiles": tiles }))
 }
 
-/// `tiles.set` → `set_tiles`.
-pub(crate) fn set(_: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
-    Ok(Write::one(params::command(method, "set_tiles", p)?))
+/// How many placements `tiles.find` returns by default.
+const FIND_LIMIT: usize = 1000;
+
+/// `tiles.find { query?, tileset?, tile?, world?, level?, layer?, limit? }`:
+/// hand-placed tiles across the project that every filter holds for
+/// ([`worlds_core::find`]), level by level, each placement as in the layer
+/// file plus its `world`, `level` and `layer`; at most `limit` (default
+/// 1000), `total` counting them all.
+pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        query: Option<String>,
+        tileset: Option<String>,
+        tile: Option<[u32; 2]>,
+        world: Option<String>,
+        level: Option<Slug>,
+        layer: Option<Slug>,
+        limit: Option<usize>,
+    }
+    let p: P = params::parse(method, p)?;
+    if let Some(l) = &p.level {
+        find_level(project, l.as_str())?;
+    }
+    if let Some(l) = &p.layer {
+        layer_of_kind(project, l.as_str(), "tiles")?;
+    }
+    let mut q = params::query(method, p.query.as_deref(), FindKind::Tiles)?;
+    q.tilesets.extend(p.tileset);
+    q.tiles.extend(p.tile);
+    q.worlds.extend(p.world);
+    q.levels.extend(p.level.map(|l| l.to_string()));
+    q.layers.extend(p.layer.map(|l| l.to_string()));
+    let hits =
+        find::tiles(project, &q).map_err(|e| RpcError::invalid_params(format!("{method}: {e}")))?;
+    let total = hits.len();
+    let tiles: Vec<Value> = hits
+        .into_iter()
+        .take(p.limit.unwrap_or(FIND_LIMIT))
+        .map(|h| {
+            let mut v = json!({ "world": h.world.slug, "level": h.level.slug, "layer": h.layer });
+            if let (Value::Object(m), Ok(Value::Object(t))) = (&mut v, serde_json::to_value(h.tile))
+            {
+                m.extend(t);
+            }
+            v
+        })
+        .collect();
+    Ok(json!({ "tiles": tiles, "total": total }))
+}
+
+/// `tiles.set` → `set_tiles`, without placements in the level's void.
+pub(crate) fn set(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    let mut cmd = params::command(method, "set_tiles", p)?;
+    if let Command::SetTiles {
+        level,
+        layer,
+        tiles,
+        ..
+    } = &mut cmd
+    {
+        clip_void(project, level, layer, tiles);
+    }
+    Ok(Write::one(cmd))
+}
+
+/// Drop placements whose cell is in the level's void (a non-rectangular
+/// level's cut-out cells), as the editor's tools clip there. Unknown levels
+/// and layers are left for the command to refuse.
+fn clip_void(project: &Project, level: &Slug, layer: &Slug, tiles: &mut Vec<TilePlacement>) {
+    if let (Some(l), Some(def)) = (project.level(level.as_str()), project.layer(layer.as_str()))
+        && l.has_void()
+    {
+        tiles.retain(|t| !project.layer_cell_void(def, l, t.cell[0] as i64, t.cell[1] as i64));
+    }
 }
 
 /// `tiles.clear_rect` → `clear_tiles`.
@@ -86,6 +159,7 @@ pub(crate) fn stamp(project: &Project, method: &str, p: Value) -> Result<Write, 
             });
         }
     }
+    clip_void(project, &p.level, &p.layer, &mut tiles);
     Ok(Write::one(Command::SetTiles {
         level: p.level,
         layer: p.layer,

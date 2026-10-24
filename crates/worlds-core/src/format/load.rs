@@ -232,6 +232,12 @@ fn load_from(src: &Source<'_>) -> Result<Project> {
         project.entities.push(def);
     }
 
+    for (path, stem) in json_files(src, &dir.join("assemblies"))? {
+        let a: crate::assembly::Assembly = read(src, &path)?;
+        check_name(&path, "slug", a.slug.as_str(), &stem)?;
+        project.assemblies.push(a);
+    }
+
     for (path, stem) in json_files(src, &dir.join("rules"))? {
         if stem == "macros" {
             project.macros = Some(read::<Macros>(src, &path)?);

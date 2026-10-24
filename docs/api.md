@@ -143,6 +143,8 @@ These, and only these, need `confirm: true`; without it the error is `needs_conf
 | `project.reload` | when there are unsaved edits (they are discarded) |
 | `notes.update`, `notes.move` | only when a locked annotation would move: its geometry or a guide's `group` changes ([notes](#notes)) |
 | `notes.remove` | only when a listed annotation is locked |
+| `reference.update` | only when a locked reference image would move or scale: its `px` or `scale` changes ([reference images](#reference-images)) |
+| `reference.remove` | only when a listed reference image is locked |
 
 `defs.set` never drops data: stored values of a removed field or enum value stay in the files, where `project.validate` reports them, and undo brings the definition back. `confirm` is only there so an agent doesn't do it by accident. An `int_grid` layer's value can't be taken out while a cell holds it at all: that is refused (`command_error`, `invalid`) with or without `confirm`; `grid.replace_value` it first.
 
@@ -189,17 +191,20 @@ The JSON-RPC `message` is always a sentence meant for an agent to read. For `com
 | `unknown_guide_group` | `world`, `group` |
 | `duplicate_id` | `id` |
 | `duplicate_level` | `level` |
+| `duplicate_world` | `world` |
 | `unknown_enum` | `enum` |
 | `unknown_enum_value` | `enum`, `value` |
 | `unknown_rule_group` | `layer`, `group` |
 | `unknown_rule` | `layer`, `rule` (a rule or template reference slug) |
 | `unknown_macro` | `macro_kind` (`pattern`, `legend`, `template`), `name` |
 | `unknown_stamp` | `layer`, `stamp` |
-| `duplicate_def` | `def_kind` (`layer`, `entity`, `enum`, `tileset`, `rules`, `macros`), `slug` |
+| `unknown_assembly` | `slug` |
+| `duplicate_def` | `def_kind` (`layer`, `entity`, `enum`, `tileset`, `rules`, `macros`, `assembly`), `slug` |
 | `in_use` | `def_kind` (`tileset`, `macros`, or `stamp` with its `layer`), `slug`, `uses` (the first few, as phrases) |
 | `invalid` | none: `message` says it all |
 | `batch` | `label`, `index` (of the failed command), `source` (its error, in this same form) |
 | `rollback` | `batch` (the batch's error), `failed` (the inverses that were refused, as errors); treat the project as changed |
+| `unknown_reference` | `id` (a reference image's) |
 
 New variants follow the same rule: a variant with one unnamed field names it after what it holds.
 
@@ -221,12 +226,13 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 | `name`, `dir`, `grid_size`, `bg_color`, `collision_layer`, `seed`, `blocking_values`, `default_level_size`, `export_on_save`, `rev` | project settings (`dir` absolute; `blocking_values` is the effective list, see [format.md](format.md#projectjson); `default_level_size` is `null` when left out) |
 | `mode` | `{ headless, approval, pending }`: `pending` counts approval batches waiting for the user |
 | `level_fields` | field definitions as in `project.json`, without `name` and `display` (`doc` is kept: it tells an agent what the field is for) |
-| `worlds[]` | `{ slug, name, levels: [slug], notes, guides, guide_groups }`: `notes` counts the world-scope annotations that aren't guides, `guides` the world's guides, `guide_groups` is `[{ slug, name?, offset, color?, guides }]` (`guides`: how many guides name the group), `[]` when there are none |
+| `worlds[]` | In display order (`project.json` `worlds`): `{ slug, name, levels: [slug], level_count, bbox, notes, guides, guide_groups }`: `bbox` is `[x, y, w, h]` in world pixels around the world's levels (`null` when it has none), `notes` counts the world-scope annotations that aren't guides, `guides` the world's guides, `guide_groups` is `[{ slug, name?, offset, color?, guides }]` (`guides`: how many guides name the group), `[]` when there are none |
 | `levels[]` | `{ slug, name, id, world, world_px, size, size_px, depth, tags, content, notes }`. `tags` is the level's tags (`[]` when it has none). `size` in cells of the project grid, `size_px` in pixels. `content` per layer with content: `{ "cells": n }` (non-empty int_grid cells), `{ "overrides": n }` (a derived layer's hand-painted overrides, suppressed cells included), `{ "tiles": n }`, `{ "entities": n }`. `notes`: `{ open, done }` |
 | `layers[]` | `{ slug, name, kind, grid_size }`, plus `values: [{ slug, glyph, color, group? }]` and `groups: [{ slug, glyph? }]` for `int_grid` (and, for a [derived](format.md#derived-layers-overrides) one, `derived: true` and `writer`: the auto layer whose rules write it, `null` when none does), `tileset` for `tiles`, `source`, `rule_groups` (count) and `passes` (the distinct `pass` numbers its groups use, ascending) for `auto`. `grid_size` is the effective one (an `auto` layer's is its source's) |
 | `entity_types[]` | `{ slug, name, doc?, category?, tags, size, pivot, resizable, color, icon?, limit?, fields, count }`. `pivot` is the point of the entity that sits on its cell, as fractions of its size (`[0.5, 1.0]` is bottom center). `color` is the type's `#rrggbb`, `icon` its `{ tileset, tile: [col, row] }` atlas tile, `limit` `{ max, scope, behavior }` with the defaults spelled out (`scope` `level`, `behavior` `prevent_adding`). `fields` as in the entity file without `name` and `display` (with `doc` when set); `count` across the project |
 | `enums[]` | `{ slug, values: [slug] }` |
 | `tilesets[]` | `{ slug, image, tile_size, spacing?, padding?, atlas }`. `atlas` is `[columns, rows]` in tiles, `null` if the image can't be read |
+| `assemblies[]` | `{ slug, name, category?, tags, doc?, size, items }`: every [assembly](#assemblies-and-transforms), `size` in cells of the project grid, `items` how many grid cells, tile stacks, entities and notes it holds (`defs.get` kind `assembly` gives the content) |
 | `notes` | `{ open, done }` across the project. Guides are not counted in any `notes` count: they are reference lines, not work items (`worlds[].guides` counts them) |
 | `recovered`? | Only when this editor session started from a crash recovery (the editor's *Recover*): `{ files: [paths recovered], skipped: [conflicting paths left out], session: { pid, written } }`, `session` being the crashed one |
 
@@ -243,7 +249,8 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
   "level_fields": [
     { "slug": "biome", "type": "enum", "enum": "biome", "array": true, "default": [] },
     { "slug": "music", "type": "string", "nullable": true } ],
-  "worlds": [ { "slug": "main", "name": "Main", "levels": ["crevasse", "shaft"], "notes": 2, "guides": 1, "guide_groups": [] } ],
+  "worlds": [ { "slug": "main", "name": "Main", "levels": ["crevasse", "shaft"], "level_count": 2, "bbox": [0, 0, 416, 208],
+    "notes": 2, "guides": 1, "guide_groups": [] } ],
   "levels": [
     { "slug": "crevasse", "name": "Crevasse", "id": "crevasse22", "world": "main", "world_px": [0, 0],
       "size": [20, 5], "size_px": [320, 80], "depth": 0, "tags": [],
@@ -328,7 +335,7 @@ Examples run in order against a fresh copy of `crates/worlds-core/tests/fixtures
 
 ### level
 
-**`level.list { world? }`** → `{ rev, levels: [{ slug, name, id, world, world_px, size, depth }] }`.
+**`level.list { world? }`** → `{ rev, levels: [{ slug, name, id, world, world_px, size, depth }] }`. To search levels by tag, field or name, see `level.find` ([find](#find-entities-levels-notes-and-tiles)).
 
 ```json
 { "jsonrpc": "2.0", "id": 5, "method": "level.list", "params": {} }
@@ -372,10 +379,12 @@ Reads of derived layers take their effective grids from the host's bake cache (t
 | `level.delete` | `{ level, confirm: true }` | `delete_level` |
 | `level.move` | `{ level, world_px }` | `move_level` |
 | `level.resize` | `{ level, size, anchor? }` | `resize_level` |
+| `level.crop` | `{ level }` | crop to content: the `batch` of `resize_level`s that shrinks the level to the bounding box of its cells, tiles and entities ([commands.md](commands.md#resize_level)), labelled `Crop level <slug>`, one undo entry. A level that already fits applies nothing (same `rev`); one with no content is `command_error` `invalid` |
 | `level.update` | `{ level, slug?, name?, depth?, bg_color?, tags? }` | `batch` of `rename_level`, `set_level_depth`, `set_level_bg`, `set_level_tags` (only what's given; `tags` replaces the level's tags, `[]` clears them) |
 | `level.set_fields` | `{ level, fields?: { slug: value }, unset?: [slug] }` | `batch` of `set_level_field` (`fields` stores, `unset` removes the stored value) |
 | `level.set_layer_state` | `{ level, layer, state }`; `state` is an `auto` layer's per-level rule state as in `level.json` `layers` (`{ seed?, optional_groups?, tilesets? }`), or `null` to remove it | `set_layer_state`, reporting `layer_state` (that layer rebakes in the level). `state` replaces the entry whole. Checked first: `layer` must be an `auto` layer (`wrong_layer_kind`), each of `optional_groups` an `optional` group of its rules (`unknown_rule_group`, or `invalid` for an `always` or `off` group), each tileset of `tilesets` (keys and values) defined (`unknown_tileset`) |
 | `level.replace` | `{ world?, level, content?, confirm? }`, `level` and `content` as for `level.create`; `level.slug` names the level to replace, and a left-out `level.id` keeps its id | `replace_level`: `level.json` and all content, wholesale. Content left out of `content` is removed, so it needs `confirm` when the level holds anything `content` leaves out ([Confirmation](#confirmation)); rewriting the cells of a layer `content` includes never does. Reports `level_meta` part `all`, then a `grid` or `tiles` per layer with content before or after, an `entity_layer`, `entity` or `note` per entities layer entry, entity and note before or after ([commands.md](commands.md#replace_level)). It can't rename: use `level.update` |
+| `level.duplicate` | `{ level, slug, name?, world?, world_px? }` | `duplicate_level`: a copy of the level under `slug` with new ids and its internal references remapped ([commands.md](commands.md#duplicate_level)). `world` is where the copy goes (default: the level's world), `world_px` where (default: just right of the original, past any level there). The result adds the copy's level `id` and `world_px` |
 
 ### grid
 
@@ -492,7 +501,7 @@ A stale `expect_rev` and a refused command change nothing:
 
 `tiles` layers; placements as in the layer files: `{ cell, tileset, tile: [col, row], flip?, alpha? }`, `tile` being the atlas column and row.
 
-**`tiles.get { level, layer, rect? }`** → `{ rev, tiles }`, the placements whose cell is in `rect` (default all), in file order.
+**`tiles.get { level, layer, rect? }`** → `{ rev, tiles }`, the placements whose cell is in `rect` (default all), in file order. `tiles.find` searches every level by tileset and atlas tile ([find](#find-entities-levels-notes-and-tiles)).
 
 ```json
 { "jsonrpc": "2.0", "id": 17, "method": "tiles.get", "params": { "level": "crevasse", "layer": "decor_back", "rect": [0, 0, 10, 4] } }
@@ -613,7 +622,7 @@ An entity on the wire: `{ id, type, level, world, layer, cell, offset_px, size, 
 | --- | --- | --- |
 | `entity.list` | `{ level?, layer?, type? }` | `{ rev, entities }` in file order |
 | `entity.get` | `{ id }` | `{ rev, entity, index, effective_fields }`: `effective_fields` holds every field of the type, defaults applied |
-| `entity.find` | `{ type?, tag?, fields?, level?, rect? }` | `{ rev, entities }`. All filters must hold: `type` (slug), `tag` (one of the type's tags), `fields` (`{ slug: value }`, compared as JSON to the effective value), `level`, `rect` (`[x, y, w, h]` in the entities layer's cells; needs `level`) |
+| `entity.find` | `{ query?, type?, tag?, fields?, world?, level?, layer?, text?, rect? }` | `{ rev, entities }`. All filters must hold: `query` (the [find query language](#find-entities-levels-notes-and-tiles)), `type` (slug, `*` a wildcard), `tag` (one of the type's tags), `fields` (`{ slug: value }`, compared as JSON to the effective value, numbers by value), `world`, `level`, `layer`, `text` (in the id, type slug or type name), `rect` (`[x, y, w, h]` in the entities layer's cells; needs `level`) |
 | `entity.add` | `{ level, layer?, entity, index? }`; `entity.id` optional; `layer` optional when the project has one entities layer | `add_entity`; result has `id` |
 | `entity.update` | `{ id, fields?, unset?, size? }` (`size: null` resets it) | `batch` of `set_entity_field` and `resize_entity` |
 | `entity.move` | `{ id, cell, offset_px? }` | `move_entity` |
@@ -683,13 +692,13 @@ An entity on the wire: `{ id, type, level, world, layer, cell, offset_px, size, 
 
 ### notes
 
-A note on the wire: `{ scope, note }`, `scope` being `{ "world": slug }` or `{ "level": slug }` and `note` the annotation in file form (pixels: world pixels at world scope, level pixels at level scope). Annotations are notes, pins, paths, regions and guides; guides are world-scope reference lines, grouped by an optional `group` naming one of the world's `guide_groups` ([format.md](format.md)).
+A note on the wire: `{ scope, note }`, `scope` being `{ "world": slug }` or `{ "level": slug }` and `note` the annotation in file form (pixels: world pixels at world scope, level pixels at level scope). Annotations are notes, pins, paths, regions, guides and connectors; guides are world-scope reference lines, grouped by an optional `group` naming one of the world's `guide_groups`, and a connector joins two levels or entities (`from`, `to`), its ends computed from where they are ([format.md](format.md#connectors)).
 
-**Locked annotations.** The commands ignore `locked`; this API enforces it. Moving a locked annotation (changing its geometry: `px`, `points`, `rect`, `closed`, or a guide's `group`) with `notes.update` or `notes.move`, or removing one with `notes.remove`, needs `confirm: true` ([Confirmation](#confirmation)); without it the error is `needs_confirm` with the reason "note guidestem2 is locked; moving it needs confirm: true". Changing its text, tags, color, links, status, export flag, a pin's icon or label, or `locked` itself never does.
+**Locked annotations.** The commands ignore `locked`; this API enforces it. Moving a locked annotation (changing its geometry: `px`, `points`, `rect`, `closed`, a guide's `group`, or a connector's `from`, `to` or `waypoints`) with `notes.update` or `notes.move`, or removing one with `notes.remove`, needs `confirm: true` ([Confirmation](#confirmation)); without it the error is `needs_confirm` with the reason "note guidestem2 is locked; moving it needs confirm: true". Changing its text, tags, color, links, status, export flag, a pin's icon or label, a connector's label or style, or `locked` itself never does.
 
 | Method | Params | Result / command |
 | --- | --- | --- |
-| `notes.list` | `{ scope?, tag?, status?, kind?, kinds?, group?, export? }`; `status`: `"open"`, `"done"` or `"all"` (default); `kind` one kind, `kinds` any of several (`["note", "pin", "path", "region"]` leaves guides out); `group`: only the guides of that guide group; `export`: only annotations with that `export` flag. Every kind is listed by default, guides included | `{ rev, notes }`, world notes first, then levels in `level.list` order |
+| `notes.list` | `{ scope?, tag?, status?, kind?, kinds?, group?, export?, text?, query? }`; `status`: `"open"`, `"done"` or `"all"` (default); `kind` one kind, `kinds` any of several (`["note", "pin", "path", "region", "connector"]` leaves guides out); `group`: only the guides of that guide group; `export`: only annotations with that `export` flag; `text`: in the id, title, body or label (case-insensitive); `query`: the [find query language](#find-entities-levels-notes-and-tiles). Every kind is listed by default, guides included | `{ rev, notes }`, world notes first, then levels in `level.list` order |
 | `notes.add` | `{ scope, note, index? }`; `note.id` optional; a guide may name a `group` | `add_note`; result has `id` |
 | `notes.update` | `{ id, note }` (wholesale) or `{ id, patch }` (top-level keys merged in, geometry keys included; `null` removes an optional key; `kind` can't change), plus `confirm?` for a locked one | `update_note` |
 | `notes.move` | `{ ids: [id], delta: [dx, dy], confirm? }`: every point of each annotation moves by `delta` pixels | `batch` of `update_note`, labelled "Move note \<id\>" or "Move \<n\> notes" |
@@ -852,9 +861,22 @@ A group its guides still name can't go, and a locked note isn't removed without 
   "data": { "reason": "note guidestem2 is locked; removing it needs confirm: true" } } }
 ```
 
+A connector from a room to a door entity, through one waypoint (shown, not replayed):
+
+```json norun
+{ "jsonrpc": "2.0", "id": 101, "method": "notes.add", "params": { "scope": { "world": "main" },
+  "note": { "id": "connshaft2", "kind": "connector", "title": "Drop", "label": "one-way drop",
+    "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" }, "waypoints": [[360, 40]] } } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 101, "result": { "rev": 29, "status": "applied", "label": "claude-code: Add connector", "id": "connshaft2",
+  "changes": [ { "change": "note", "world": "main", "level": null, "id": "connshaft2" } ] } }
+```
+
 ### defs
 
-Definitions by `kind` and `slug`, in file form without `$schema` and `format`. The editable kinds are `layer` (an entry of `layers.json`), `entity` (an `entities/<slug>.json`), `entity_field` (one field of an entity type, the type named by `entity`), `level_field` (an entry of `project.json` `level_fields`), `enum` (an entry of `enums.json`) and `tileset` (an entry of `tilesets.json`). `rules` (a `rules/<layer>.json`, slug the layer) and `macros` (`rules/macros.json`, slug `macros`) can be read here; they are edited with the [`rules.*`](#rules) methods, one group, rule, stamp or macro at a time. There is no generic definition command: the server dispatches on `kind` to the per-kind [definition commands](commands.md#definition-commands):
+Definitions by `kind` and `slug`, in file form without `$schema` and `format`. The editable kinds are `layer` (an entry of `layers.json`), `entity` (an `entities/<slug>.json`), `entity_field` (one field of an entity type, the type named by `entity`), `level_field` (an entry of `project.json` `level_fields`), `enum` (an entry of `enums.json`), `tileset` (an entry of `tilesets.json`) and `assembly` (an `assemblies/<slug>.json`, [format.md](format.md#assembliesslugjson)). `rules` (a `rules/<layer>.json`, slug the layer) and `macros` (`rules/macros.json`, slug `macros`) can be read here; they are edited with the [`rules.*`](#rules) methods, one group, rule, stamp or macro at a time. There is no generic definition command: the server dispatches on `kind` to the per-kind [definition commands](commands.md#definition-commands):
 
 | `kind` | `defs.set` | `defs.remove` | `defs.rename` |
 | --- | --- | --- | --- |
@@ -865,6 +887,7 @@ Definitions by `kind` and `slug`, in file form without `$schema` and `format`. T
 | `level_field` | `set_level_field_def { field, def, index? }` | `remove_level_field_def { field }` | `rename_level_field { from, to }` |
 | `enum_value` | | | `rename_enum_value { enum, from, to }` |
 | `tileset` | `set_tileset_def { tileset, def, index? }` | `remove_tileset_def { tileset }` | `rename_tileset { from, to }` |
+| `assembly` | `set_assembly { assembly }` | `remove_assembly { slug }` | `rename_assembly { slug: from, new_slug: to }` |
 
 The command's slug field (`layer`, `entity`, `enum`, `tileset`, and `field` for the field kinds) is `def.slug` for `defs.set` and `slug` for `defs.remove`. `entity` is required with `entity_field` and refused with every other kind (`invalid params`). A kind left out of a column is `invalid params`. The kinds `stamp` and `macros` are `invalid params` too, with a message naming the `rules.*` method that edits them (`rules.set_stamp`, `rules.remove_stamp`, `rules.set_macro`, `rules.remove_macro`, `rules.rename_macro`; stamps have no rename). Any other kind is `invalid params`.
 
@@ -872,8 +895,8 @@ Each command reports a `def` change `{ "change": "def", "kind", "slug" }` for ev
 
 | Method | Params | Result / command |
 | --- | --- | --- |
-| `defs.get` | `{ kind?, entity?, slug? }` | `{ rev, defs: { layers, entities, enums, tilesets, rules, macros } }` (only `kind`'s entry when given; `kind` may be `rules` or `macros`); with `kind` and `slug`: `{ rev, kind, def }`. `macros` is not a list but the one file `rules/macros.json` (`{}` when the project has none), slug `macros`. The field kinds aren't in the full listing (entity fields are in their type, level fields in `project.json`): `{ kind: "entity_field", entity }` and `{ kind: "level_field" }` give `{ rev, defs: { fields } }` in file order, and with `slug` `{ rev, kind, entity?, def }` |
-| `defs.set` | `{ kind, entity?, def, index?, confirm? }` | the `set_*` command of `kind`: replaces the definition with `def.slug`, or creates it (at `index`, default the end; `entity` has no order and takes no `index`). For a field, `index` on an existing one moves it. Never drops stored data; `confirm` per [Confirmation](#confirmation). `set_layer_def` refuses taking out an `int_grid` value a cell holds, changing the kind or grid of a layer that has content, and changing `derived` on a layer with content in any level ("marks has overrides in hall; clear them first") |
+| `defs.get` | `{ kind?, entity?, slug? }` | `{ rev, defs: { layers, entities, enums, tilesets, rules, assemblies, macros } }` (only `kind`'s entry when given; `kind` may be `rules` or `macros`); with `kind` and `slug`: `{ rev, kind, def }`. `macros` is not a list but the one file `rules/macros.json` (`{}` when the project has none), slug `macros`. The field kinds aren't in the full listing (entity fields are in their type, level fields in `project.json`): `{ kind: "entity_field", entity }` and `{ kind: "level_field" }` give `{ rev, defs: { fields } }` in file order, and with `slug` `{ rev, kind, entity?, def }` |
+| `defs.set` | `{ kind, entity?, def, index?, confirm? }` | the `set_*` command of `kind`: replaces the definition with `def.slug`, or creates it (at `index`, default the end; `entity` and `assembly` have no order and take no `index`). For a field, `index` on an existing one moves it. Never drops stored data; `confirm` per [Confirmation](#confirmation). `set_layer_def` refuses taking out an `int_grid` value a cell holds, changing the kind or grid of a layer that has content, and changing `derived` on a layer with content in any level ("marks has overrides in hall; clear them first") |
 | `defs.rename` | `{ kind, from, to }`, `{ kind: "entity_field", entity, from, to }`, or `{ kind: "enum_value", enum, from, to }` | the `rename_*` command of `kind`, rewriting every reference (below). Never needs `confirm` |
 | `defs.remove` | `{ kind, entity?, slug, confirm: true }` | the `remove_*` command of `kind` (see below) |
 
@@ -883,6 +906,7 @@ What `defs.remove` takes with it:
 - `entity`: every instance of the type, then the type (one `batch`; undo puts the type and each instance back).
 - `enum`: only the enum. Fields and level fields that use it, and their stored values, stay as they are for `project.validate` to report.
 - `tileset`: refused while anything uses it, with `command_error` `in_use` naming the first few uses. Rename or remove those first.
+- `assembly`: only the assembly. Copies placed from it are independent and stay.
 - `entity_field`, `level_field`: the field and every value instances of the type (levels, for a level field) store for it (one `batch`; undo puts the field and each value back). A rule group that requires a removed level field stays, for `project.validate` to report.
 
 What `defs.rename` rewrites (a rules file can't be renamed on its own: renaming the `auto` layer renames it):
@@ -1304,7 +1328,7 @@ Stamps and macros aren't `defs.*` kinds:
 
 **`history.begin_batch { label }`** opens a batch on this connection: every write until `end_batch` applies at once as usual (the agent and the canvas see it, `rev` bumps per write), but the writes become **one undo entry** with `label`, origin the client, one `changed` event (at `end_batch`, with the final `rev` and the coalesced changes) and one toast. A batch belongs to its connection; other connections' writes wait until it ends ([Queue and ordering](#queue-and-ordering)).
 
-How it is recorded: the editor's undo history has one gesture slot, and it belongs to the user (a brush stroke). A batch doesn't use it. The server keeps the batch's state itself: it applies each write with `Project::apply`, collects the inverses, and at `end_batch` records them as one entry with `History::record` ([commands.md](commands.md#undo-and-redo)). So a user stroke during the batch never joins the agent's entry, and the agent's batch never swallows the user's stroke.
+How it is recorded: the editor's undo history has one gesture slot, and it belongs to the user (a brush stroke). A batch doesn't use it. The server keeps the batch's state itself: it applies each write with `Project::apply`, collects the inverses, and at `end_batch` records them as one entry with `History::record_with` ([commands.md](commands.md#undo-and-redo)), along with each write's command label and the files they changed, which the editor's History pane lists under the entry. So a user stroke during the batch never joins the agent's entry, and the agent's batch never swallows the user's stroke.
 
 - **`history.end_batch {}`** → `{ rev, status, label, changes, entries }`. `entries` is how many undo entries the batch became, normally 1. Before the user's edit is recorded as an entry, and before any undo or redo step, the server records the batch's part so far as an entry of its own; the rest of the batch becomes another entry with the same label. So a batch the user edited or undid during ends with `entries: 2` (or more), and each entry undoes only what was done in it. A batch where nothing changed has `entries: 0`.
 - A **dropped connection reverts the part of its open batch that isn't recorded yet**: the server applies those inverses (last first) without recording them and sends `changed` with `"kind": "cancel"`. Parts already recorded (because the user edited in between) stay in the history as normal entries, and nothing the user did is touched.
@@ -1373,9 +1397,14 @@ How it is recorded: the editor's undo history has one gesture slot, and it belon
 
 Editor only: in headless mode every `view.*` method is `unsupported` (`-32005`). They change what the editor shows, never the project, so they need no `expect_rev` and don't bump `rev`.
 
-- **`view.focus { level }`**, **`{ world_rect: [x, y, w, h], world? }`** (world pixels) or **`{ note: id }`**: makes the level active and frames it, frames the rect, or frames an annotation: its bounding box as built (a grouped guide moved by its group's offset, a level note in world pixels), grown by 15 % of its size on each side and to at least 8 project cells each way (a pin is a point); a level-scope note's level becomes active. → `{ rev }`. An unknown note is `command_error` `unknown_note`.
-- **`view.select { entities?, notes?, levels? }`** or **`{ level }`**: replaces the selection. The lists add up: give any of them, in any combination (empty lists are fine, and all of them empty clears the selection), and the selection holds every listed entity (by id), annotation (by id) and level (by slug); the editor's inspector edits a set of entities together. The active level becomes the first entity's level, else the first level-scope note's level, else the first of `levels`, else it stays. `{ level }` alone makes that level active and clears the selection; `level` with any list is `invalid params`. Every id and slug must exist, or nothing changes and the error is `command_error` (`unknown_entity`, `unknown_note`, `unknown_level`). → `{ rev }`. Sends `selection`.
-- **`view.snapshot { level }`** or **`{ world_rect, world? }`**, plus `size?: [w, h]` (the largest image allowed, default `[1024, 1024]`), `layers?` (default all visible), `overlays?` (entity boxes and annotations: open notes, pins, paths and regions, and every guide, default `true`; a snapshot shows the data, so the editor's hidden tags don't apply) → `{ rev, png, width, height, scale }`. `png` is base64 (no `data:` prefix). The map is drawn alone, without the UI, at the largest scale that fits `size` (an integer scale when it is 1 or more). Rendered by the editor's offscreen renderer on the UI thread.
+The editor can show several **map tabs** (viewports), each with its own camera, world and active level; the tool, brush, layers and the selection are shared. Each tab has an id (1 is the first; the tab's title says "Map 2" once there are several). `view.focus`, `view.select` and `view.snapshot` take an optional `viewport` (id): the tab to act in, default the focused one (the one the user last clicked). An unknown id is `invalid params`. Nothing opens a tab but `view.open_viewport`.
+
+- **`view.focus { level }`**, **`{ world_rect: [x, y, w, h], world? }`** (world pixels), **`{ note: id }`** or **`{ world }`**: makes the level active and frames it, frames the rect, frames an annotation (at the largest zoom step that fits, or, for a rect too big for the smallest step, 1/256, the exact zoom that fits it): its bounding box as built (a grouped guide moved by its group's offset, a level note in world pixels), grown by 15 % of its size on each side and to at least 8 project cells each way (a pin is a point), or fits a whole world. The editor shows one world at a time: focusing a world makes it the active world, a level or note switches to the world it is in, and a `world_rect` with `world` switches to that world (without `world`, the active one). A level-scope note's level becomes active. `viewport?` picks the map tab that frames it (its world and active level change, not the other tabs'). → `{ rev }`. An unknown note is `command_error` `unknown_note`, an unknown world `unknown_world`.
+- **`view.select { entities?, notes?, levels? }`** or **`{ level }`**: replaces the selection. The lists add up: give any of them, in any combination (empty lists are fine, and all of them empty clears the selection), and the selection holds every listed entity (by id), annotation (by id) and level (by slug); the editor's inspector edits a set of entities together. The active level becomes the first entity's level, else the first level-scope note's level, else the first of `levels`, else it stays. `{ level }` alone makes that level active and clears the selection; `level` with any list is `invalid params`. `viewport?` is the tab whose active level follows (the selection itself is shared by every tab). Every id and slug must exist, or nothing changes and the error is `command_error` (`unknown_entity`, `unknown_note`, `unknown_level`). → `{ rev }`. Sends `selection`.
+- **`view.snapshot { level }`**, **`{ world_rect, world? }`** or **`{ viewport? }`** alone (what that tab, default the focused one, shows now: its world and visible rect; with `world_rect`, `viewport` names the rect's world), plus `size?: [w, h]` (the largest image allowed, default `[1024, 1024]`), `layers?` (default all visible), `overlays?` (entity boxes and annotations: open notes, pins, paths and regions, and every guide, default `true`; a snapshot shows the data, so the editor's hidden tags don't apply) → `{ rev, png, width, height, scale }`. `png` is base64 (no `data:` prefix). The map is drawn alone, without the UI, at the largest scale that fits `size` (an integer scale when it is 1 or more). Rendered by the editor's offscreen renderer on the UI thread.
+
+- **`view.list_viewports {}`** → `{ rev, focused, viewports: [{ id, world, level, focused, world_rect: [x, y, w, h], zoom }] }`: every map tab in the order opened, with the world it shows, its active level (or `null`), what it shows in world pixels (rounded out to whole pixels) and its zoom (screen pixels per world pixel).
+- **`view.open_viewport { world, focus? }`**: a new map tab next to the focused one, showing `world`, fitted → `{ rev, viewport }` (its id). `focus` (default `false`) makes it the focused tab; otherwise the user's focus stays where it was. An unknown world is `command_error` `unknown_world`.
 
 ```json norun
 { "jsonrpc": "2.0", "id": 51, "method": "view.focus", "params": { "level": "crevasse" } }
@@ -1417,6 +1446,40 @@ Editor only: in headless mode every `view.*` method is `unsupported` (`-32005`).
 { "jsonrpc": "2.0", "id": 53, "result": { "rev": 46, "png": "iVBORw0KGgoAAAANSUhEUgAAAoAAAACgCAYAAAA=", "width": 640, "height": 160, "scale": 2 } }
 ```
 
+```json norun
+{ "jsonrpc": "2.0", "id": 104, "method": "view.open_viewport", "params": { "world": "main" } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 104, "result": { "rev": 46, "viewport": 2 } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 105, "method": "view.focus", "params": { "level": "shaft", "viewport": 2 } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 105, "result": { "rev": 46 } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 106, "method": "view.list_viewports", "params": {} }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 106, "result": { "rev": 46, "focused": 1, "viewports": [
+  { "id": 1, "world": "main", "level": "crevasse", "focused": true, "world_rect": [-24, -95, 1121, 452], "zoom": 2 },
+  { "id": 2, "world": "main", "level": "shaft", "focused": false, "world_rect": [1012, -34, 302, 238], "zoom": 3 } ] } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 107, "method": "view.snapshot", "params": { "viewport": 2, "size": [512, 512] } }
+```
+
+```json norun
+{ "jsonrpc": "2.0", "id": 107, "result": { "rev": 46, "png": "iVBORw0KGgoAAAANSUhEUgAAAoAAAACgCAYAAAA=", "width": 302, "height": 238, "scale": 1 } }
+```
+
 In headless mode:
 
 ```json
@@ -1425,6 +1488,14 @@ In headless mode:
 
 ```json
 { "jsonrpc": "2.0", "id": 54, "error": { "code": -32005, "message": "view.snapshot needs the editor; open the project with `worlds <dir>`" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 108, "method": "view.list_viewports", "params": {} }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 108, "error": { "code": -32005, "message": "view.list_viewports needs the editor; open the project with `worlds <dir>`" } }
 ```
 
 ### events
@@ -1474,7 +1545,7 @@ The user selecting a pin and two levels on the world view:
 
 - `origin`: who did this mutation, `"user"` or `{ "agent": "<name>" }`. For an undo or redo that is whoever stepped the history, not who made the entry.
 - `session`: when `origin` is an agent, the [`session`](#sessionhello) of its connection, so two clients with the same name can be told apart (and a client can recognise its own edits).
-- `entry_origin`: for `undo` and `redo` only, who made the entry being undone or redone.
+- `entry_origin`: for `undo` and `redo` only, who made the entry being undone or redone: `"user"`, `{ "agent": "<name>" }`, or `"disk"` for entity definition files changed on disk that the editor applied as an entry.
 - `label`: the entry's label (the batch label for a batch).
 - `kind`: `edit`, `undo`, `redo`, `reload` or `cancel` (an open batch reverted: its connection dropped, or `history.cancel_batch`). `reload` has empty `changes` and `files`: re-read everything.
 - `changes`: the [changes](commands.md#changes), coalesced; `files`: the project-relative files they touch (`Change::files()` of each, deduplicated, in order), the same files saving would write or delete: `worlds/<world>/world.json` for world-scope annotations (`note` with `level: null`) and guide groups, `worlds/<world>/levels/<level>/notes.json` for a level's notes, `level.json` for a level's tags (`level_meta` part `tags`).
@@ -1862,6 +1933,613 @@ Undo puts the old level back, overrides and all:
     { "change": "grid", "world": "main", "level": "hall", "layer": "marks", "rect": [0, 0, 16, 6] } ] } }
 ```
 
+### clipboard: copy and paste
+
+`edit.copy` reads a **fragment** out of the project ([format.md](format.md#clipboard-fragments)): what the editor's Ctrl+C puts on the clipboard. `edit.paste` writes one into a level as one batch and one undo entry, `Paste <n> items`. A fragment is plain JSON, so an agent can also write one itself.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `edit.copy` | `{ selection: { level?, entities?: [id], notes?: [id], tiles?: { layer: [[x, y]] }, rect?: [x, y, w, h], layers?: [slug] } }`. Everything comes from one level (`level`, else the level of the first entity or level note); world notes of its world may come along. `tiles` names tile stacks by cell; `rect` (cells of the project grid) copies the cells of `layers` inside it, empty ones included (default: every int_grid layer that isn't derived; tiles layers may be listed) | `{ rev, fragment }` (a read). Refused (`command_error`): unknown ids, levels or layers, things from two levels, a rect outside the level, a derived or auto layer |
+| `edit.paste` (write) | `{ level, origin: [x, y], fragment, layer_map?: { from: to }, flip? }`: `origin` is where the fragment's top-left corner goes, in cells of the project grid (may be negative); `flip` turns the fragment first, written like a tile's flip (`x` mirrors left-right, `y` top-bottom, `xt` is a quarter turn clockwise; see [commands.md](commands.md#transforms)) | `batch` of `paint_cells`, `set_tiles`, `add_entity`, `add_note`. The write result adds `items` (how many grid cells, tile stacks, entities and notes), `ids` (fragment id to new id), `entities` and `notes` (the new ids, in fragment order) and `problems` (what was clipped, refused, skipped or nulled, in words). Every entity and note gets a new id, references inside the fragment follow, references outside are kept when they resolve here (see [format.md](format.md#what-a-paste-does)). A fragment of another version or project grid size is `invalid_params`/`invalid`; a paste that would write nothing is `invalid`, naming the problems |
+
+Copy the door at the end of `crevasse` with the cells around its foot:
+
+```json
+{ "jsonrpc": "2.0", "id": 128, "method": "edit.copy", "params": { "selection": { "entities": ["doorcrev22"], "rect": [15, 3, 4, 1] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 128, "result": { "rev": 59, "fragment": { "worlds_fragment": 1, "grid_size": 16, "size": [4, 1],
+  "source": { "level": "crevasse", "origin": [15, 3] },
+  "grids": { "collision": { "legend": { "#": "solid", "f": "fortified" }, "rows": ["f###"] } },
+  "entities": [
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [3, 0], "size": [1, 2],
+      "fields": { "exit_to": "doorshaft2", "facing": "right", "needs_item": "brass_key", "script": "scripts/door.gd",
+                  "speed": 2, "sprite": { "tileset": "castle_main", "tile": [4, 4] }, "tint": "#ff8080",
+                  "waypoints": [[-14, -2], [-13, -2]] } } ] } } }
+```
+
+A fragment is plain JSON, so an agent can write one too. This one is a button, the door it opens and a strip of one-way floor, pasted at cell [2, 1] of `crevasse`. The pasted button targets the pasted door; the door's `exit_to` still finds `doorshaft2` (a `cross_level` field), so it is kept:
+
+```json
+{ "jsonrpc": "2.0", "id": 129, "method": "edit.paste", "params": { "level": "crevasse", "origin": [2, 1], "fragment": {
+  "worlds_fragment": 1, "grid_size": 16, "size": [7, 1],
+  "grids": { "collision": { "rows": ["  ooo"] } },
+  "entities": [
+    { "id": "btncrev222", "type": "floor_button", "layer": "objects", "cell": [0, 0], "fields": { "target": "doorcrev22" } },
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [6, 0], "fields": { "exit_to": "doorshaft2" } } ] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 129, "result": { "rev": 60, "status": "applied", "label": "claude-code: Paste 5 items",
+  "items": 5, "ids": { "btncrev222": "75rk7gzrhn", "doorcrev22": "5w6isso7ut" }, "entities": ["75rk7gzrhn", "5w6isso7ut"], "notes": [], "problems": [],
+  "changes": [
+    { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [4, 1, 3, 1] },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "75rk7gzrhn" },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "5w6isso7ut" } ] } }
+```
+
+The new ids are derived from the destination level, the origin and the fragment's ids, so the same paste into the same project gives the same ids; pasting it again at the same place moves on to other free ones.
+
+**`level.duplicate`** copies a whole level:
+
+```json
+{ "jsonrpc": "2.0", "id": 130, "method": "level.duplicate", "params": { "level": "shaft", "slug": "shaft_b" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 130, "result": { "rev": 61, "status": "applied", "label": "claude-code: Duplicate level shaft as shaft_b",
+  "id": "s64pc4niie", "world_px": [416, 80],
+  "changes": [ { "change": "level_created", "world": "main", "level": "shaft_b" } ] } }
+```
+
+### find: entities, levels, notes and tiles
+
+Four reads search the whole project, every world, with one **query language** (the editor's Find pane and the MCP `find` tool use the same one, from `worlds_core::find`). A `query` is words separated by spaces, and every word must hold:
+
+| Word | Matches |
+| --- | --- |
+| `type:locked_door` | entities of that type |
+| `tag:puzzle` | an entity whose type has the tag, a level or an annotation with the tag |
+| `field:target = null`, `field:needs_item != ""` | a field's effective value (stored, else the default, else `null`) equal or not equal to the value; spaces around the operator are optional |
+| `channel:3` | any other `key:value` is a field test, `field:channel = 3` |
+| `world:main`, `level:crevasse`, `layer:objects` | where it is (`level:` never matches a world-scope annotation) |
+| `kind:pin`, `status:open` | annotations of that kind (`note`, `pin`, `path`, `region`, `guide`, `connector`) or status (`open`, `done`) |
+| `tileset:castle_main`, `tile:4,4` | tile placements from that tileset, of that atlas `[column, row]` |
+| `brass`, `"key room"` | free text, case-insensitive, in an entity's id, type slug or type name; a level's slug, name or id; an annotation's id, title, body or pin or connector label |
+
+Values are read as JSON when they parse (`3`, `true`, `null`, `[1,2]`, written without spaces), else as text; a quoted value (`"3"`) is always text. Numbers compare by value (`2` equals `2.0`). Slug values (`type`, `tag`, `world`, `level`, `layer`, `tileset`) may use `*` as a wildcard: `type:*door`. Each method takes only the words that make sense for it, and anything else is `invalid_params` naming it ("type: is for entities, not levels"): field tests are for entities and levels, `type` for entities, `kind` and `status` for annotations, `tileset` and `tile` for tiles, and free text for everything but tiles. The other parameters are the same tests spelled as keys, and add up with `query`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `entity.find` | `{ query?, type?, tag?, fields?, world?, level?, layer?, text?, rect? }` | `{ rev, entities }`, as in [entity](#entity) |
+| `level.find` | `{ query?, tag?, fields?: { slug: value }, world?, text? }` | `{ rev, levels }`, in `level.list` order, each as `level.list` gives it plus `tags` and the stored `fields` |
+| `tiles.find` | `{ query?, tileset?, tile?: [col, row], world?, level?, layer?, limit? }` | `{ rev, tiles, total }`: hand-placed tiles (not baked autotiles), level by level and in file order, each placement as in the layer file plus `world`, `level` and `layer`; at most `limit` (default 1000) of them, `total` counting every match |
+| `notes.list` | the filters in [notes](#notes), plus `text?` and `query?` | `{ rev, notes }` |
+
+Floor buttons that open something, then levels by name:
+
+```json
+{ "jsonrpc": "2.0", "id": 131, "method": "entity.find", "params": { "query": "type:floor_button field:target != null" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 131, "result": { "rev": 61, "entities": [
+  { "id": "75rk7gzrhn", "type": "floor_button", "level": "crevasse", "world": "main", "layer": "objects", "cell": [2, 1], "offset_px": [0, 0], "size": null,
+    "fields": { "target": "5w6isso7ut" } } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 132, "method": "level.find", "params": { "query": "shaft" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 132, "result": { "rev": 61, "levels": [
+  { "slug": "shaft", "name": "Shaft", "id": "shaft22222", "world": "main", "world_px": [320, 80], "size": [6, 8], "depth": 1, "tags": [], "fields": {} },
+  { "slug": "shaft_b", "name": "Shaft copy", "id": "s64pc4niie", "world": "main", "world_px": [416, 80], "size": [6, 8], "depth": 1, "tags": [], "fields": {} } ] } }
+```
+
+Where one tileset's tiles are, and the open todo notes that mention the gap:
+
+```json
+{ "jsonrpc": "2.0", "id": 133, "method": "tiles.find", "params": { "query": "tileset:castle_main tile:5,1", "level": "crevasse" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 133, "result": { "rev": 61, "total": 1, "tiles": [
+  { "world": "main", "level": "crevasse", "layer": "decor_back", "cell": [4, 2], "tileset": "castle_main", "tile": [5, 1] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 134, "method": "notes.list", "params": { "query": "tag:todo status:open gap" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 134, "result": { "rev": 61, "notes": [
+  { "scope": { "level": "crevasse" }, "note": { "id": "notecrev22", "kind": "note", "title": "Widen the gap", "body": "Jump is **too easy**.\nTry 5 cells.",
+    "px": [160, 48], "tags": ["todo"], "links": ["entity:btncrev222", "note:pinstatue2", "https://example.com"] } } ] } }
+```
+
+### worlds
+
+A project holds one or more worlds: separate maps, each with its own levels, world-scope annotations and guide groups ([commands.md](commands.md#world-commands)). Layers, tilesets, entity types, enums, rules and the grid are shared, and level slugs are unique across worlds, so every method that takes a `level` finds it in whichever world it is. `project.describe` lists the worlds in display order (`project.json` `worlds`) with their levels, `level_count` and `bbox`.
+
+| Write | Params | Command |
+| --- | --- | --- |
+| `world.create` | `{ slug, name? }` | `create_world`: an empty world, last in the order |
+| `world.rename` | `{ world, slug?, name? }` (at least one; `name: ""` removes the name) | `rename_world`: a new slug moves the world's directory on save and keeps its place in the order |
+| `world.reorder` | `{ order }`: every world's slug once (`[]` drops the list: slug order) | `reorder_worlds` |
+| `world.remove` | `{ world, confirm? }` | `remove_world`, with its levels, world notes and guide groups; needs `confirm` unless the world is empty ([Confirmation](#confirmation), reason `deletes world <w> with <what it holds>`). The last world can't be removed (`invalid`) |
+| `level.move_to_world` | `{ level, world, world_px? }` | `move_level_to_world`: the level keeps its slug, id and content; `world_px` is its corner in the new world (default: unchanged). Into its own world it is a `level.move` |
+
+The changes are `world_created`, `world_renamed` (`from`, `to`), `world_meta` (the name), `world_removed` (after a `level_deleted` per level and a `note` per world note), and `project` key `worlds` when the order in `project.json` changes; moving a level reports `level_deleted` in the old world and `level_created` in the new one. A slug that is taken is `command_error` `duplicate_world`.
+
+```json
+{ "jsonrpc": "2.0", "id": 135, "method": "world.create", "params": { "slug": "underdark", "name": "Underdark" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 135, "result": { "rev": 62, "status": "applied", "label": "claude-code: Create world underdark",
+  "changes": [
+    { "change": "world_created", "world": "underdark" },
+    { "change": "project", "key": "worlds" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 136, "method": "level.move_to_world", "params": { "level": "hall", "world": "underdark", "world_px": [0, 0] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 136, "result": { "rev": 63, "status": "applied", "label": "claude-code: Move level hall to world underdark",
+  "changes": [
+    { "change": "level_deleted", "world": "main", "level": "hall" },
+    { "change": "level_created", "world": "underdark", "level": "hall" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 137, "method": "world.rename", "params": { "world": "underdark", "slug": "caves", "name": "The Caves" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 137, "result": { "rev": 64, "status": "applied", "label": "claude-code: Rename world underdark to caves",
+  "changes": [
+    { "change": "world_renamed", "from": "underdark", "to": "caves" },
+    { "change": "project", "key": "worlds" },
+    { "change": "world_meta", "world": "caves" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 138, "method": "world.reorder", "params": { "order": ["caves", "main"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 138, "result": { "rev": 65, "status": "applied", "label": "claude-code: Reorder worlds",
+  "changes": [ { "change": "project", "key": "worlds" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 139, "method": "world.create", "params": { "slug": "main" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 139, "error": { "code": -32004, "message": "a world \"main\" already exists",
+  "data": { "kind": "duplicate_world", "world": "main", "message": "a world \"main\" already exists" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 140, "method": "world.remove", "params": { "world": "caves" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 140, "error": { "code": -32002, "message": "deleting world caves needs confirm: true: it holds 1 level",
+  "data": { "reason": "deletes world caves with 1 level" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 141, "method": "world.remove", "params": { "world": "caves", "confirm": true } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 141, "result": { "rev": 66, "status": "applied", "label": "claude-code: Delete world caves",
+  "changes": [
+    { "change": "level_deleted", "world": "caves", "level": "hall" },
+    { "change": "world_removed", "world": "caves" },
+    { "change": "project", "key": "worlds" } ] } }
+```
+
+### layer operations
+
+Copy a layer, merge a tiles layer down into the one below it, or move tile stacks or entities to another layer of the same kind ([commands.md](commands.md#layer-operations)). Each is one write and one undo entry; merge and the moves are a `batch` built by `worlds_core::command::layer_ops`, so the editor's Layers pane and these methods make the same commands.
+
+| Method | Params | Result / command |
+| --- | --- | --- |
+| `defs.duplicate` | `{ kind: "layer", slug, to? }`, `to` default `<slug>_copy` | `duplicate_layer { layer: slug, slug: to }`: the definition right above the original, its content in every level, its rule state and (an `auto` layer) its rules. Copied entities get new ids |
+| `defs.merge_down` | `{ kind: "layer", slug }` | a `batch` labelled "Merge \<slug\> down into \<lower\>": a `set_tiles` per level on the layer right below (each of the upper layer's stacks on top of the lower's), then `remove_layer_def`. Refused (`command_error`) unless both are tiles layers on the same grid |
+| `tiles.move_to_layer` | `{ level, layer, to, cells: [[x, y]] }` | a `batch` labelled "Move \<n\> tile stacks to \<to\>": the stacks at `cells` go on top of `to`'s there, and leave `layer`. Both tiles layers on the same grid; cells without tiles are skipped |
+| `entity.move_to_layer` | `{ ids, layer }` | a `batch` labelled "Move \<id\> to \<layer\>" or "Move \<n\> entities to \<layer\>": per entity `remove_entity` and `add_entity` on `layer` in its level, same id, cell and fields. `layer` is an entities layer on the same grid; entities already on it are skipped |
+
+Nothing here needs `confirm`: no content is dropped, and undo puts everything back.
+
+```json
+{ "jsonrpc": "2.0", "id": 138, "method": "defs.duplicate", "params": { "kind": "layer", "slug": "decor_back" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 138, "result": { "rev": 67, "status": "applied", "label": "claude-code: Duplicate layer decor_back as decor_back_copy",
+  "changes": [
+    { "change": "def", "kind": "layer", "slug": "decor_back_copy" },
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back_copy", "rect": [0, 0, 40, 10] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 139, "method": "tiles.move_to_layer", "params": { "level": "crevasse", "layer": "decor_back", "to": "decor_back_copy", "cells": [[4, 2], [10, 6]] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 139, "result": { "rev": 68, "status": "applied", "label": "claude-code: Move 2 tile stacks to decor_back_copy",
+  "changes": [
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back_copy", "rect": [4, 2, 7, 5] },
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back", "rect": [4, 2, 7, 5] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 140, "method": "defs.merge_down", "params": { "kind": "layer", "slug": "decor_back_copy" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 140, "result": { "rev": 69, "status": "applied", "label": "claude-code: Merge decor_back_copy down into decor_back",
+  "changes": [
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back", "rect": [4, 2, 19, 5] },
+    { "change": "def", "kind": "layer", "slug": "decor_back_copy" },
+    { "change": "tiles", "world": "main", "level": "crevasse", "layer": "decor_back_copy", "rect": [0, 0, 40, 10] } ] } }
+```
+
+A tiles layer doesn't merge into the auto layer below it, and an entity only moves to an entities layer:
+
+```json
+{ "jsonrpc": "2.0", "id": 141, "method": "defs.merge_down", "params": { "kind": "layer", "slug": "decor_back" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 141, "error": { "code": -32004,
+  "message": "the layer below decor_back is main_tiling, an auto layer; only a tiles layer merges into a tiles layer",
+  "data": { "kind": "invalid", "message": "the layer below decor_back is main_tiling, an auto layer; only a tiles layer merges into a tiles layer" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 142, "method": "entity.move_to_layer", "params": { "ids": ["doorcrev22"], "layer": "collision" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 142, "error": { "code": -32004,
+  "message": "layer \"collision\" is a int_grid layer, this needs a entities layer",
+  "data": { "kind": "wrong_layer_kind", "layer": "collision", "expected": "entities", "actual": "int_grid",
+    "message": "layer \"collision\" is a int_grid layer, this needs a entities layer" } } }
+```
+
+### reference images
+
+Reference images are drawn under the layer stack in the editor and never exported ([format.md](format.md#reference-images)). On the wire a reference is `{ scope, reference }`, `scope` being `{ "world": slug }` or `{ "level": slug }` and `reference` the entry in file form (`id`, `image`, `px`, and `scale`, `opacity`, `locked`, `visible` when not at their default). `image` is a path inside the project; a file that doesn't exist is accepted and reported by `project.validate`. As for notes, `locked` is this API's rule, not the commands': moving or scaling a locked reference (`px`, `scale`) with `reference.update`, or removing one, needs `confirm: true`; its opacity, visibility, image and `locked` itself never do.
+
+| Method | Params | Result / command |
+| --- | --- | --- |
+| `reference.list` | `{ scope? }` | `{ rev, references }`, world references first, then levels in `level.list` order, each list bottom first |
+| `reference.add` | `{ scope, reference, index? }`; `reference.id` optional | `add_reference`; result has `id` |
+| `reference.update` | `{ id, reference }` (wholesale) or `{ id, patch }` (top-level keys merged in; `null` puts a key back to its default), plus `confirm?` for a locked one | `update_reference` |
+| `reference.remove` | `{ ids, confirm? }` | `batch` of `remove_reference` |
+
+A reference's change is `{ "change": "reference", "world", "level", "id" }` (`level: null` at world scope); its file is the `level.json` or `world.json` that holds it.
+
+```json
+{ "jsonrpc": "2.0", "id": 143, "method": "reference.add", "params": { "scope": { "level": "crevasse" },
+  "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "opacity": 0.5 } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 143, "result": { "rev": 70, "status": "applied", "label": "claude-code: Add reference image", "id": "refsketch2",
+  "changes": [ { "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 144, "method": "reference.update", "params": { "id": "refsketch2", "patch": { "scale": 2, "locked": true } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 144, "result": { "rev": 71, "status": "applied", "label": "claude-code: Edit reference image refsketch2",
+  "changes": [ { "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 145, "method": "reference.list", "params": {} }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 145, "result": { "rev": 71, "references": [
+  { "scope": { "level": "crevasse" }, "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "scale": 2.0, "opacity": 0.5, "locked": true } } ] } }
+```
+
+It is locked now, so moving it needs `confirm`:
+
+```json
+{ "jsonrpc": "2.0", "id": 146, "method": "reference.update", "params": { "id": "refsketch2", "patch": { "px": [16, -16] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 146, "error": { "code": -32002, "message": "reference image refsketch2 is locked; moving or scaling it needs confirm: true",
+  "data": { "reason": "reference image refsketch2 is locked; moving or scaling it needs confirm: true" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 147, "method": "reference.remove", "params": { "ids": ["refsketch2"], "confirm": true } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 147, "result": { "rev": 72, "status": "applied", "label": "claude-code: Remove reference image refsketch2",
+  "changes": [ { "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" } ] } }
+```
+
+### import from another project
+
+Bring definitions, worlds or levels of another Worlds project into this one ([importing_worlds.md](importing_worlds.md)). Planning and applying are two calls, so the plan can be shown before anything changes.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `project.import_plan` | `{ source, selection?, policy? }`: `source` is a project directory, absolute or relative to this project's. `selection`: `{ preset?: "pick" \| "defs_only" \| "everything", tilesets?, enums?, patterns?, legends?, templates?, layers?, level_fields?, entities?, settings?, worlds?, levels? }` (lists of slugs; `settings` are `grid_size`, `bg_color`, `collision_layer`, `blocking_values`, `default_level_size`). `policy`: `{ on_conflict?: "skip" \| "overwrite" \| "rename", conflicts?: { "<kind>:<slug>": ... }, placement?: { mode?: "new_world" \| "world" \| "keep", world?, offset?: [x, y] } }` | `{ rev, plan_id, empty, source, label, summary, items, ids, dropped, problems, assets }` (a read: nothing changes). `items` lists every item with its `kind`, `slug`, `action` (`add`, `same`, `skip`, `overwrite`, `rename`, `refused`), `to` (a rename's new slug), `world` (where a level or guide group goes), `required_by` (for a dependency nobody selected) and `reason`. `ids`: instance ids re-rolled (`{ kind, from, to }`); `dropped`: references nothing here resolves; `assets`: files to copy under `art/` (`{ from, to, action, reason? }`). An unknown slug in the selection is `command_error`; a source that doesn't load is `invalid_params` |
+| `project.import` (write) | `{ plan_id }` | Copies the plan's files, then applies it as one `batch` labelled `Import from <name>`: one undo entry. The write result adds `plan_id`, `summary` and `copied` (the files written). Refused with `stale_rev` when the project changed since the plan was made (plan again), `invalid_params` for an unknown `plan_id` (plans are kept until used, the last 16), `invalid` when the plan imports nothing |
+
+Plan an import of two entity types from the `game` project next to this one, renaming what collides. `locked_door` differs from ours, so theirs comes in as `locked_door_2`; `lever` needs nothing we lack:
+
+```json
+{ "jsonrpc": "2.0", "id": 148, "method": "project.import_plan", "params": { "source": "../game.worlds",
+  "selection": { "entities": ["lever", "locked_door"] }, "policy": { "on_conflict": "rename" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 148, "result": { "rev": 72, "plan_id": "plan_1", "empty": false, "source": "game",
+  "label": "Import from game", "summary": "2 definitions, 0 levels, 1 renamed, 0 skipped",
+  "items": [
+    { "kind": "entity", "slug": "lever", "action": "add" },
+    { "kind": "entity", "slug": "locked_door", "action": "rename", "to": "locked_door_2" } ],
+  "ids": [], "dropped": [], "problems": [], "assets": [] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 149, "method": "project.import", "params": { "plan_id": "plan_1" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 149, "result": { "rev": 73, "status": "applied", "label": "claude-code: Import from game",
+  "plan_id": "plan_1", "summary": "2 definitions, 0 levels, 1 renamed, 0 skipped", "copied": [],
+  "changes": [
+    { "change": "def", "kind": "entity", "slug": "lever" },
+    { "change": "def", "kind": "entity", "slug": "locked_door_2" } ] } }
+```
+
+A plan made before the project changed is refused; plan again:
+
+```json
+{ "jsonrpc": "2.0", "id": 150, "method": "project.import_plan", "params": { "source": "../game.worlds",
+  "selection": { "entities": ["torch"] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 150, "result": { "rev": 73, "plan_id": "plan_2", "empty": false, "source": "game",
+  "label": "Import from game", "summary": "1 definition, 0 levels, 0 renamed, 0 skipped",
+  "items": [ { "kind": "entity", "slug": "torch", "action": "add" } ],
+  "ids": [], "dropped": [], "problems": [], "assets": [] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 151, "method": "world.create", "params": { "slug": "annex" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 151, "result": { "rev": 74, "status": "applied", "label": "claude-code: Create world annex",
+  "changes": [
+    { "change": "world_created", "world": "annex" },
+    { "change": "project", "key": "worlds" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 152, "method": "project.import", "params": { "plan_id": "plan_2" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 152, "error": { "code": -32001,
+  "message": "the project changed since plan plan_2 was made (rev 67 then, 68 now): call project.import_plan again",
+  "data": { "expected": 67, "current": 68 } } }
+```
+
+### non-rectangular levels
+
+A level can be any shape built from its box: `level.json` `void` lists rects `[x, y, width, height]` of project-grid cells cut out of it ([format.md](format.md#non-rectangular-levels-void)). `project.describe`, `level.list`, `level.find` and `level.get` report `void` when a level has one (`level.get`'s `level` is `level.json`, so `void` is there; the text view adds `, void [...]` to the size line and draws void cells as `*`, listed last in each legend as `* void`).
+
+| Write | Params | Command |
+| --- | --- | --- |
+| `level.set_void` | `{ level, void }`; `void` replaces the level's rects, `[]` makes it a rectangle | `set_level_void`: clears the grid cells, overrides and tiles that fall in the new void; refused (`command_error` `invalid`) while an entity sits there, for a rect that is empty or reaches outside the box, and when no cell would be left. Reports `level_meta` part `void`, then a `grid` or `tiles` per layer it cleared |
+
+The void reads as outside the level for every write: `grid.set_cells` and `grid.line` drop their non-empty cells there (clearing a void cell is allowed, to clean up a file), as do `tiles.set` and `tiles.stamp` with their placements; `grid.fill_rect` fills only the level's cells of its rect, `grid.flood_fill` doesn't cross the void and `grid.replace_value` leaves it alone; `entity.add` and `entity.move` refuse a void cell (`invalid`); `level.resize` and `level.crop` move and clip the rects with the content (a crop that would leave only void is refused); `level.duplicate` and `level.move_to_world` keep them; `edit.paste` leaves out grid cells and tiles that land in the void (one problem counts them) and refuses entities there, as outside the level; `level.create` and `level.replace` take `void` in `level` (as in `level.json`), checked like `level.set_void`'s, with grid cells and tiles in it dropped and entities there refused. `rules.regions` treats the void as the level's border.
+
+Cutting the top-right corner out of `crevasse`, which clears the walls there:
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "method": "level.set_void", "params": { "level": "crevasse", "void": [[16, 0, 4, 2]] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "result": { "rev": 75, "status": "applied", "label": "claude-code: Shape level crevasse",
+  "changes": [
+    { "change": "level_meta", "world": "main", "level": "crevasse", "part": "void" },
+    { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [16, 0, 4, 2] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "method": "level.get", "params": { "level": "crevasse", "layers": ["collision"], "format": "text", "notes": "none" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "result": { "rev": 75, "text": "level crevasse \"Crevasse\" world main id crevasse22 tags [\"forest\"]\nsize 20x5 cells of 16 px, world_px [0, 0], depth 0, bg #202020, void [[16, 0, 4, 2]]\nfields: biome = [\"flooded\"]\nrule state main_tiling: seed 9 optional_groups [flooded_decor, pillars]\n\nint_grid collision (20x5 cells of 16 px)\nlegend: . empty, # solid, f fortified, o oneway, ~ water, L ramp_l, * void\n  0         1\n  01234567890123456789\n0 ################****\n1 #..#ooo#.....~~~****\n2 #.~~~.#..###.#.#...#\n3 #L..~~##......######\n4 ####################\n\nentities: 3\n  doorcrev22 locked_door in objects at [18, 3] size [1, 2] fields {\"exit_to\": \"doorshaft2\", \"facing\": \"east\", \"key_item\": \"brass_key\", \"script\": \"scripts/door.gd\", \"speed\": 2, \"sprite\": {\"tile\": [4, 4], \"tileset\": \"castle_main\"}, \"tint\": \"#ff8080\", \"waypoints\": [[1, 1], [2, 1]]}\n  75rk7gzrhn floor_button in objects at [2, 1] fields {\"target\": \"5w6isso7ut\"}\n  5w6isso7ut locked_door in objects at [8, 1] fields {\"exit_to\": \"doorshaft2\"}\n" } }
+```
+
+A fill across the corner fills only the level's cells, and an entity can't go there:
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "method": "grid.fill_rect", "params": { "level": "crevasse", "layer": "collision", "rect": [12, 1, 8, 1], "value": "solid" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "result": { "rev": 76, "status": "applied", "label": "claude-code: Fill rectangle on collision",
+  "changes": [ { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [12, 1, 4, 1] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "method": "entity.add", "params": { "level": "crevasse", "entity": { "type": "floor_button", "cell": [18, 0] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "error": { "code": -32004, "message": "cell [18, 0] of layer objects is in the void of level crevasse (cut out of its shape); pick a cell of the level",
+  "data": { "kind": "invalid", "message": "cell [18, 0] of layer objects is in the void of level crevasse (cut out of its shape); pick a cell of the level" } } }
+```
+
+### assemblies and transforms
+
+An **assembly** is a named, reusable fragment kept in the project (`assemblies/<slug>.json`, [format.md](format.md#assembliesslugjson)); it is read and edited like any definition with [`defs.*`](#defs) kind `assembly`. `edit.save_assembly` makes one out of a selection, `edit.place_assembly` pastes one. `edit.transform` mirrors or rotates a selection in place and `level.arrange` aligns levels; both are worked out by `worlds_core::transform` ([commands.md](commands.md#transforms)) as one batch of existing commands, one undo entry.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `edit.save_assembly` (write) | `{ selection \| fragment, slug, name, category?, tags?, doc?, replace? }`: `selection` as for `edit.copy`, or a `fragment` | `set_assembly`; the write result adds `items` and `size`. An assembly with that slug is `command_error` `duplicate_def` unless `replace: true`; an empty one is `invalid` |
+| `edit.place_assembly` (write) | `{ level, slug, origin: [x, y], flip? }` | as `edit.paste` of the assembly's fragment (turned by `flip` first), labelled `Place assembly <slug>`, with the same result keys. An unknown slug is `command_error` `unknown_assembly` |
+| `edit.transform` (write) | `{ selection, op }`: `selection` as for `edit.copy`, `op` one of `mirror_x`, `mirror_y`, `rotate_90` (clockwise) | a `batch` of `paint_cells`, `set_tiles`, `move_entity` and `update_note` turning it about its bounding box; entities keep their ids, size and field values. The write result adds `notes` (what the editor shows in its status bar: cells dropped at the level's edge, enum fields that look like directions, since a transform never changes a field) and `rect` (the turned box, `[x, y, w, h]` in cells). Refused: an entity that would leave the level, non-square tiles with `rotate_90` (`command_error` `invalid`), a selection that is the same turned (`invalid`) |
+| `level.arrange` (write) | `{ levels: [slug], op }`: two or more levels of one world; `op` one of `align_left`, `align_right`, `align_top`, `align_bottom`, `align_center_x`, `align_center_y`, `distribute_x`, `distribute_y`, `butt_left`, `butt_right`, `butt_up`, `butt_down`. Refused in a `horizontal` or `vertical` world layout; in `grid_vania` the positions snap to the lattice | a `batch` of `move_level` for the levels that move |
+
+Save the button and door pasted above as an assembly:
+
+```json
+{ "jsonrpc": "2.0", "id": 157, "method": "edit.save_assembly", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] },
+  "slug": "doorway", "name": "Doorway", "category": "Puzzle/Doors", "tags": ["door"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 157, "result": { "rev": 77, "status": "applied", "label": "claude-code: Set assembly doorway", "items": 2, "size": [7, 1],
+  "changes": [ { "change": "def", "kind": "assembly", "slug": "doorway" } ] } }
+```
+
+Place it mirrored, so the door is on the left:
+
+```json
+{ "jsonrpc": "2.0", "id": 158, "method": "edit.place_assembly", "params": { "level": "crevasse", "slug": "doorway", "origin": [2, 2], "flip": "x" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 158, "result": { "rev": 78, "status": "applied", "label": "claude-code: Place assembly doorway",
+  "items": 2, "ids": { "5w6isso7ut": "ijajfkenuk", "75rk7gzrhn": "h7wkgcgyut" }, "entities": ["h7wkgcgyut", "ijajfkenuk"], "notes": [], "problems": [],
+  "changes": [
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "h7wkgcgyut" },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "ijajfkenuk" } ] } }
+```
+
+Mirror the pasted pair in place:
+
+```json
+{ "jsonrpc": "2.0", "id": 159, "method": "edit.transform", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] }, "op": "mirror_x" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 159, "result": { "rev": 79, "status": "applied", "label": "claude-code: Mirror 2 items left-right",
+  "notes": ["Fields aren't changed by a transform: check locked_door.facing (looks like a direction)"], "rect": [2, -1, 7, 3],
+  "changes": [
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "75rk7gzrhn" },
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "5w6isso7ut" } ] } }
+```
+
+Line the shaft up with the top of `crevasse`:
+
+```json
+{ "jsonrpc": "2.0", "id": 160, "method": "level.arrange", "params": { "levels": ["crevasse", "shaft"], "op": "align_top" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 160, "result": { "rev": 80, "status": "applied", "label": "claude-code: Align 2 levels top",
+  "changes": [ { "change": "level_meta", "world": "main", "level": "shaft", "part": "position" } ] } }
+```
+
+### level order, world layouts and object groups
+
+A world's levels have an order (`world.json` `levels`, slug order when it has none): `level.list` and `project.describe` list them in it, the editor's Levels pane and PgUp/PgDn follow it, and so does the export. A world's `layout` says how the tools place its levels: `free`, a `horizontal` or `vertical` strip (positions follow the order, `gap` pixels apart; every write that reorders, creates, duplicates, resizes, deletes or moves a level away puts the strip's levels back in place, in the same write), or `grid_vania` (the editor snaps to a lattice of `cell` pixels; `project.validate` reports a level off it). See [commands.md](commands.md#level-order-world-layouts-and-object-groups) and [format.md](format.md#world-layouts). `project.describe` gives a world's `layout` when it isn't free.
+
+Object groups are named sets of a level's entities and annotations (`level.json` `groups`) that the editor selects and moves together. They are never exported. `entity.remove` and `notes.remove` take the removed ids out of their groups in the same write (a group left empty goes).
+
+| Method | Params | Result / command |
+| --- | --- | --- |
+| `level.reorder` | `{ world?, order }`: every level of the world once (`[]` drops the list); `world` defaults to the first listed level's | `reorder_levels` |
+| `world.set_layout` | `{ world?, layout: { mode, gap?, cell? } }`; `world` may be left out with one world | `set_world_layout`; switching to a strip moves the levels |
+| `group.list` | `{ level? }` | `{ rev, groups: [{ level, id, name, members }] }`, levels in `level.list` order |
+| `group.create` | `{ level, members, name?, id? }` | a `batch` labelled "Group \<n\> objects": the members leave any other group, then `set_group`; result has `id`. Refused (`invalid`) for a member that isn't an entity or annotation of the level |
+| `group.update` | `{ level, id, name?, members? }` | `set_group` with the new name or member list |
+| `group.remove` | `{ level, ids }` | `remove_group`s; the members stay |
+
+```json
+{ "jsonrpc": "2.0", "id": 161, "method": "level.reorder", "params": { "world": "main", "order": ["shaft", "crevasse", "shaft_b"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 161, "result": { "rev": 81, "status": "applied", "label": "claude-code: Reorder levels of main",
+  "changes": [ { "change": "world_meta", "world": "main" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 162, "method": "world.set_layout", "params": { "world": "main", "layout": { "mode": "horizontal", "gap": 16 } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 162, "result": { "rev": 82, "status": "applied", "label": "claude-code: Set layout of main to Horizontal",
+  "changes": [
+    { "change": "world_meta", "world": "main" },
+    { "change": "level_meta", "world": "main", "level": "shaft", "part": "position" },
+    { "change": "level_meta", "world": "main", "level": "crevasse", "part": "position" },
+    { "change": "level_meta", "world": "main", "level": "shaft_b", "part": "position" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 163, "method": "group.create", "params": { "level": "crevasse", "members": ["doorcrev22", "notecrev22"], "name": "Gap puzzle", "id": "gapgroup22" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 163, "result": { "rev": 83, "status": "applied", "label": "claude-code: Group 2 objects", "id": "gapgroup22",
+  "changes": [ { "change": "level_meta", "world": "main", "level": "crevasse", "part": "groups" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 164, "method": "group.list", "params": { "level": "crevasse" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 164, "result": { "rev": 83, "groups": [
+  { "level": "crevasse", "id": "gapgroup22", "name": "Gap puzzle", "members": ["doorcrev22", "notecrev22"] } ] } }
+```
+
+Removing a member takes it out of its group in the same write:
+
+```json
+{ "jsonrpc": "2.0", "id": 165, "method": "entity.remove", "params": { "ids": ["doorcrev22"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 165, "result": { "rev": 84, "status": "applied", "label": "claude-code: Remove entity doorcrev22",
+  "changes": [
+    { "change": "entity", "world": "main", "level": "crevasse", "id": "doorcrev22" },
+    { "change": "level_meta", "world": "main", "level": "crevasse", "part": "groups" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 166, "method": "group.remove", "params": { "level": "crevasse", "ids": ["gapgroup22"] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 166, "result": { "rev": 85, "status": "applied", "label": "claude-code: Remove group gapgroup22",
+  "changes": [ { "change": "level_meta", "world": "main", "level": "crevasse", "part": "groups" } ] } }
+```
+
 ## Headless mode
 
 `worlds_server::headless` runs the same method handler over a `Project` loaded from a directory, with its own `History` and `BakeCache`: `headless::Session` answers calls in-process with no socket, and `headless::run` (the `worlds-server <dir>` binary) serves it over the same WebSocket and `server.json` as the editor (the docs test uses that). Differences from the editor:
@@ -1876,4 +2554,4 @@ Undo puts the old level back, overrides and all:
 
 ## Testing
 
-`crates/worlds-server/tests/docs.rs` checks this page. Every ` ```json ` and ` ```json norun ` block must parse. A ` ```json ` block holding a request (an object with `jsonrpc`, `method` and `id`) is replayed, in document order, over one WebSocket connection to a headless server on a fresh copy of `mini.worlds`; the next block is its expected response. The test first writes opaque placeholder images for the fixture's tilesets (`art/castle_main.png` 512x512, `art/ssw_set5.png` 268x268, so atlases are 32x32 and 8x8 tiles). The `session.hello` example is sent with the server's real token. For each replayed request (notifications that arrive meanwhile are skipped): an error response must come back as an error with the same `code`, and for `command_error` and `needs_confirm` the same `data.kind` or `data.reason`; a result must come back as a result, and each of `rev`, `status`, `label`, `id`, `entries`, `steps` and `changes` that the example has must equal the real one exactly (as JSON values), as must the `text` of a `level.get` (the text view). Other result keys are checked for presence only, so values that depend on bakes, rendering or the clock can stay illustrative. Blocks that aren't requests or responses (notifications, standalone objects) are only parsed. `norun` blocks (editor-only and approval-mode exchanges) are parsed but not replayed.
+`crates/worlds-server/tests/docs.rs` checks this page. Every ` ```json ` and ` ```json norun ` block must parse. A ` ```json ` block holding a request (an object with `jsonrpc`, `method` and `id`) is replayed, in document order, over one WebSocket connection to a headless server on a fresh copy of `mini.worlds`; the next block is its expected response. The test first writes opaque placeholder images for the fixture's tilesets (`art/castle_main.png` 512x512, `art/ssw_set5.png` 268x268, so atlases are 32x32 and 8x8 tiles) and copies the game fixture (`tests/fixtures/game/`: `game.worlds` and its `assets/`) next to the project, so `../game.worlds` is a second project to import from. The `session.hello` example is sent with the server's real token. For each replayed request (notifications that arrive meanwhile are skipped): an error response must come back as an error with the same `code`, and for `command_error` and `needs_confirm` the same `data.kind` or `data.reason`; a result must come back as a result, and each of `rev`, `status`, `label`, `id`, `entries`, `steps` and `changes` that the example has must equal the real one exactly (as JSON values), as must the `text` of a `level.get` (the text view). Other result keys are checked for presence only, so values that depend on bakes, rendering or the clock can stay illustrative. Blocks that aren't requests or responses (notifications, standalone objects) are only parsed. `norun` blocks (editor-only and approval-mode exchanges) are parsed but not replayed.

@@ -71,7 +71,8 @@ use worlds_server::ChangeKind;
 use crate::doc::{Document, LevelBakes, LevelIx};
 use crate::tools::{
     Brush, CellHit, CommandContext, EditorCommands, Grab, Invalidation, Stamp, Tool, ToolEvent,
-    cell_rect, clip_rect, in_layer, line_cells, rect_cells, resize_level, snap_move,
+    cell_rect, clip_rect, density_keeps, in_layer, line_cells, pick_weighted, rect_cells,
+    resize_level, snap_move,
 };
 use crate::view::ViewState;
 
@@ -85,6 +86,33 @@ pub enum Paint {
     Tiles { tileset: Slug, stamp: Stamp },
     /// Empty the cells of a tiles layer (the eraser).
     ClearTiles,
+    /// A random brush: each cell of the `stride` lattice picks one of
+    /// `alternatives` by weight ([`Brush::Random`]).
+    Random {
+        tileset: Slug,
+        alternatives: Vec<RandomAlt>,
+        /// Cells one tile covers per axis (tiles bigger than cells).
+        stride: [u32; 2],
+        /// The brush transform (X, Y, R): every alternative's stamp is laid
+        /// out turned and every tile placed turned.
+        flip: Option<worlds_core::Flip>,
+    },
+}
+
+/// One alternative of a [`Paint::Random`], laid out on the layer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RandomAlt {
+    pub shape: AltShape,
+    pub weight: u32,
+}
+
+/// How a random alternative's tiles go down.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AltShape {
+    /// A rectangle of the atlas in its layout, top-left on the cell.
+    Stamp(Stamp),
+    /// Tiles stacked on the cell, first at the bottom.
+    Stack(Vec<[u32; 2]>),
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +143,20 @@ enum Kind {
         start: CellHit,
         world: bool,
     },
+    /// Select: drag a geometry handle of the one selected annotation,
+    /// applied on release as one entry.
+    MoveVertex {
+        start: CellHit,
+        handle: crate::annot::Handle,
+    },
+    /// Select: Alt+click on a segment of the one selected annotation adds a
+    /// point there on release, one entry.
+    InsertVertex {
+        start: CellHit,
+    },
+    /// Shape: a rect of project cells cut out of the level (Shift: filled
+    /// back in) on release, one `set_level_void`.
+    Shape,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +172,13 @@ struct Gesture {
     /// Last cell a brush stroke reached.
     last: [i32; 2],
     kind: Kind,
+    /// The stroke's random seed (the random brush's picks, the density).
+    seed: u64,
+    /// Tiles layers: the chance in percent that a cell is painted.
+    density: u8,
+    /// A non-rectangular level's void in the layer's cells, row-major
+    /// (`None`: a rectangle): painting clips there as at the level's edge.
+    void: Option<Arc<Vec<bool>>>,
 }
 
 /// One entry the user recorded, or one undo or redo step: what the live
@@ -175,6 +224,29 @@ pub struct Editing {
     gesture: Option<Gesture>,
     unsaved: bool,
     cells: Vec<[i32; 2]>,
+    /// Cells the random brush filled during the current gesture: later
+    /// picks that would cover them are skipped.
+    taken: HashSet<[i32; 2]>,
+    /// The origin of the next entry recorded outside a gesture (see
+    /// [`Editing::set_next_origin`]).
+    next_origin: Option<Origin>,
+    /// A hash of the layer definitions without their `folder`, as of the
+    /// last change (taken at the first edit that changes no definition):
+    /// a change of folders alone ([`layer_print`]) rebakes nothing.
+    layer_print: Option<u64>,
+}
+
+/// A hash of `p`'s layer definitions with every `folder` left out: what
+/// bakes and the map depend on.
+fn layer_print(p: &worlds_core::Project) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for l in &p.layers {
+        let mut l = l.clone();
+        l.folder = None;
+        serde_json::to_string(&l).unwrap_or_default().hash(&mut h);
+    }
+    h.finish()
 }
 
 impl Editing {
@@ -222,6 +294,12 @@ impl Editing {
         &self.cache
     }
 
+    /// The next command applied outside a gesture is recorded with this
+    /// origin instead of the user (files applied from disk).
+    pub fn set_next_origin(&mut self, origin: Origin) {
+        self.next_origin = Some(origin);
+    }
+
     /// The history, for the live API: agent entries are recorded here.
     pub fn history_mut(&mut self) -> &mut History {
         &mut self.history
@@ -241,10 +319,7 @@ impl Editing {
     /// cache and redraw everything.
     pub fn reset_caches(&mut self, cx: &mut CommandContext<'_>) {
         let map = cx.doc.reindex();
-        cx.view.active_level = cx
-            .view
-            .active_level
-            .and_then(|i| map.get(i).copied().flatten());
+        cx.view.remap_levels(&map);
         self.cache.clear();
         self.unsaved = cx.doc.project.is_dirty();
         cx.invalidate.push(Invalidation::All);
@@ -351,7 +426,8 @@ impl Editing {
     /// the command joins it.
     fn push(&mut self, cx: &mut CommandContext<'_>, cmd: Command) -> Result<(), String> {
         let t = Instant::now();
-        let changes = match self.history.push(&mut cx.doc.project, cmd) {
+        let origin = self.next_origin.take().unwrap_or(Origin::User);
+        let changes = match self.history.push_as(&mut cx.doc.project, cmd, origin) {
             Ok(c) => c,
             Err(e) => return Err(self.failed(cx, e)),
         };
@@ -370,10 +446,7 @@ impl Editing {
             tracing::error!("{e}");
             let doc = &mut *cx.doc;
             let map = doc.reindex();
-            cx.view.active_level = cx
-                .view
-                .active_level
-                .and_then(|i| map.get(i).copied().flatten());
+            cx.view.remap_levels(&map);
             self.cache.clear();
             self.unsaved = doc.project.is_dirty();
             cx.invalidate.push(Invalidation::All);
@@ -413,20 +486,62 @@ impl Editing {
         }
         let redefined = self.defs_changed(cx, changes);
         let doc = &mut *cx.doc;
+        // A renamed world stays the one shown.
+        for c in changes {
+            if let Change::WorldRenamed { from, to } = c {
+                cx.view.rename_world(from, to);
+            }
+        }
+        // World commands move levels between worlds or change the worlds'
+        // order, and a world's level order changes the order of its levels
+        // (`world_meta`): level indices and their world indices change.
         if changes.iter().any(|c| {
             matches!(
                 c,
                 Change::LevelCreated { .. }
                     | Change::LevelDeleted { .. }
                     | Change::LevelRenamed { .. }
+                    | Change::WorldMeta { .. }
+                    | Change::WorldCreated { .. }
+                    | Change::WorldRemoved { .. }
+                    | Change::WorldRenamed { .. }
+                    | Change::Project {
+                        key: ProjectKey::Worlds
+                    }
             )
         }) {
             let map = doc.reindex();
-            cx.view.active_level = cx
-                .view
-                .active_level
-                .and_then(|i| map.get(i).copied().flatten());
+            cx.view.remap_levels(&map);
             cx.invalidate.push(Invalidation::All);
+        }
+        // What the levels look like (the thumbnails' key): a change in a
+        // level moves that level's stamp; one with no level (a definition,
+        // a project setting, a world) may reach every level, so it moves
+        // them all. Notes, references, guide groups and assemblies aren't
+        // in a level's thumbnail.
+        for c in changes {
+            match c.level() {
+                Some(l) => {
+                    if let Some(ix) = doc.level_ix(l.as_str()) {
+                        doc.touch_look(ix);
+                    }
+                }
+                None if matches!(
+                    c,
+                    Change::Note { .. }
+                        | Change::Reference { .. }
+                        | Change::GuideGroup { .. }
+                        | Change::Def {
+                            kind: DefKind::Assembly,
+                            ..
+                        }
+                        | Change::DefRenamed {
+                            kind: DefKind::Assembly,
+                            ..
+                        }
+                ) => {}
+                None => doc.touch_all_looks(),
+            }
         }
         let mut levels: Vec<Slug> = Vec::new();
         for c in changes {
@@ -453,7 +568,11 @@ impl Editing {
                 Change::LevelMeta { level, part, .. } => {
                     if matches!(
                         part,
-                        LevelPart::Position | LevelPart::Size | LevelPart::All | LevelPart::Depth
+                        LevelPart::Position
+                            | LevelPart::Size
+                            | LevelPart::All
+                            | LevelPart::Depth
+                            | LevelPart::Void
                     ) && let Some(ix) = doc.level_ix(level.as_str())
                     {
                         cx.invalidate.push(Invalidation::Level(ix));
@@ -654,6 +773,32 @@ impl Editing {
     /// the app to upload the textures again ([`Invalidation::Tilesets`]).
     fn defs_changed(&mut self, cx: &mut CommandContext<'_>, changes: &[Change]) -> Redefined {
         let doc = &mut *cx.doc;
+        let layer_def = |c: &Change| {
+            matches!(
+                c,
+                Change::Def {
+                    kind: DefKind::Layer,
+                    ..
+                }
+            )
+        };
+        if changes
+            .iter()
+            .any(|c| matches!(c, Change::Def { .. } | Change::DefRenamed { .. }))
+        {
+            // Layer definitions that differ only in `folder` (the Layers
+            // pane's folders): the table follows, nothing rebakes.
+            let print = layer_print(&doc.project);
+            let folders_only = self.layer_print == Some(print) && changes.iter().all(layer_def);
+            self.layer_print = Some(print);
+            if folders_only {
+                cx.view.resync_layers(doc, &[]);
+                doc.defs_gen += 1;
+                return Redefined::None;
+            }
+        } else if self.layer_print.is_none() {
+            self.layer_print = Some(layer_print(&doc.project));
+        }
         let mut all = false;
         let mut layers: BTreeSet<Slug> = BTreeSet::new();
         let mut tilesets = false;
@@ -710,6 +855,16 @@ impl Editing {
                     kind: DefKind::Enum,
                     ..
                 } => {}
+                // Assemblies bake nothing (placed copies are independent).
+                Change::Def {
+                    kind: DefKind::Assembly,
+                    ..
+                } => {}
+                Change::DefRenamed {
+                    kind: DefKind::Assembly,
+                    from,
+                    to,
+                } => cx.view.library.renamed(from, to),
                 // Level field definitions: only the auto layers with a group
                 // reading a level field (`requires_level_field`) can change.
                 Change::Project {
@@ -835,12 +990,15 @@ impl Editing {
         let doc = &*cx.doc;
         // A world marquee or a drag of the selection needs no level (only
         // world px count): they work in a project with none.
-        let worldly =
-            tool == Tool::Select && matches!(grab, Grab::WorldMarquee | Grab::Selection { .. });
+        let worldly = tool == Tool::Select
+            && matches!(
+                grab,
+                Grab::WorldMarquee | Grab::Selection { .. } | Grab::Vertex(_) | Grab::InsertVertex
+            );
         // Without a layer ([`crate::tools::NO_LAYER`]: a project with none)
         // only the Select tool works, in cells of the project grid.
         let no_layer = at.layer >= doc.project.layers.len();
-        if no_layer && tool != Tool::Select {
+        if no_layer && !matches!(tool, Tool::Select | Tool::Shape) {
             return;
         }
         if at.level >= doc.levels.len() {
@@ -856,11 +1014,16 @@ impl Editing {
                 size: [0, 0],
                 origin: at.cell,
                 last: at.cell,
+                seed: 0,
+                density: 100,
+                void: None,
                 kind: match grab {
                     Grab::Selection { was_selected } => Kind::MoveSelection {
                         start: at,
                         was_selected,
                     },
+                    Grab::Vertex(handle) => Kind::MoveVertex { start: at, handle },
+                    Grab::InsertVertex => Kind::InsertVertex { start: at },
                     _ => Kind::Marquee {
                         start: at,
                         world: true,
@@ -875,6 +1038,12 @@ impl Editing {
             Some(def) => (def.slug.clone(), doc.project.layer_cells(def, level)),
             None => (Slug::new("none").expect("a valid slug"), level.size),
         };
+        let void = doc
+            .project
+            .layers
+            .get(at.layer)
+            .and_then(|def| doc.project.layer_void(def, level))
+            .map(Arc::new);
         let mut g = Gesture {
             tool,
             world,
@@ -884,9 +1053,25 @@ impl Editing {
             origin: at.cell,
             last: at.cell,
             kind: Kind::Paint(Paint::Value(GridValue::Clear)),
+            seed: cx
+                .view
+                .palette
+                .seed
+                .unwrap_or_else(crate::tools::fresh_seed),
+            density: cx.view.palette.density.clamp(1, 100),
+            void,
         };
+        self.taken.clear();
         match tool {
             Tool::Hand => {}
+            Tool::Shape => {
+                // Cells of the project grid; one entry on release.
+                g.size = level.size;
+                g.kind = Kind::Shape;
+                self.history
+                    .begin_gesture(format!("Shape level {}", level.slug), Origin::User);
+                self.gesture = Some(g);
+            }
             Tool::Select if matches!(grab, Grab::Marquee | Grab::WorldMarquee) => {
                 // A marquee changes the selection, not the project: no
                 // history gesture.
@@ -908,9 +1093,31 @@ impl Editing {
                 };
                 self.gesture = Some(g);
             }
+            Tool::Select if matches!(grab, Grab::Vertex(_) | Grab::InsertVertex) => {
+                // Applied on release as one entry.
+                g.kind = match grab {
+                    Grab::Vertex(handle) => Kind::MoveVertex { start: at, handle },
+                    _ => Kind::InsertVertex { start: at },
+                };
+                self.gesture = Some(g);
+            }
             Tool::Select => {
                 let (kind, label) = match grab {
-                    Grab::None | Grab::Marquee | Grab::WorldMarquee | Grab::Selection { .. } => {
+                    Grab::None
+                    | Grab::Marquee
+                    | Grab::WorldMarquee
+                    | Grab::Selection { .. }
+                    | Grab::Vertex(_)
+                    | Grab::InsertVertex => {
+                        return;
+                    }
+                    Grab::Level
+                        if let Some(why) = cx
+                            .doc
+                            .level_ix(level.slug.as_str())
+                            .and_then(|ix| crate::annot::strip_refusal(cx.doc, ix)) =>
+                    {
+                        cx.view.set_status(why, true);
                         return;
                     }
                     Grab::Level => (
@@ -979,14 +1186,16 @@ impl Editing {
                 self.history.begin_gesture(label, Origin::User);
                 match tool {
                     Tool::Brush | Tool::Eraser => {
-                        let cmd = paint_command(&g, &[at.cell], false);
+                        let cmd = paint_command(&g, &[at.cell], false, &mut self.taken);
                         self.gesture = Some(g);
                         if let Some(cmd) = cmd {
                             self.push_or_status(cx, cmd);
                         }
                     }
                     Tool::Fill => {
-                        if let Some(cmd) = fill_command(cx.doc, &g, at.level, at.cell) {
+                        if let Some(cmd) =
+                            fill_command(cx.doc, &g, at.level, at.cell, &mut self.taken)
+                        {
                             self.push_or_status(cx, cmd);
                         }
                         self.close();
@@ -1005,7 +1214,7 @@ impl Editing {
             Kind::Paint(_) if matches!(g.tool, Tool::Brush | Tool::Eraser) => {
                 line_cells(g.last, at.cell, &mut self.cells);
                 g.last = at.cell;
-                let cmd = paint_command(g, &self.cells, false);
+                let cmd = paint_command(g, &self.cells, false, &mut self.taken);
                 if let Some(cmd) = cmd {
                     self.push_or_status(cx, cmd);
                 }
@@ -1024,12 +1233,17 @@ impl Editing {
             Kind::Paint(_) => match g.tool {
                 Tool::Brush | Tool::Eraser if at.cell != g.last => {
                     line_cells(g.last, at.cell, &mut self.cells);
-                    paint_command(&g, &self.cells, false)
+                    paint_command(&g, &self.cells, false, &mut self.taken)
                 }
-                Tool::Rect => rect_command(&g, cell_rect(g.origin, at.cell), modifiers.shift),
+                Tool::Rect => rect_command(
+                    &g,
+                    cell_rect(g.origin, at.cell),
+                    modifiers.shift,
+                    &mut self.taken,
+                ),
                 Tool::Line => {
                     line_cells(g.origin, at.cell, &mut self.cells);
-                    paint_command(&g, &self.cells, false)
+                    paint_command(&g, &self.cells, false, &mut self.taken)
                 }
                 _ => None,
             },
@@ -1061,12 +1275,24 @@ impl Editing {
                     [at.world_px[0] - start[0], at.world_px[1] - start[1]],
                     cx.doc.project.grid_size,
                 );
-                (new != *size).then(|| Command::ResizeLevel {
-                    world: g.world.clone(),
-                    level: g.level.clone(),
-                    size: new,
-                    anchor: [-edges[0], -edges[1]],
-                })
+                if new == *size {
+                    None
+                } else {
+                    let anchor = [-edges[0], -edges[1]];
+                    match crate::tools::resize_command(
+                        &cx.doc.project,
+                        &g.world,
+                        &g.level,
+                        new,
+                        anchor,
+                    ) {
+                        Ok(cmd) => Some(cmd),
+                        Err(e) => {
+                            cx.view.set_status(e, true);
+                            None
+                        }
+                    }
+                }
             }
             Kind::Place { start } => {
                 self.place(cx, &g, start, &at, modifiers);
@@ -1084,6 +1310,25 @@ impl Editing {
                 self.close();
                 return;
             }
+            Kind::MoveVertex { start, handle } => {
+                self.move_vertex(cx, start, &at, *handle, modifiers);
+                return;
+            }
+            Kind::InsertVertex { start } => {
+                self.insert_vertex(cx, start, modifiers);
+                return;
+            }
+            Kind::Shape => cx.doc.level_ix(g.level.as_str()).and_then(|ix| {
+                let l = cx.doc.level(ix);
+                let r = cell_rect(g.origin, at.cell);
+                crate::tools::shape_void(&l.void, l.size, r, modifiers.shift).map(|void| {
+                    Command::SetLevelVoid {
+                        level: g.level.clone(),
+                        void,
+                        restore: false,
+                    }
+                })
+            }),
         };
         if let Some(cmd) = cmd {
             self.push_or_status(cx, cmd);
@@ -1113,6 +1358,12 @@ impl Editing {
             if !in_layer(p.cell, g.size) {
                 return Err(format!(
                     "Cell {}, {} is outside level {}",
+                    p.cell[0], p.cell[1], g.level
+                ));
+            }
+            if in_void(g, p.cell) {
+                return Err(format!(
+                    "Cell {}, {} is cut out of level {} (its void)",
                     p.cell[0], p.cell[1], g.level
                 ));
             }
@@ -1187,15 +1438,21 @@ impl Editing {
                     cx.view.zoom,
                 )
                 .or_else(|| {
-                    crate::viewport::level_under(cx.doc, start.world_px)
-                        .map(|ix| crate::view::SelItem::Level(cx.doc.ids[ix].clone()))
-                        .filter(|i| cx.view.selection.contains(i))
+                    crate::viewport::level_under_in(
+                        cx.doc,
+                        cx.view.world_ix(cx.doc),
+                        start.world_px,
+                    )
+                    .map(|ix| crate::view::SelItem::Level(cx.doc.ids[ix].clone()))
+                    .filter(|i| cx.view.selection.contains(i))
                 })
             {
                 if pixel {
                     cx.view.selection.toggle(item);
                 } else {
-                    cx.view.selection.set([item]);
+                    // A group member keeps its group (unless entered).
+                    let items = crate::app::groups::click_items(cx.doc, cx.view, item);
+                    cx.view.selection.set(items);
                 }
             }
             return;
@@ -1212,6 +1469,89 @@ impl Editing {
         match r {
             Ok(()) => cx.view.selection.set(moved_tiles),
             Err(e) => cx.view.set_status(format!("Can't move there: {e}"), true),
+        }
+    }
+
+    /// The release of a handle drag: [`crate::annot::plan_vertex_move`] as
+    /// one entry. A release where the press was (a click) only highlights
+    /// the handle (done at the press).
+    fn move_vertex(
+        &mut self,
+        cx: &mut CommandContext<'_>,
+        start: &CellHit,
+        at: &CellHit,
+        handle: crate::annot::Handle,
+        modifiers: egui::Modifiers,
+    ) {
+        let d_raw = [
+            at.world_px[0] - start.world_px[0],
+            at.world_px[1] - start.world_px[1],
+        ];
+        if d_raw == [0.0, 0.0] {
+            return;
+        }
+        let pixel = crate::tools::pixel_mod(modifiers);
+        let plan = match crate::annot::plan_vertex_move(cx.doc, cx.view, handle, d_raw, pixel) {
+            Ok(p) => p,
+            Err(e) => {
+                cx.view.set_status(e, true);
+                return;
+            }
+        };
+        let Some(cmd) = plan.command else {
+            return;
+        };
+        let r = self.push(
+            cx,
+            Command::Batch {
+                label: plan.label,
+                commands: vec![cmd],
+            },
+        );
+        self.entry_done(r.is_ok());
+        if let Err(e) = r {
+            cx.view.set_status(e, true);
+        }
+    }
+
+    /// The release of an Alt+click on a segment of the one selected
+    /// annotation: [`crate::annot::plan_vertex_insert`] at the press, one
+    /// entry; the new point is highlighted.
+    fn insert_vertex(
+        &mut self,
+        cx: &mut CommandContext<'_>,
+        start: &CellHit,
+        modifiers: egui::Modifiers,
+    ) {
+        let pixel = crate::tools::pixel_mod(modifiers);
+        let zoom = cx.view.zoom;
+        let Some(planned) =
+            crate::annot::plan_vertex_insert(cx.doc, cx.view, start.world_px, zoom, pixel)
+        else {
+            return;
+        };
+        let (cmd, handle) = match planned {
+            Ok(x) => x,
+            Err(e) => {
+                cx.view.set_status(e, true);
+                return;
+            }
+        };
+        let id = match &cmd {
+            Command::UpdateNote { id, .. } => id.clone(),
+            _ => return,
+        };
+        let r = self.push(
+            cx,
+            Command::Batch {
+                label: format!("Add a point to {id}"),
+                commands: vec![cmd],
+            },
+        );
+        self.entry_done(r.is_ok());
+        match r {
+            Ok(()) => cx.view.vertex = Some((id, handle)),
+            Err(e) => cx.view.set_status(e, true),
         }
     }
 
@@ -1499,9 +1839,56 @@ pub fn resolve_paint(
                     .project
                     .tileset(tileset.as_str())
                     .ok_or_else(|| format!("No tileset {tileset}"))?;
+                if worlds_core::Flip::bits_of(view.brush_flip) & 4 != 0
+                    && ts.tile_size[0] != ts.tile_size[1]
+                {
+                    return Err(crate::clipboard::not_square(ts));
+                }
                 Ok(Paint::Tiles {
                     tileset: tileset.clone(),
-                    stamp: Stamp::new(*rect, ts.tile_size, doc.project.layer_grid(def)),
+                    stamp: Stamp::new(*rect, ts.tile_size, doc.project.layer_grid(def))
+                        .turned(view.brush_flip),
+                })
+            }
+            Some(Brush::Random {
+                tileset,
+                alternatives,
+            }) => {
+                let ts = doc
+                    .project
+                    .tileset(tileset.as_str())
+                    .ok_or_else(|| format!("No tileset {tileset}"))?;
+                if alternatives
+                    .iter()
+                    .all(|a| a.weight == 0 || a.tiles.is_empty())
+                {
+                    return Err(
+                        "The random brush has no tiles to pick: select tiles in the palette".into(),
+                    );
+                }
+                if worlds_core::Flip::bits_of(view.brush_flip) & 4 != 0
+                    && ts.tile_size[0] != ts.tile_size[1]
+                {
+                    return Err(crate::clipboard::not_square(ts));
+                }
+                let grid = doc.project.layer_grid(def);
+                let alternatives = alternatives
+                    .iter()
+                    .map(|a| RandomAlt {
+                        shape: match a.as_rect() {
+                            Some(r) => AltShape::Stamp(
+                                Stamp::new(r, ts.tile_size, grid).turned(view.brush_flip),
+                            ),
+                            None => AltShape::Stack(a.tiles.clone()),
+                        },
+                        weight: if a.tiles.is_empty() { 0 } else { a.weight },
+                    })
+                    .collect();
+                Ok(Paint::Random {
+                    tileset: tileset.clone(),
+                    alternatives,
+                    stride: Stamp::new([0, 0, 1, 1], ts.tile_size, grid).stride,
+                    flip: view.brush_flip,
                 })
             }
             _ => Err("Pick a tile in the palette first".into()),
@@ -1519,12 +1906,23 @@ pub fn resolve_paint(
 
 /// The command painting `cells` (layer cells, may be outside: clipped).
 /// Tiles go down as stamps on the stroke's lattice, or with `pattern` as
-/// the stamp tiled over exactly those cells (rect fill, flood fill).
-fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Command> {
+/// the stamp tiled over exactly those cells (rect fill, flood fill); the
+/// gesture's density skips stamps (cells with `pattern`). A random brush
+/// picks an alternative per lattice cell, skipping picks that would
+/// cover a cell in `taken` (filled earlier in the gesture), and with
+/// `pattern` keeps only the tiles on `cells`.
+fn paint_command(
+    g: &Gesture,
+    cells: &[[i32; 2]],
+    pattern: bool,
+    taken: &mut HashSet<[i32; 2]>,
+) -> Option<Command> {
     let Kind::Paint(paint) = &g.kind else {
         return None;
     };
-    let inside = |c: &&[i32; 2]| in_layer(**c, g.size);
+    // Clipped at the level's edge, and at its void (a non-rectangular level).
+    let open = |c: [i32; 2]| in_layer(c, g.size) && !in_void(g, c);
+    let inside = |c: &&[i32; 2]| open(**c);
     let u = |c: [i32; 2]| [c[0] as u32, c[1] as u32];
     match paint {
         Paint::Value(v) => {
@@ -1554,7 +1952,9 @@ fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Comma
             let mut out: BTreeMap<[u32; 2], [u32; 2]> = BTreeMap::new();
             if pattern {
                 for c in cells.iter().filter(inside) {
-                    if let Some(t) = stamp.tile_at(g.origin, *c) {
+                    if let Some(t) = stamp.tile_at(g.origin, *c)
+                        && density_keeps(g.seed, *c, g.density)
+                    {
                         out.insert(u(*c), t);
                     }
                 }
@@ -1563,12 +1963,12 @@ fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Comma
                 let mut tiles = Vec::new();
                 for c in cells {
                     let a = stamp.anchor(g.origin, *c);
-                    if seen.insert(a) {
+                    if seen.insert(a) && density_keeps(g.seed, a, g.density) {
                         stamp.tiles(a, &mut tiles);
                     }
                 }
                 for (c, t) in tiles {
-                    if in_layer(c, g.size) {
+                    if open(c) {
                         out.insert(u(c), t);
                     }
                 }
@@ -1582,7 +1982,72 @@ fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Comma
                         cell,
                         tileset: tileset.clone(),
                         tile,
-                        flip: None,
+                        flip: stamp.flip,
+                        alpha: 1.0,
+                    })
+                    .collect(),
+                clear: Vec::new(),
+                keep_empty: false,
+            })
+        }
+        Paint::Random {
+            tileset,
+            alternatives,
+            stride,
+            flip,
+        } => {
+            let weights: Vec<u32> = alternatives.iter().map(|a| a.weight).collect();
+            let region: Option<HashSet<[i32; 2]>> =
+                pattern.then(|| cells.iter().copied().collect());
+            let s = [stride[0] as i32, stride[1] as i32];
+            let mut seen = HashSet::new();
+            let mut tiles = Vec::new();
+            let mut out: Vec<([u32; 2], [u32; 2])> = Vec::new();
+            for c in cells {
+                let a = [
+                    g.origin[0] + (c[0] - g.origin[0]).div_euclid(s[0]) * s[0],
+                    g.origin[1] + (c[1] - g.origin[1]).div_euclid(s[1]) * s[1],
+                ];
+                if !seen.insert(a) || taken.contains(&a) || !density_keeps(g.seed, a, g.density) {
+                    continue;
+                }
+                let Some(i) = pick_weighted(&weights, g.seed, a) else {
+                    continue;
+                };
+                tiles.clear();
+                let foot = match &alternatives[i].shape {
+                    AltShape::Stamp(st) => {
+                        st.tiles(a, &mut tiles);
+                        st.footprint()
+                    }
+                    AltShape::Stack(ts) => {
+                        tiles.extend(ts.iter().map(|t| (a, *t)));
+                        s
+                    }
+                };
+                let covered: Vec<[i32; 2]> = (0..foot[1])
+                    .flat_map(|y| (0..foot[0]).map(move |x| [a[0] + x, a[1] + y]))
+                    .collect();
+                if covered.iter().any(|c| taken.contains(c)) {
+                    continue;
+                }
+                for (cell, t) in &tiles {
+                    if in_layer(*cell, g.size) && region.as_ref().is_none_or(|r| r.contains(cell)) {
+                        out.push((u(*cell), *t));
+                    }
+                }
+                taken.extend(covered);
+            }
+            (!out.is_empty()).then(|| Command::SetTiles {
+                level: g.level.clone(),
+                layer: g.layer.clone(),
+                tiles: out
+                    .into_iter()
+                    .map(|(cell, tile)| TilePlacement {
+                        cell,
+                        tileset: tileset.clone(),
+                        tile,
+                        flip: *flip,
                         alpha: 1.0,
                     })
                     .collect(),
@@ -1593,8 +2058,20 @@ fn paint_command(g: &Gesture, cells: &[[i32; 2]], pattern: bool) -> Option<Comma
     }
 }
 
+/// Whether layer cell `c` (inside the layer) is in the gesture level's void.
+fn in_void(g: &Gesture, c: [i32; 2]) -> bool {
+    g.void
+        .as_ref()
+        .is_some_and(|v| in_layer(c, g.size) && v[(c[1] as u32 * g.size[0] + c[0] as u32) as usize])
+}
+
 /// Fill (or outline) the cell rect `[x0, y0, x1, y1)`, clipped to the layer.
-fn rect_command(g: &Gesture, r: [i32; 4], outline: bool) -> Option<Command> {
+fn rect_command(
+    g: &Gesture,
+    r: [i32; 4],
+    outline: bool,
+    taken: &mut HashSet<[i32; 2]>,
+) -> Option<Command> {
     let r = clip_rect(r, g.size);
     if r[0] >= r[2] || r[1] >= r[3] {
         return None;
@@ -1619,14 +2096,20 @@ fn rect_command(g: &Gesture, r: [i32; 4], outline: bool) -> Option<Command> {
         origin: [r[0], r[1]],
         ..g.clone()
     };
-    paint_command(&g, &cells, true)
+    paint_command(&g, &cells, true, taken)
 }
 
 /// Flood fill at `cell`: `flood_fill` for int_grid layers; for tiles
 /// layers, the 4-connected region of cells holding the same stack as
 /// `cell` gets the stamp as a pattern.
-fn fill_command(doc: &Document, g: &Gesture, ix: LevelIx, cell: [i32; 2]) -> Option<Command> {
-    if !in_layer(cell, g.size) {
+fn fill_command(
+    doc: &Document,
+    g: &Gesture,
+    ix: LevelIx,
+    cell: [i32; 2],
+    taken: &mut HashSet<[i32; 2]>,
+) -> Option<Command> {
+    if !in_layer(cell, g.size) || in_void(g, cell) {
         return None;
     }
     let Kind::Paint(paint) = &g.kind else {
@@ -1642,8 +2125,8 @@ fn fill_command(doc: &Document, g: &Gesture, ix: LevelIx, cell: [i32; 2]) -> Opt
             .filter(|d| d.is_derived())
     {
         let grid = doc.derived_effective(ix, def);
-        let region = value_region(&grid, g.size, cell);
-        return paint_command(g, &region, true);
+        let region = value_region_in(&grid, g.size, cell, g.void.as_deref().map(|v| &v[..]));
+        return paint_command(g, &region, true, taken);
     }
     if let Paint::Value(v) = paint {
         return Some(Command::FloodFill {
@@ -1653,8 +2136,15 @@ fn fill_command(doc: &Document, g: &Gesture, ix: LevelIx, cell: [i32; 2]) -> Opt
             value: v.clone(),
         });
     }
-    let region = tile_region(doc, ix, &g.layer, g.size, cell);
-    paint_command(g, &region, true)
+    let region = tile_region(
+        doc,
+        ix,
+        &g.layer,
+        g.size,
+        cell,
+        g.void.as_deref().map(|v| &v[..]),
+    );
+    paint_command(g, &region, true, taken)
 }
 
 /// The 4-connected cells around `start` holding the same value as it in
@@ -1664,7 +2154,22 @@ pub fn value_region(
     size: [u32; 2],
     start: [i32; 2],
 ) -> Vec<[i32; 2]> {
+    value_region_in(grid, size, start, None)
+}
+
+/// [`value_region`] in a non-rectangular level: cells `void` marks are
+/// walls the region doesn't cross.
+pub fn value_region_in(
+    grid: &worlds_core::IntGridLayer,
+    size: [u32; 2],
+    start: [i32; 2],
+    void: Option<&[bool]>,
+) -> Vec<[i32; 2]> {
     let at = |c: [i32; 2]| grid.index_at(c[0] as u32, c[1] as u32).unwrap_or(0);
+    let open = |c: [i32; 2]| {
+        in_layer(c, size)
+            && !void.is_some_and(|v| v[(c[1] as u32 * size[0] + c[0] as u32) as usize])
+    };
     let target = at(start);
     let mut seen = HashSet::from([start]);
     let mut queue = VecDeque::from([start]);
@@ -1673,7 +2178,7 @@ pub fn value_region(
         out.push(c);
         for d in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
             let n = [c[0] + d[0], c[1] + d[1]];
-            if in_layer(n, size) && !seen.contains(&n) && at(n) == target {
+            if open(n) && !seen.contains(&n) && at(n) == target {
                 seen.insert(n);
                 queue.push_back(n);
             }
@@ -1694,14 +2199,20 @@ fn with_dependents(project: &worlds_core::Project, layers: BTreeSet<Slug>) -> Ve
     }
 }
 
-/// The 4-connected cells around `start` whose tile stack equals its stack.
+/// The 4-connected cells around `start` whose tile stack equals its stack
+/// (never crossing cells `void` marks).
 pub fn tile_region(
     doc: &Document,
     ix: LevelIx,
     layer: &Slug,
     size: [u32; 2],
     start: [i32; 2],
+    void: Option<&[bool]>,
 ) -> Vec<[i32; 2]> {
+    let open = |c: [i32; 2]| {
+        in_layer(c, size)
+            && !void.is_some_and(|v| v[(c[1] as u32 * size[0] + c[0] as u32) as usize])
+    };
     type Stack<'a> = Vec<(&'a Slug, [u32; 2], Option<worlds_core::Flip>, u64)>;
     let mut stacks: HashMap<[i32; 2], Stack<'_>> = HashMap::new();
     if let Some(t) = doc.level(ix).tiles_layer(layer.as_str()) {
@@ -1722,7 +2233,7 @@ pub fn tile_region(
         out.push(c);
         for d in [[1, 0], [-1, 0], [0, 1], [0, -1]] {
             let n = [c[0] + d[0], c[1] + d[1]];
-            if in_layer(n, size) && !seen.contains(&n) && *stack(&n) == target {
+            if open(n) && !seen.contains(&n) && *stack(&n) == target {
                 seen.insert(n);
                 queue.push_back(n);
             }
@@ -2179,6 +2690,12 @@ fn marquee_select(
     } else {
         crate::annot::marquee_items(cx.doc, cx.view, level, &r)
     };
+    // With an int_grid layer active, the marquee's cells are what Copy
+    // takes from it.
+    let cells = level.and_then(|ix| crate::clipboard::grid_marquee(cx.doc, cx.view, ix, &r));
+    if cells.is_some() || !add {
+        cx.view.grid_marquee = cells;
+    }
     if add {
         for i in hits {
             cx.view.selection.add(i);

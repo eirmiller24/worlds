@@ -284,9 +284,16 @@ fn game() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/game/game.worlds")
 }
 
+/// Where the spawned editors look for preferences: a directory with none
+/// in it, never the real config dir.
+fn no_config_dir() -> PathBuf {
+    std::env::temp_dir().join("worlds-tests-no-config")
+}
+
 /// Run the `worlds` binary; (exit code, stdout, stderr).
 fn worlds(args: &[&std::ffi::OsStr]) -> (i32, String, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_worlds"))
+        .env("WORLDS_CONFIG_DIR", no_config_dir())
         .args(args)
         .output()
         .unwrap();
@@ -426,6 +433,7 @@ fn serve_lets_an_agent_paint() {
 
     let after_ui = tmp.path().join("serve_after.png");
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_worlds"))
+        .env("WORLDS_CONFIG_DIR", no_config_dir())
         .args([
             os("--screenshot"),
             after_ui.as_os_str(),
@@ -732,6 +740,7 @@ fn serve_stops_cleanly_on_sigterm() {
     let (tmp, dir) = temp_copy(&game());
     let out = tmp.path().join("sigterm.png");
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_worlds"))
+        .env("WORLDS_CONFIG_DIR", no_config_dir())
         .args([
             os("--screenshot"),
             out.as_os_str(),
@@ -958,6 +967,7 @@ fn window_exits_cleanly_on_signals_under_xvfb() {
         let mut cmd = std::process::Command::new("xvfb-run");
         cmd.args(["-a", "-s", "-screen 0 1280x800x24"])
             .arg(env!("CARGO_BIN_EXE_worlds"))
+            .env("WORLDS_CONFIG_DIR", no_config_dir())
             .arg(&dir)
             .env_remove("WAYLAND_DISPLAY")
             // xvfb-run sends the command's stderr (the log) to its stdout.
@@ -3002,4 +3012,138 @@ fn paint_modes_by_shortcut_and_the_mode_strip() {
     assert!(hit.is_some(), "no click on the strip picked Line");
     assert_eq!(app.st.view.paint_tool(), Tool::Line);
     assert_eq!(app.undo_entries(), n, "a mode click edits nothing");
+}
+
+/// The Paint strip on a tiles layer has Random and Density: a random
+/// stroke at 45 % draws some of the picks, Random off makes the brush a
+/// stamp of the first alternative, and the strip stays inside the map.
+#[test]
+fn paint_strip_random_and_density() {
+    use worlds_editor::tools::{Brush, Tool};
+    if !gpu_tests() {
+        return;
+    }
+    let (tmp, dir) = temp_copy(&game());
+    let (hl, ctx, mut app) = app_on(&dir, [1600, 900]);
+    steps(
+        &mut app,
+        r#"[{ "ui": "focus", "level": "crevasse" },
+            { "gesture": "rect", "level": "crevasse", "layer": "decor_front", "path": [[2, 2], [30, 8]],
+              "brush": { "tileset": "props", "density": 45, "seed": 5,
+                         "tiles": [[0, 0], [7, 0], { "rect": [7, 7, 1, 1], "weight": 3 }, [0, 7, 2, 1]] } },
+            { "gesture": "brush", "level": "crevasse", "layer": "decor_front", "path": [[2, 12], [40, 12]] }]"#,
+    );
+    assert_eq!(app.st.view.tool, Tool::Brush);
+    let mut t = 0.0;
+    let mut frames = |app: &mut worlds_editor::app::EditorApp, events: Vec<egui::Event>| {
+        hl.frame_with(&ctx, app, t, events);
+        for _ in 0..20 {
+            t += 1.0 / 60.0;
+            hl.frame(&ctx, app, t);
+        }
+    };
+    frames(&mut app, vec![]);
+    let img = hl.read().unwrap();
+    let out = tmp.path().join("paint_random.png");
+    img.save(&out).unwrap();
+    keep(&out);
+    let strip = app.st.viewport.paint_strip.expect("the strip with Brush");
+    assert!(app.st.map_rect.unwrap().contains_rect(strip), "{strip:?}");
+    let random = worlds_editor::app::fields::marked(&ctx, "paint:random").unwrap();
+    let density = worlds_editor::app::fields::marked(&ctx, "paint:density").unwrap();
+    assert!(strip.contains_rect(random) && strip.contains_rect(density));
+    // The rectangle: 15 x 7 cells, about 45 % of them painted.
+    let doc = app.document().unwrap();
+    let crev = doc.level_ix("crevasse").unwrap();
+    let n = doc
+        .level(crev)
+        .tiles_layer("decor_front")
+        .unwrap()
+        .tiles
+        .iter()
+        .filter(|t| t.cell[1] <= 8 && (2..=30).contains(&t.cell[0]))
+        .count();
+    assert!((60..=200).contains(&n), "{n} tiles");
+    assert_eq!(app.st.view.palette.density, 45);
+    // Random off: the first alternative as a stamp.
+    let click = |pressed| egui::Event::PointerButton {
+        pos: random.center(),
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    frames(
+        &mut app,
+        vec![
+            egui::Event::PointerMoved(random.center()),
+            click(true),
+            click(false),
+        ],
+    );
+    assert!(matches!(
+        app.st.view.palette.brush("decor_front"),
+        Some(Brush::Tiles {
+            rect: [0, 0, 1, 1],
+            ..
+        })
+    ));
+}
+
+/// A world far wider than 256 viewports: the fit's zoom is below the
+/// smallest step, every level is still drawn (a speck at least
+/// `MIN_LEVEL_PT` wide), and the wheel's first notch in lands on 1/256.
+#[test]
+fn a_huge_world_fits_below_the_smallest_zoom_step() {
+    use worlds_editor::viewport::camera::ZOOM_STEPS;
+    if !gpu_tests() {
+        return;
+    }
+    let (tmp, dir) = temp_copy(&game());
+    let (hl, ctx, mut app) = app_on(&dir, [1600, 900]);
+    steps(
+        &mut app,
+        r#"[{ "op": "move_level", "world": "main", "level": "level_4", "world_px": [600000, 20000] },
+            { "op": "move_level", "world": "main", "level": "level_3", "world_px": [-150000, -30000] },
+            { "ui": "focus", "world_rect": [-150000, -30000, 752048, 51000] }]"#,
+    );
+    for i in 0..4 {
+        hl.frame(&ctx, &mut app, i as f64 / 60.0);
+    }
+    let z = app.st.viewport.camera.zoom;
+    assert!(z < ZOOM_STEPS[0], "zoom {z}");
+    let img = hl.read().unwrap();
+    let out = tmp.path().join("fit_far.png");
+    img.save(&out).unwrap();
+    keep(&out);
+    let bg = *img.get_pixel(
+        app.st.map_rect.unwrap().center().x as u32,
+        app.st.map_rect.unwrap().min.y as u32 + 30,
+    );
+    let doc = app.document().unwrap();
+    for ix in 0..doc.levels.len() {
+        let l = doc.level(ix);
+        let g = doc.project.grid_size as f64;
+        let r = screen_of(
+            &app,
+            [
+                l.world_px[0] as f64,
+                l.world_px[1] as f64,
+                l.world_px[0] as f64 + l.size[0] as f64 * g,
+                l.world_px[1] as f64 + l.size[1] as f64 * g,
+            ],
+        );
+        let c = r.center();
+        let around = egui::Rect::from_center_size(c, egui::vec2(8.0, 8.0));
+        let mut drawn = 0;
+        for y in around.min.y as u32..around.max.y as u32 {
+            for x in around.min.x as u32..around.max.x as u32 {
+                drawn += (*img.get_pixel(x, y) != bg) as usize;
+            }
+        }
+        assert!(drawn >= 9, "{}: {drawn} pixels at {c:?}", l.slug);
+    }
+    app.st.viewport.zoom_steps_centered(1);
+    assert_eq!(app.st.viewport.camera.zoom, ZOOM_STEPS[0]);
+    app.st.viewport.zoom_steps_centered(-1);
+    assert_eq!(app.st.viewport.camera.zoom, ZOOM_STEPS[0], "no step below");
 }

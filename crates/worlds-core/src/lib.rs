@@ -15,15 +15,20 @@
 //! [`Project::apply`], which returns the exact inverse and the changes;
 //! [`command::History`] builds undo and redo on that.
 
+pub mod assembly;
 pub mod autosave;
 pub mod command;
 pub mod export;
+pub mod find;
 pub mod format;
+pub mod fragment;
 pub mod id;
 pub mod ldtk;
+pub mod merge;
 pub mod model;
 pub mod schema;
 pub mod text;
+pub mod transform;
 pub mod validate;
 
 pub use command::{Applied, Change, Command, CommandError, History};

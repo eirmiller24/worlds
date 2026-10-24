@@ -44,6 +44,21 @@
 //! selects entities (the Inspector shows them; [`SelectStep`]) and opens the
 //! Types pane ([`TypesStep`]). Each `ui` kind refuses unknown keys.
 //!
+//! ```json
+//! { "ui": "reference", "add": "sketches/crevasse.png", "level": "crevasse", "opacity": 0.6 }
+//! { "ui": "history", "expand": true }
+//! ```
+//!
+//! adds a reference image as "Add reference image…" does
+//! ([`ReferenceStep`]) and shows the History pane ([`HistoryStep`]).
+//!
+//! ```json
+//! { "ui": "levels", "search": "forest", "sort": "name", "all_worlds": true, "select": "crevasse" }
+//! ```
+//!
+//! shows the Levels pane with that search and sort and clicks a level
+//! ([`LevelsStep`]).
+//!
 //! An `entity` gesture places with the entity tool: `type` and `fields` set
 //! the brush first, `ctrl` holds Ctrl (pixel placement), `shift` resizes,
 //! `alt` samples:
@@ -70,6 +85,15 @@
 //! in the middle of each cell. `shift` and `alt` are held throughout.
 //! `handle` (`[-1..1, -1..1]`, the edges that move) makes a select gesture
 //! a resize instead of a move.
+//!
+//! A `vertex` gesture edits one annotation's geometry with the Select
+//! tool's handles ([`VertexStep`]):
+//!
+//! ```json
+//! { "gesture": "vertex", "note": "pathcrev22", "vertex": 1, "world_px": [[300, 96]] }
+//! { "gesture": "vertex", "note": "pathcrev22", "insert": [150, 64] }
+//! { "gesture": "vertex", "note": "pathcrev22", "vertex": 1, "delete": true }
+//! ```
 
 use std::path::Path;
 
@@ -94,6 +118,40 @@ pub enum ScriptStep {
         redo: bool,
         n: usize,
     },
+    /// `{ "gesture": "vertex", "note": id, ... }`: the Select tool on one
+    /// annotation's geometry handles.
+    Vertex(VertexStep),
+}
+
+/// The Select tool's geometry handles on one annotation, through the same
+/// press and drag as the mouse (`note` becomes the selection first):
+///
+/// - `"vertex": i` (a point of a path, guide or polygon, a connector's
+///   waypoint) or `"handle": [ex, ey]` (a rect region's corner or edge,
+///   `-1..1` per axis) with `world_px`: pressed on that handle and dragged
+///   through the points, released at the last (one `update_note`);
+/// - the same with `"delete": true` and no `world_px`: the handle clicked
+///   (highlighted), then the Delete key;
+/// - `"insert": [x, y]`: an Alt+click there, on a segment, adds a point.
+///
+/// `ctrl` holds Ctrl (pixels instead of half the project grid).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VertexStep {
+    pub gesture: String,
+    pub note: String,
+    #[serde(default)]
+    pub vertex: Option<usize>,
+    #[serde(default)]
+    pub handle: Option<[i8; 2]>,
+    #[serde(default)]
+    pub world_px: Vec<[f64; 2]>,
+    #[serde(default)]
+    pub insert: Option<[f64; 2]>,
+    #[serde(default)]
+    pub delete: bool,
+    #[serde(default)]
+    pub ctrl: bool,
 }
 
 /// The Note tool (or the Measure tool) through the real path, in world px:
@@ -106,7 +164,9 @@ pub enum ScriptStep {
 pub struct NoteGestureStep {
     /// `note` or `measure`.
     pub gesture: String,
-    /// `note`, `pin`, `path` or `region` (Note tool; default `note`).
+    /// `note`, `pin`, `path`, `region` or `connector` (Note tool; default
+    /// `note`). A connector is a click per point (the first on a room or
+    /// entity, then waypoints and the other end), then `end`.
     #[serde(default)]
     pub kind: Option<String>,
     pub world_px: Vec<[f64; 2]>,
@@ -130,6 +190,10 @@ pub struct NoteGestureStep {
     /// `"escape"` or `"none"` (left in progress).
     #[serde(default)]
     pub end: Option<String>,
+    /// The clicks (indexes into `world_px`) made with Shift held: a
+    /// connector's waypoint even on a room or entity.
+    #[serde(default)]
+    pub shift: Vec<usize>,
 }
 
 /// A Select press and drag in world px, exactly as the mouse does it
@@ -175,6 +239,309 @@ pub enum UiStep {
     /// `"ui": "project"`: the Project pane (layers, tilesets, settings),
     /// and its + Layer and + Tileset buttons.
     Project(ProjectStep),
+    /// `"ui": "copy"`: Ctrl+C on the selection and the grid marquee.
+    Copy(CopyStep),
+    /// `"ui": "cut"`: Ctrl+X.
+    Cut(CopyStep),
+    /// `"ui": "paste"`: Ctrl+V (the ghost, pinned where the step says, and
+    /// optionally placed) or Ctrl+Shift+V.
+    Paste(PasteStep),
+    /// `"ui": "find"`: the Find pane with a query, optionally Select all
+    /// and Replace.
+    Find(FindStep),
+    /// `"ui": "history"`: the History pane in front, its agent batches
+    /// expanded, a jump.
+    History(HistoryStep),
+    /// `"ui": "reference"`: "Add reference image…" with a given PNG.
+    Reference(ReferenceStep),
+    /// `"ui": "import_project"`: the Import from Worlds project dialog.
+    ImportProject(Box<ImportStep>),
+    /// `"ui": "viewport"`: open, close, focus or link map tabs.
+    Viewport(ViewportStep),
+    /// `"ui": "bookmark"`: save or jump to a camera bookmark.
+    Bookmark(BookmarkStep),
+    /// `"ui": "turn"`: the X, Y and R keys (turn the paste ghost or the
+    /// tile stamp).
+    Turn(TurnStep),
+    /// `"ui": "transform"`: Mirror X, Mirror Y or Rotate 90 on the
+    /// selection.
+    Transform(TransformStep),
+    /// `"ui": "arrange"`: align, distribute or butt together levels.
+    Arrange(ArrangeStep),
+    /// `"ui": "save_assembly"`: the "Save selection as assembly…" dialog.
+    SaveAssembly(SaveAssemblyStep),
+    /// `"ui": "library"`: the Palette's Library, and arming an assembly.
+    Library(LibraryStep),
+    /// `"ui": "levels"`: the Levels pane with a search, a sort, every
+    /// world, a click on a level.
+    Levels(LevelsStep),
+    /// `"ui": "preferences"`: the Preferences window, searched, optionally
+    /// waiting for a key.
+    Preferences(PreferencesStep),
+}
+
+/// `{ "ui": "import_project", "source": dir, "selection"?, "policy"?,
+/// "search"?, "apply"?: bool }`: the Import from Worlds project dialog on
+/// the project in `source` (relative to the current directory), with the
+/// `selection` and `policy` of `project.import_plan` and the search text,
+/// so a `--screenshot` shows it; `apply: true` then clicks Apply (one
+/// entry, `Import from <name>`; the plan's files are copied first). A
+/// source that doesn't load, this project itself, a refused plan or
+/// nothing to apply is an error.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportStep {
+    pub source: std::path::PathBuf,
+    #[serde(default)]
+    pub selection: Option<worlds_core::merge::Selection>,
+    #[serde(default)]
+    pub policy: Option<worlds_core::merge::Policy>,
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub apply: bool,
+}
+
+/// `{ "ui": "levels", "search"?: text, "sort"?: "order" | "name" |
+/// "position", "all_worlds"?: bool, "select"?: slug, "frame"?: slug }`: the
+/// Levels pane in front with that search (default none), sort (default
+/// order) and world grouping (default the focused map tab's world only);
+/// `select` clicks that level's row (it becomes active and selected),
+/// `frame` double clicks it (selects it and frames it in the focused map
+/// tab). An unknown sort or level is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LevelsStep {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub all_worlds: Option<bool>,
+    #[serde(default)]
+    pub select: Option<String>,
+    #[serde(default)]
+    pub frame: Option<String>,
+}
+
+/// `{ "ui": "preferences", "search"?: text, "capture"?: id }`: open the
+/// Preferences window with that search text, and with `capture` start a
+/// Rebind of that command (the window then waits for a key), so a
+/// `--screenshot` shows it. An unknown command id is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreferencesStep {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub capture: Option<String>,
+}
+
+/// `{ "ui": "find", "query": "...", "kind"?: "all" | "entities" |
+/// "levels" | "notes" | "tiles", "select_all"?: true, "replace"?: {
+/// "field", "value" } }`: the Find pane in front with that query (and
+/// kind, default all) and its results. `select_all` presses Select all;
+/// `replace` presses Replace with that field and value text (one entry).
+/// A query that doesn't parse, or that the kind doesn't take, is an error;
+/// so are Select all with no result and a refused Replace.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindStep {
+    pub query: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub select_all: bool,
+    #[serde(default)]
+    pub replace: Option<ReplaceStep>,
+}
+
+/// `"replace": { "field": slug, "value": text }` of a [`FindStep`].
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaceStep {
+    pub field: String,
+    pub value: String,
+}
+
+/// `{ "ui": "viewport", "open"?: { "world"? }, "focus"?: id, "close"?: id,
+/// "link"?: [a, b] }`, applied in that order: `open` adds a map tab beside
+/// the focused one (on `world`, default the focused tab's), fitted, and
+/// focuses it; `focus` makes tab `id` the one later steps act in; `link`
+/// links two tabs' cameras (`[]` unlinks).
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewportStep {
+    #[serde(default)]
+    pub open: Option<OpenViewport>,
+    #[serde(default)]
+    pub focus: Option<u32>,
+    #[serde(default)]
+    pub close: Option<u32>,
+    #[serde(default)]
+    pub link: Option<Vec<u32>>,
+}
+
+/// A viewport step's `open`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenViewport {
+    #[serde(default)]
+    pub world: Option<String>,
+}
+
+/// `{ "ui": "bookmark", "save"?: name, "jump"?: name }`: save the focused
+/// tab's view (world, camera) as `save`, then show bookmark `jump` in it.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BookmarkStep {
+    #[serde(default)]
+    pub save: Option<String>,
+    #[serde(default)]
+    pub jump: Option<String>,
+}
+
+/// `{ "ui": "turn", "keys": "xyr" }`: press X, Y and R in that order, as
+/// on the map: with a paste ghost (or an assembly) armed they turn it,
+/// else on a tiles layer in a Paint mode they turn the tile stamp. A key
+/// that can't turn anything (or a rotation of tiles that aren't square) is
+/// an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnStep {
+    pub keys: String,
+}
+
+/// `{ "ui": "transform", "op": "mirror_x" | "mirror_y" | "rotate_90" }`:
+/// the selection transform of the command palette and the context menu
+/// ([`crate::arrange::plan_transform`]); one entry.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransformStep {
+    pub op: worlds_core::transform::TransformOp,
+}
+
+/// `{ "ui": "arrange", "op": "align_left" | ..., "levels"?: [slugs] }`:
+/// select `levels` (when given), then arrange the selected levels
+/// ([`crate::arrange::plan_arrange`]); one entry.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArrangeStep {
+    pub op: worlds_core::transform::ArrangeOp,
+    #[serde(default)]
+    pub levels: Option<Vec<String>>,
+}
+
+/// `{ "ui": "save_assembly", "slug", "name", "category"?, "tags"?, "doc"?,
+/// "replace"?, "open"? }`: Ctrl+Shift+S on the selection, the dialog's
+/// fields, then Save (one entry). With `"open": true` the dialog is left
+/// open, filled in, for the picture.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaveAssemblyStep {
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub doc: Option<String>,
+    #[serde(default)]
+    pub replace: bool,
+    #[serde(default)]
+    pub open: bool,
+}
+
+/// `{ "ui": "library", "search"?, "favorites"?, "collapsed"?, "arm"?: slug,
+/// "level"?, "origin"?, "place"? }`: the Palette pane on its Library with
+/// that state; `arm` clicks an assembly (its ghost is armed), `level` and
+/// `origin` pin the ghost there (its top-left corner, cells of the project
+/// grid), `place: true` then lands it as a click does.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryStep {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub favorites: Option<Vec<String>>,
+    #[serde(default)]
+    pub collapsed: Option<Vec<String>>,
+    #[serde(default)]
+    pub arm: Option<String>,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub origin: Option<[i64; 2]>,
+    #[serde(default)]
+    pub place: bool,
+}
+
+/// `{ "ui": "copy" }` / `{ "ui": "cut" }`: the key, exactly as pressed
+/// ([`crate::clipboard::copy_selection`]); the fragment becomes the
+/// editor's clipboard. Nothing to copy is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopyStep {}
+
+/// `{ "ui": "paste", "fragment"?: {...}, "level"?: slug, "origin"?: [x, y],
+/// "place"?: bool, "in_place"?: bool }`: Ctrl+V with `fragment` (default:
+/// the editor's clipboard, from the last copy). The ghost is armed and,
+/// with `level` and `origin` (the fragment's top-left corner in cells of
+/// the project grid), pinned there so the picture shows it; `place: true`
+/// then lands it as a click does. `in_place: true` is Ctrl+Shift+V instead.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PasteStep {
+    #[serde(default)]
+    pub fragment: Option<serde_json::Value>,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub origin: Option<[i64; 2]>,
+    #[serde(default)]
+    pub place: bool,
+    #[serde(default)]
+    pub in_place: bool,
+}
+
+/// `{ "ui": "history", "expand"?: true, "jump"?: n }`: the History pane in
+/// front; `expand` opens every agent batch's list of writes; `jump` undoes
+/// or redoes until `n` entries are done, as clicking an entry does (`0`:
+/// the "Opened" row). A `jump` past the history's length is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryStep {
+    #[serde(default)]
+    pub expand: bool,
+    #[serde(default)]
+    pub jump: Option<usize>,
+}
+
+/// `{ "ui": "reference", "add": path, "level"?: slug, "world"?: slug,
+/// "px"?: [x, y], "scale"?, "opacity"?, "locked"? }`: what "Add reference
+/// image…" does with that PNG (relative to the current directory; an image
+/// outside the project is copied into `art/`): one `add_reference` entry at
+/// the level (default: the active level, else the world) with its corner at
+/// `px` (default the level's corner), opacity 0.5 unless given; the new
+/// reference is selected, the References pseudo-layer active and the
+/// Inspector in front. An image that doesn't read is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceStep {
+    pub add: String,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub world: Option<String>,
+    #[serde(default)]
+    pub px: Option<[i64; 2]>,
+    #[serde(default)]
+    pub scale: Option<f64>,
+    #[serde(default)]
+    pub opacity: Option<f64>,
+    #[serde(default)]
+    pub locked: bool,
 }
 
 /// `{ "ui": "project", "add_layer"?: kind, "add_tileset"?: path,
@@ -274,7 +641,8 @@ pub struct NotesStep {
 }
 
 /// `{ "ui": "focus", "level" | "world_rect": [x, y, w, h] | "note" }`
-/// (exactly one): frame it as `view.focus` does.
+/// (exactly one): frame it as `view.focus` does. `world` alone shows that
+/// world, fitted; with `world_rect` it says which world the rect is in.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FocusStep {
@@ -284,6 +652,11 @@ pub struct FocusStep {
     pub world_rect: Option<[i64; 4]>,
     #[serde(default)]
     pub note: Option<String>,
+    #[serde(default)]
+    pub world: Option<String>,
+    /// The map tab to frame it in (default: the focused one).
+    #[serde(default)]
+    pub viewport: Option<u32>,
 }
 
 /// `"tiles"` of a select step: stacks of one tiles layer of one level.
@@ -461,16 +834,45 @@ pub struct GestureStep {
 ///   remove overrides);
 /// - `"suppress"`: on a derived layer, override to empty (`"!"`);
 /// - `{ "tileset": "castle_main", "tile": [col, row] }`: one atlas tile;
-/// - `{ "tileset": "castle_main", "rect": [col, row, w, h] }`: a stamp.
+/// - `{ "tileset": "castle_main", "rect": [col, row, w, h] }`: a stamp;
+/// - `{ "tileset": "castle_main", "tiles": [alternatives] }`: a random
+///   brush, the alternatives in the forms of a rule's `out.tiles`.
+///
+/// A tile form may add `"density": 1..100` (the Paint strip's density)
+/// and `"seed": n` (a fixed seed for the stroke's randomness, so a test
+/// gets the same picks every run): a [`ScriptBrush::Scatter`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptBrush {
     Value(String),
     Erase,
     Suppress,
-    Tiles { tileset: String, rect: [u32; 4] },
+    Tiles {
+        tileset: String,
+        rect: [u32; 4],
+    },
+    Random {
+        tileset: String,
+        alternatives: Vec<worlds_core::TileAlt>,
+    },
+    /// A tile form with `density` and/or `seed`.
+    Scatter {
+        brush: Box<ScriptBrush>,
+        density: Option<u8>,
+        seed: Option<u64>,
+    },
 }
 
-const BRUSH_FORMS: &str = r#"a value slug, "erase", "suppress", {"tileset", "tile": [c, r]} or {"tileset", "rect": [c, r, w, h]}"#;
+impl ScriptBrush {
+    /// The `density` and `seed` a tile form gave.
+    pub fn scatter(&self) -> (Option<u8>, Option<u64>) {
+        match self {
+            ScriptBrush::Scatter { density, seed, .. } => (*density, *seed),
+            _ => (None, None),
+        }
+    }
+}
+
+const BRUSH_FORMS: &str = r#"a value slug, "erase", "suppress", {"tileset", "tile": [c, r]}, {"tileset", "rect": [c, r, w, h]} or {"tileset", "tiles": [alternatives]}, the last three with "density"? and "seed"?"#;
 
 impl<'de> Deserialize<'de> for ScriptBrush {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
@@ -483,6 +885,12 @@ impl<'de> Deserialize<'de> for ScriptBrush {
             tile: Option<[u32; 2]>,
             #[serde(default)]
             rect: Option<[u32; 4]>,
+            #[serde(default)]
+            tiles: Option<Vec<serde_json::Value>>,
+            #[serde(default)]
+            density: Option<u8>,
+            #[serde(default)]
+            seed: Option<u64>,
         }
         #[derive(Deserialize)]
         #[serde(untagged)]
@@ -497,23 +905,62 @@ impl<'de> Deserialize<'de> for ScriptBrush {
             Wire::Name(s) if s == "suppress" => Ok(ScriptBrush::Suppress),
             Wire::Name(s) => Ok(ScriptBrush::Value(s)),
             Wire::Tiles(t) => {
-                let rect = match (t.tile, t.rect) {
-                    (Some([c, r]), None) => [c, r, 1, 1],
-                    (None, Some(r)) if r[2] > 0 && r[3] > 0 => r,
-                    (None, Some(_)) => {
+                let rect = match (t.tile, t.rect, &t.tiles) {
+                    (Some([c, r]), None, None) => [c, r, 1, 1],
+                    (None, Some(r), None) if r[2] > 0 && r[3] > 0 => r,
+                    (None, Some(_), None) => {
                         return Err(D::Error::custom(
                             "brush: rect width and height must be at least 1",
                         ));
                     }
+                    (None, None, Some(_)) => [0, 0, 0, 0],
                     _ => {
                         return Err(D::Error::custom(
-                            "brush: give exactly one of `tile` and `rect`",
+                            "brush: give exactly one of `tile`, `rect` and `tiles`",
                         ));
                     }
                 };
-                Ok(ScriptBrush::Tiles {
-                    tileset: t.tileset,
-                    rect,
+                let brush = match t.tiles {
+                    Some(alts) => {
+                        if alts.is_empty() {
+                            return Err(D::Error::custom(
+                                "brush: `tiles` needs at least one alternative",
+                            ));
+                        }
+                        let alternatives = alts
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                serde_json::from_value::<worlds_core::TileAlt>(v).map_err(|e| {
+                                    D::Error::custom(format!("brush: tiles[{i}]: {e}"))
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        ScriptBrush::Random {
+                            tileset: t.tileset,
+                            alternatives,
+                        }
+                    }
+                    None => ScriptBrush::Tiles {
+                        tileset: t.tileset,
+                        rect,
+                    },
+                };
+                if let Some(d) = t.density
+                    && !(1..=100).contains(&d)
+                {
+                    return Err(D::Error::custom(format!(
+                        "brush: density {d} must be 1 to 100"
+                    )));
+                }
+                Ok(if t.density.is_some() || t.seed.is_some() {
+                    ScriptBrush::Scatter {
+                        brush: Box::new(brush),
+                        density: t.density,
+                        seed: t.seed,
+                    }
+                } else {
+                    brush
                 })
             }
         }
@@ -564,12 +1011,29 @@ pub fn resolve_brush(doc: &Document, layer: usize, b: &ScriptBrush) -> anyhow::R
                 rect: *rect,
             })
         }
+        (
+            ScriptBrush::Random {
+                tileset,
+                alternatives,
+            },
+            LayerKind::Tiles(_),
+        ) => {
+            let ts = doc
+                .project
+                .tileset(tileset)
+                .with_context(|| format!("no tileset {tileset:?}"))?;
+            Ok(Brush::Random {
+                tileset: ts.slug.clone(),
+                alternatives: alternatives.clone(),
+            })
+        }
+        (ScriptBrush::Scatter { brush, .. }, _) => resolve_brush(doc, layer, brush),
         (ScriptBrush::Value(_), _) => bail!(
             "layer {} is a {} layer: a value brush needs an int_grid layer",
             def.slug,
             def.kind.name()
         ),
-        (ScriptBrush::Tiles { .. }, _) => bail!(
+        (ScriptBrush::Tiles { .. } | ScriptBrush::Random { .. }, _) => bail!(
             "layer {} is a {} layer: a tile brush needs a tiles layer",
             def.slug,
             def.kind.name()
@@ -592,6 +1056,9 @@ pub struct GesturePlan {
     /// Entity gestures: the entity brush to set first, if the step gave a
     /// type or fields.
     pub entity_brush: Option<crate::tools::EntityBrush>,
+    /// The brush's `density` and `seed`, to set first if given.
+    pub density: Option<u8>,
+    pub seed: Option<u64>,
 }
 
 /// Parse a script: an item with a `gesture` key is a gesture, anything
@@ -614,6 +1081,7 @@ fn parse_step(v: serde_json::Value) -> anyhow::Result<ScriptStep> {
     if let Some(g) = gesture {
         return Ok(match g.as_str() {
             "note" | "measure" => ScriptStep::NoteGesture(serde_json::from_value(v)?),
+            "vertex" => ScriptStep::Vertex(serde_json::from_value(v)?),
             "select" if v.get("world_px").is_some() => {
                 let s: WorldSelectStep = serde_json::from_value(v)?;
                 if !s.press {
@@ -650,6 +1118,10 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<ScriptStep>> {
 }
 
 pub fn parse_tool(s: &str) -> Option<Tool> {
+    // Shape has no key and isn't in `Tool::ALL`.
+    if s.eq_ignore_ascii_case("shape") {
+        return Some(Tool::Shape);
+    }
     Tool::ALL.into_iter().find(|t| {
         t.name().eq_ignore_ascii_case(s) || (s.eq_ignore_ascii_case("rect") && *t == Tool::Rect)
     })
@@ -658,13 +1130,13 @@ pub fn parse_tool(s: &str) -> Option<Tool> {
 /// The pointer over cell `cell` of project layer `layer` in level `ix`.
 pub fn cell_hit(doc: &Document, ix: LevelIx, layer: usize, cell: [i32; 2]) -> CellHit {
     let level = doc.level(ix);
-    let (g, size) = crate::tools::hit_grid(doc, layer, ix);
+    let (g, _) = crate::tools::hit_grid(doc, layer, ix);
     let g = g as f64;
     CellHit {
         level: ix,
         layer,
         cell,
-        inside: crate::tools::in_layer(cell, size),
+        inside: crate::tools::cell_in_level(doc, layer, ix, cell),
         world_px: [
             level.world_px[0] as f64 + (cell[0] as f64 + 0.5) * g,
             level.world_px[1] as f64 + (cell[1] as f64 + 0.5) * g,
@@ -686,7 +1158,7 @@ pub fn world_hit(doc: &Document, ix: LevelIx, layer: usize, wp: [f64; 2]) -> Cel
         };
     }
     let level = doc.level(ix);
-    let (g, size) = crate::tools::hit_grid(doc, layer, ix);
+    let (g, _) = crate::tools::hit_grid(doc, layer, ix);
     let g = g as f64;
     let cell = [
         ((wp[0] - level.world_px[0] as f64) / g).floor() as i32,
@@ -696,7 +1168,7 @@ pub fn world_hit(doc: &Document, ix: LevelIx, layer: usize, wp: [f64; 2]) -> Cel
         level: ix,
         layer,
         cell,
-        inside: crate::tools::in_layer(cell, size),
+        inside: crate::tools::cell_in_level(doc, layer, ix, cell),
         world_px: wp,
     }
 }
@@ -729,10 +1201,15 @@ pub fn gesture_events(
             .context("the project has no entities layer")?,
         // Select works with no layer at all, in project cells.
         None if tool == Tool::Select && doc.project.layers.is_empty() => crate::tools::NO_LAYER,
+        // Shape always works in cells of the project grid.
+        None if tool == Tool::Shape => crate::tools::NO_LAYER,
         None => active_layer.unwrap_or(0),
     };
     if layer >= doc.project.layers.len() && layer != crate::tools::NO_LAYER {
         bail!("the project has no layers");
+    }
+    if tool == Tool::Shape && step.layer.is_some() {
+        bail!("a shape gesture works in cells of the project grid: leave out `layer`");
     }
     if layer == crate::tools::NO_LAYER && step.brush.is_some() {
         bail!("`brush` needs a layer");
@@ -798,12 +1275,18 @@ pub fn gesture_events(
             modifiers,
         }
     });
+    let (density, seed) = step
+        .brush
+        .as_ref()
+        .map_or((None, None), ScriptBrush::scatter);
     Ok(GesturePlan {
         events,
         level: ix,
         layer,
         brush,
         entity_brush,
+        density,
+        seed,
     })
 }
 
@@ -963,6 +1446,67 @@ mod tests {
         assert!(UiStep::rule("main_tiling", None).is_err());
         let e = parse(r#"[{ "op": "paint_cels" }]"#).unwrap_err();
         assert!(format!("{e:#}").contains("item 0"), "{e:#}");
+    }
+
+    #[test]
+    fn random_and_scatter_brush_forms() {
+        let brush = |b: &str| -> anyhow::Result<Option<ScriptBrush>> {
+            let s = parse(&format!(
+                r#"[{{ "gesture": "brush", "level": "a", "path": [[0, 0]], "brush": {b} }}]"#
+            ))?;
+            match s.into_iter().next() {
+                Some(ScriptStep::Gesture(g)) => Ok(g.brush),
+                _ => panic!(),
+            }
+        };
+        let alts = |v: &str| -> Vec<worlds_core::TileAlt> { serde_json::from_str(v).unwrap() };
+        let random = brush(
+            r#"{ "tileset": "t", "tiles": [[1, 2], [0, 0, 2, 2], { "rect": [3, 3, 1, 1], "weight": 4 }, { "stack": [[5, 5], [4, 4]] }] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            random,
+            Some(ScriptBrush::Random {
+                tileset: "t".into(),
+                alternatives: alts(
+                    r#"[[1, 2], [0, 0, 2, 2], { "rect": [3, 3, 1, 1], "weight": 4 }, { "stack": [[5, 5], [4, 4]] }]"#
+                ),
+            })
+        );
+        assert_eq!(random.unwrap().scatter(), (None, None));
+        let s = brush(r#"{ "tileset": "t", "tile": [1, 1], "density": 25, "seed": 9 }"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.scatter(), (Some(25), Some(9)));
+        assert!(matches!(&s, ScriptBrush::Scatter { brush, .. }
+            if **brush == ScriptBrush::Tiles { tileset: "t".into(), rect: [1, 1, 1, 1] }));
+        // Existing forms are unchanged.
+        assert_eq!(
+            brush(r#"{ "tileset": "t", "rect": [0, 0, 2, 1] }"#).unwrap(),
+            Some(ScriptBrush::Tiles {
+                tileset: "t".into(),
+                rect: [0, 0, 2, 1]
+            })
+        );
+        for (bad, says) in [
+            (r#"{ "tileset": "t", "tiles": [] }"#, "at least one"),
+            (r#"{ "tileset": "t", "tiles": [[1]] }"#, "tiles[0]"),
+            (
+                r#"{ "tileset": "t", "tiles": [[1, 1]], "tile": [0, 0] }"#,
+                "exactly one",
+            ),
+            (
+                r#"{ "tileset": "t", "tile": [0, 0], "density": 0 }"#,
+                "density",
+            ),
+            (
+                r#"{ "tileset": "t", "tile": [0, 0], "density": 101 }"#,
+                "density",
+            ),
+        ] {
+            let e = brush(bad).unwrap_err();
+            assert!(format!("{e:#}").contains(says), "{bad}: {e:#}");
+        }
     }
 
     #[test]

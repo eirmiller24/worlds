@@ -39,6 +39,89 @@
       },
       "type": "object"
     },
+    "ObjectGroup": {
+      "additionalProperties": false,
+      "description": "One entry of `level.json` `groups`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": "Unique among the level's groups."
+        },
+        "members": {
+          "description": "Entity and level annotation ids, in the order they were added.",
+          "items": {
+            "$ref": "#/$defs/Id"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "members"
+      ],
+      "type": "object"
+    },
+    "Rect": {
+      "description": "[x, y, width, height] in cells.",
+      "items": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxItems": 4,
+      "minItems": 4,
+      "type": "array"
+    },
+    "Reference": {
+      "additionalProperties": false,
+      "description": "One entry of `references` in `level.json` or `world.json`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "image": {
+          "description": "Path to the PNG, relative to the project directory,\n`/`-separated, like a tileset's `image`.",
+          "type": "string"
+        },
+        "locked": {
+          "description": "The editor's tools don't move or scale it. Default false.",
+          "type": "boolean"
+        },
+        "opacity": {
+          "description": "0 (invisible) to 1 (opaque). Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "px": {
+          "description": "Top-left corner in pixels: level pixels in `level.json`, world\npixels in `world.json`.",
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "scale": {
+          "description": "Drawn size over the image's own size in pixels. Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "visible": {
+          "description": "Drawn at all. Default true.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "image",
+        "px"
+      ],
+      "type": "object"
+    },
     "Slug": {
       "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
       "pattern": "^[a-z][a-z0-9_]*$",
@@ -80,6 +163,13 @@
       "const": 1,
       "description": "File format version."
     },
+    "groups": {
+      "description": "Object groups: named sets of the level's entities and annotations\nthat select and move together. Editor organisation; never exported.",
+      "items": {
+        "$ref": "#/$defs/ObjectGroup"
+      },
+      "type": "array"
+    },
     "id": {
       "$ref": "#/$defs/Id"
     },
@@ -95,6 +185,13 @@
     },
     "name": {
       "type": "string"
+    },
+    "references": {
+      "description": "Reference images under the layer stack (level pixels), bottom\nfirst. Never exported.",
+      "items": {
+        "$ref": "#/$defs/Reference"
+      },
+      "type": "array"
     },
     "size": {
       "description": "`[width, height]` in cells of the project grid. Layers with their own\ngrid size cover the same pixels.",
@@ -112,9 +209,16 @@
       "description": "Same as the directory name; also the Godot room name."
     },
     "tags": {
-      "description": "Free tags (`knowledge`), the same vocabulary as annotation tags.\nNon-empty, no repeats (validation).",
+      "description": "Free tags (`forest`), the same vocabulary as annotation tags.\nNon-empty, no repeats (validation).",
       "items": {
         "type": "string"
+      },
+      "type": "array"
+    },
+    "void": {
+      "description": "Rectangles `[x, y, w, h]` in cells of the project grid cut out of the\nlevel's box: a cell is in the level when it is inside `size` and in\nno void rect. Empty for a rectangular level.",
+      "items": {
+        "$ref": "#/$defs/Rect"
       },
       "type": "array"
     },

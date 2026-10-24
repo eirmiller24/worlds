@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 /// Zoom levels the wheel steps through (physical px per world px). Above 1
 /// they are integers, so pixel art is never resampled unevenly.
 pub const ZOOM_STEPS: &[f64] = &[
+    1.0 / 256.0,
+    1.0 / 128.0,
     1.0 / 64.0,
     1.0 / 48.0,
     1.0 / 32.0,
@@ -35,6 +37,10 @@ pub const ZOOM_STEPS: &[f64] = &[
     12.0,
     16.0,
 ];
+
+/// The smallest zoom a fit may pick below [`ZOOM_STEPS`]: a world a
+/// million times wider than the viewport still fits.
+pub const MIN_ZOOM: f64 = 1e-6;
 
 /// A 2D axis-aligned rectangle in world pixels (or any f64 space).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -125,6 +131,27 @@ impl Default for Camera {
 }
 
 impl Camera {
+    /// A camera at `zoom` with world point `center` in the middle of a
+    /// viewport of `size` physical px.
+    pub fn centered(center: [f64; 2], zoom: f64, size: [f64; 2]) -> Camera {
+        let zoom = zoom.max(MIN_ZOOM);
+        Camera {
+            origin: [
+                center[0] - size[0] * 0.5 / zoom,
+                center[1] - size[1] * 0.5 / zoom,
+            ],
+            zoom,
+        }
+    }
+
+    /// The world point in the middle of a viewport of `size` physical px.
+    pub fn center(&self, size: [f64; 2]) -> [f64; 2] {
+        [
+            self.origin[0] + size[0] * 0.5 / self.zoom,
+            self.origin[1] + size[1] * 0.5 / self.zoom,
+        ]
+    }
+
     pub fn world_to_screen(&self, w: [f64; 2]) -> [f64; 2] {
         [
             (w[0] - self.origin[0]) * self.zoom,
@@ -174,10 +201,12 @@ impl Camera {
         self.origin[1] -= delta[1] / self.zoom;
     }
 
-    /// Set the zoom, keeping the world point under screen point `anchor` fixed.
+    /// Set the zoom, keeping the world point under screen point `anchor`
+    /// fixed. Off-grid zooms are kept (down to [`MIN_ZOOM`]): only a fit
+    /// makes one, and the wheel steps back onto the grid from there.
     pub fn zoom_at(&mut self, anchor: [f64; 2], zoom: f64) {
         let w = self.screen_to_world(anchor);
-        self.zoom = zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
+        self.zoom = zoom.clamp(MIN_ZOOM, ZOOM_STEPS[ZOOM_STEPS.len() - 1]);
         self.origin = [w[0] - anchor[0] / self.zoom, w[1] - anchor[1] / self.zoom];
     }
 
@@ -190,7 +219,9 @@ impl Camera {
     }
 
     /// Frame `rect` in a viewport of `size` physical px with `margin` px
-    /// around it, at the largest zoom step that fits, centered.
+    /// around it, at the largest zoom step that fits, centered. A rect too
+    /// big for the smallest step gets the exact zoom that fits it (an
+    /// off-grid zoom, at least [`MIN_ZOOM`]).
     pub fn fit(&mut self, rect: WRect, size: [f64; 2], margin: f64) {
         if rect.is_empty() || size[0] <= 0.0 || size[1] <= 0.0 {
             return;
@@ -200,7 +231,11 @@ impl Camera {
             (size[1] - 2.0 * margin).max(1.0),
         ];
         let z = (avail[0] / rect.width()).min(avail[1] / rect.height());
-        self.zoom = snap_down(z);
+        self.zoom = if z < ZOOM_STEPS[0] {
+            z.max(MIN_ZOOM)
+        } else {
+            snap_down(z)
+        };
         let c = rect.center();
         self.origin = [
             c[0] - size[0] * 0.5 / self.zoom,
@@ -219,9 +254,14 @@ pub fn snap_down(z: f64) -> f64 {
         .unwrap_or(ZOOM_STEPS[0])
 }
 
-/// The zoom `steps` notches away from `z`.
+/// The zoom `steps` notches away from `z`. From an off-grid zoom the first
+/// notch lands on the nearest step in that direction; zooming out below
+/// the smallest step (only a fit gets there) keeps the zoom.
 pub fn step_zoom(z: f64, steps: i32) -> f64 {
     let eps = 1e-9;
+    if steps < 0 && z < ZOOM_STEPS[0] * (1.0 - eps) {
+        return z;
+    }
     let mut i = if steps > 0 {
         // Last step <= z: one notch in from there.
         ZOOM_STEPS
@@ -237,6 +277,18 @@ pub fn step_zoom(z: f64, steps: i32) -> f64 {
     };
     i += steps as i64;
     ZOOM_STEPS[i.clamp(0, ZOOM_STEPS.len() as i64 - 1) as usize]
+}
+
+/// The zoom as the status bar shows it: whole percents from 10 %, then
+/// two significant digits (1/64 is "1.6%", 1/256 "0.39%").
+pub fn zoom_label(z: f64) -> String {
+    let pct = z * 100.0;
+    if pct >= 9.95 {
+        format!("{pct:.0}%")
+    } else {
+        let digits = (1 - pct.log10().floor() as i32).max(0) as usize;
+        format!("{pct:.digits$}%")
+    }
 }
 
 #[cfg(test)]
@@ -284,7 +336,65 @@ mod tests {
         assert_eq!(step_zoom(2.5, -1), 2.0);
         // Clamped at both ends.
         assert_eq!(step_zoom(16.0, 5), 16.0);
-        assert_eq!(step_zoom(1e-9, -3), ZOOM_STEPS[0]);
+        assert_eq!(step_zoom(ZOOM_STEPS[0], -3), ZOOM_STEPS[0]);
+        assert_eq!(ZOOM_STEPS[0], 1.0 / 256.0);
+        assert_eq!(ZOOM_STEPS[1], 1.0 / 128.0);
+    }
+
+    #[test]
+    fn zoom_labels() {
+        assert_eq!(zoom_label(1.0), "100%");
+        assert_eq!(zoom_label(2.0 / 3.0), "67%");
+        assert_eq!(zoom_label(1.0 / 8.0), "12%");
+        assert_eq!(zoom_label(1.0 / 16.0), "6.2%");
+        assert_eq!(zoom_label(1.0 / 64.0), "1.6%");
+        assert_eq!(zoom_label(1.0 / 256.0), "0.39%");
+        assert_eq!(zoom_label(1e-5), "0.0010%");
+    }
+
+    #[test]
+    fn below_the_smallest_step() {
+        // In from an off-grid zoom: the smallest step, then on up the table.
+        let z = 1.0 / 1000.0;
+        assert_eq!(step_zoom(z, 1), 1.0 / 256.0);
+        assert_eq!(step_zoom(z, 2), 1.0 / 128.0);
+        // Out: there is no step below, so the zoom stays.
+        assert_eq!(step_zoom(z, -1), z);
+        let mut cam = Camera {
+            origin: [0.0, 0.0],
+            zoom: z,
+        };
+        let anchor = [400.0, 300.0];
+        let before = cam.screen_to_world(anchor);
+        cam.zoom_steps(anchor, -1);
+        assert_eq!(cam.zoom, z);
+        cam.zoom_steps(anchor, 1);
+        assert_eq!(cam.zoom, 1.0 / 256.0);
+        assert!(close(cam.screen_to_world(anchor), before));
+    }
+
+    #[test]
+    fn fit_goes_below_the_smallest_step() {
+        // 1000 viewports wide: no step fits, so the fit's zoom is exact.
+        let mut cam = Camera::default();
+        let size = [1000.0, 800.0];
+        let r = WRect::from_pos_size([-5e5, 0.0], [1e6, 1e3]);
+        cam.fit(r, size, 0.0);
+        assert!((cam.zoom - 1e-3).abs() < 1e-12, "{}", cam.zoom);
+        assert!(!ZOOM_STEPS.contains(&cam.zoom));
+        let v = cam.visible(size);
+        assert!(v.min[0] <= r.min[0] + 1e-6 && v.max[0] >= r.max[0] - 1e-6);
+        assert!(close(v.center(), r.center()));
+        // Just under the smallest step's reach still snaps to a step.
+        cam.fit(
+            WRect::from_pos_size([0.0, 0.0], [1000.0 * 200.0, 10.0]),
+            size,
+            0.0,
+        );
+        assert_eq!(cam.zoom, 1.0 / 256.0);
+        // Absurd sizes stop at MIN_ZOOM.
+        cam.fit(WRect::from_pos_size([0.0, 0.0], [1e12, 1.0]), size, 0.0);
+        assert_eq!(cam.zoom, MIN_ZOOM);
     }
 
     #[test]

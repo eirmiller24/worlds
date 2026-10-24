@@ -62,6 +62,7 @@ struct CreateLevel {
     tags: Option<Vec<String>>,
     world: Option<String>,
     content: Option<Map<String, Value>>,
+    void: Option<Vec<[u32; 4]>>,
     #[serde(default)]
     replace: bool,
     #[serde(default)]
@@ -212,6 +213,9 @@ struct Geometry {
     px: Option<[i64; 2]>,
     points: Option<Vec<[i64; 2]>>,
     rect: Option<[i64; 4]>,
+    from: Option<Value>,
+    to: Option<Value>,
+    waypoints: Option<Vec<[i64; 2]>>,
 }
 
 #[derive(Deserialize)]
@@ -231,6 +235,8 @@ struct AddNote {
     closed: Option<bool>,
     group: Option<String>,
     label: Option<String>,
+    connector_label: Option<String>,
+    style: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -277,6 +283,10 @@ struct NotePatch {
     geometry: Option<Geometry>,
     #[serde(rename = "move")]
     move_by: Option<[i64; 2]>,
+    #[serde(default, deserialize_with = "present")]
+    connector_label: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    style: Option<Option<String>>,
 }
 
 #[derive(Deserialize)]
@@ -313,8 +323,34 @@ struct SetGuideGroup {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ShapeLevel {
+    level: String,
+    void: Vec<[u32; 4]>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TagLevels {
     levels: BTreeMap<String, Vec<String>>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResizeLevel {
+    level: String,
+    size: [u32; 2],
+    anchor: Option<[i8; 2]>,
+    world: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CropLevel {
+    level: String,
+    world: Option<String>,
     label: Option<String>,
 }
 
@@ -497,6 +533,8 @@ struct DefsPatch {
     #[serde(default)]
     rename_level_fields: Vec<Rename>,
     #[serde(default)]
+    rename_assemblies: Vec<Rename>,
+    #[serde(default)]
     set_layers: Vec<SetLayer>,
     #[serde(default)]
     set_enums: Vec<Map<String, Value>>,
@@ -506,6 +544,8 @@ struct DefsPatch {
     set_entity_fields: Vec<SetEntityField>,
     #[serde(default)]
     set_level_fields: Vec<SetLevelField>,
+    #[serde(default)]
+    set_assemblies: Vec<Map<String, Value>>,
     set_project: Option<ProjectPatch>,
     #[serde(default)]
     remove_entity_fields: Vec<RemoveEntityField>,
@@ -517,6 +557,8 @@ struct DefsPatch {
     remove_entity_types: Vec<String>,
     #[serde(default)]
     remove_layers: Vec<String>,
+    #[serde(default)]
+    remove_assemblies: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -567,6 +609,9 @@ pub(crate) struct Screenshot {
     pub world_rect: Option<[i64; 4]>,
     pub layers: Option<Vec<String>>,
     pub size: Option<[u32; 2]>,
+    /// The editor's map tab: alone, what it shows; with world_rect, the
+    /// rect in its world.
+    pub viewport: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -750,6 +795,13 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
             json!({ "kind": "level_field", "from": r.from, "to": r.to }),
         );
     }
+    for r in &pt.rename_assemblies {
+        touch(r.to.clone());
+        push(
+            "defs.rename",
+            json!({ "kind": "assembly", "from": r.from, "to": r.to }),
+        );
+    }
     for l in &pt.set_layers {
         touch(def_slug(&l.def, "set_layers def")?.to_string());
         let mut p = json!({ "kind": "layer", "def": l.def });
@@ -782,6 +834,13 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
         let mut p = json!({ "kind": "level_field", "def": f.def });
         put(&mut p, "index", &f.index);
         push("defs.set", p);
+    }
+    for d in &pt.set_assemblies {
+        touch(def_slug(d, "set_assemblies")?.to_string());
+        let mut d = d.clone();
+        d.remove("$schema");
+        d.remove("format");
+        push("defs.set", json!({ "kind": "assembly", "def": d }));
     }
     if let Some(s) = &pt.set_project {
         let mut p = json!({});
@@ -826,6 +885,10 @@ fn plan_defs(pt: &DefsPatch, confirm: bool) -> Result<(Vec<ApiWrite>, String), S
         touch(l.clone());
         push("defs.remove", json!({ "kind": "layer", "slug": l }));
     }
+    for a in &pt.remove_assemblies {
+        touch(a.clone());
+        push("defs.remove", json!({ "kind": "assembly", "slug": a }));
+    }
     let mut summary = touched.join(", ");
     if summary.chars().count() > 60 {
         summary = summary.chars().take(57).collect::<String>() + "...";
@@ -845,9 +908,29 @@ fn split_text(text: &str) -> (Option<String>, Option<String>) {
     ((!title.is_empty()).then_some(title), body)
 }
 
-/// The one geometry key given (`px`, `points` or `rect`) with its value.
+/// The geometry keys given with their values: one of `px`, `points` or
+/// `rect`, or a connector's `from`, `to` and `waypoints` (any of them).
 fn geometry_keys(g: &Geometry) -> Result<Map<String, Value>, String> {
     let mut m = Map::new();
+    let connector = [
+        ("from", g.from.clone()),
+        ("to", g.to.clone()),
+        ("waypoints", g.waypoints.as_ref().map(|w| json!(w))),
+    ];
+    if connector.iter().any(|(_, v)| v.is_some()) {
+        if g.px.is_some() || g.points.is_some() || g.rect.is_some() {
+            return Err(
+                "geometry: a connector's from, to and waypoints don't go with px, points or rect"
+                    .into(),
+            );
+        }
+        for (k, v) in connector {
+            if let Some(v) = v {
+                m.insert(k.into(), v);
+            }
+        }
+        return Ok(m);
+    }
     if let Some(px) = g.px {
         m.insert("px".into(), json!(px));
     }
@@ -858,7 +941,10 @@ fn geometry_keys(g: &Geometry) -> Result<Map<String, Value>, String> {
         m.insert("rect".into(), json!(rect));
     }
     if m.len() != 1 {
-        return Err("geometry needs exactly one of px, points or rect".into());
+        return Err(
+            "geometry needs exactly one of px, points or rect (a connector: from, to and waypoints)"
+                .into(),
+        );
     }
     Ok(m)
 }
@@ -912,6 +998,7 @@ impl Engine {
                 "world_px": a.world_px, "depth": a.depth.unwrap_or(0) });
             put(&mut level, "fields", &a.fields);
             put(&mut level, "tags", &a.tags);
+            put(&mut level, "void", &a.void);
             let mut p = json!({ "level": level });
             put(&mut p, "world", &a.world);
             put(&mut p, "content", &a.content);
@@ -932,6 +1019,7 @@ impl Engine {
             put(&mut level, "depth", &a.depth);
             put(&mut level, "fields", &a.fields);
             put(&mut level, "tags", &a.tags);
+            put(&mut level, "void", &a.void);
             let mut p = json!({ "level": level });
             put(&mut p, "world", &a.world);
             put(&mut p, "content", &a.content);
@@ -1171,6 +1259,8 @@ impl Engine {
             ("pin_label", a.pin_label.is_some(), "pin"),
             ("closed", a.closed.is_some(), "guide"),
             ("group", a.group.is_some(), "guide"),
+            ("connector_label", a.connector_label.is_some(), "connector"),
+            ("style", a.style.is_some(), "connector"),
         ];
         for (key, given, kind) in per_kind {
             if given && a.kind != kind {
@@ -1181,6 +1271,8 @@ impl Engine {
         put(&mut note, "label", &a.pin_label);
         put(&mut note, "closed", &a.closed);
         put(&mut note, "group", &a.group);
+        put(&mut note, "label", &a.connector_label);
+        put(&mut note, "style", &a.style);
         for (k, v) in geometry_keys(&a.geometry)? {
             note[k.as_str()] = v;
         }
@@ -1208,7 +1300,7 @@ impl Engine {
         // Guides are reference lines, not work items: left out unless asked
         // for by kind or group.
         if a.kind.is_none() && a.group.is_none() {
-            p["kinds"] = json!(["note", "pin", "path", "region"]);
+            p["kinds"] = json!(["note", "pin", "path", "region", "connector"]);
         }
         let r = self.read("notes.list", p)?;
         self.json_result(json!({ "rev": r["rev"], "notes": r["notes"] }))
@@ -1250,6 +1342,11 @@ impl Engine {
         put(&mut patch, "label", &pt.pin_label);
         put(&mut patch, "closed", &pt.closed);
         put(&mut patch, "group", &pt.group);
+        if pt.pin_label.is_some() && pt.connector_label.is_some() {
+            return Err("give pin_label (a pin) or connector_label (a connector), not both".into());
+        }
+        put(&mut patch, "label", &pt.connector_label);
+        put(&mut patch, "style", &pt.style);
         if let Some(g) = &pt.geometry {
             for (k, v) in geometry_keys(g)? {
                 patch[k.as_str()] = v;
@@ -1263,7 +1360,7 @@ impl Engine {
         }
         let has_patch = patch.as_object().is_some_and(|m| !m.is_empty());
         if !has_patch && pt.move_by.is_none() {
-            return Err("patch is empty: give text, title, body, tags, color, links, status, export, locked, icon, pin_label, closed, group, geometry or move".into());
+            return Err("patch is empty: give text, title, body, tags, color, links, status, export, locked, icon, pin_label, closed, group, connector_label, style, geometry or move".into());
         }
         let label = Self::label("update_note", a.label.as_deref(), &a.id);
         let mut writes = Vec::new();
@@ -1374,6 +1471,38 @@ impl Engine {
         Ok(vec![json_block(&r)])
     }
 
+    pub(crate) fn resize_level(&mut self, a: Value) -> ToolResult {
+        let a: ResizeLevel = args("resize_level", a)?;
+        let label = Self::label("resize_level", a.label.as_deref(), &a.level);
+        let mut p = json!({ "level": a.level, "size": a.size });
+        put(&mut p, "anchor", &a.anchor);
+        put(&mut p, "world", &a.world);
+        let r = self.write(&label, |_| Ok(vec![("level.resize", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn crop_level(&mut self, a: Value) -> ToolResult {
+        let a: CropLevel = args("crop_level", a)?;
+        let label = Self::label("crop_level", a.label.as_deref(), &a.level);
+        let mut p = json!({ "level": a.level });
+        put(&mut p, "world", &a.world);
+        let r = self.write(&label, |_| Ok(vec![("level.crop", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn shape_level(&mut self, a: Value) -> ToolResult {
+        let a: ShapeLevel = args("shape_level", a)?;
+        let summary = if a.void.is_empty() {
+            format!("{} as a rectangle", a.level)
+        } else {
+            a.level.clone()
+        };
+        let label = Self::label("shape_level", a.label.as_deref(), &summary);
+        let p = json!({ "level": a.level, "void": a.void });
+        let r = self.write(&label, |_| Ok(vec![("level.set_void", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
     pub(crate) fn edit_rules(&mut self, a: Value) -> ToolResult {
         let a: EditRules = args("edit_rules", a)?;
         if a.patch.is_empty() {
@@ -1389,7 +1518,7 @@ impl Engine {
         let a: EditDefinitions = args("edit_definitions", a)?;
         let (writes, summary) = plan_defs(&a.patch, a.confirm)?;
         if writes.is_empty() {
-            return Err("patch is empty: give at least one of rename_entity_types, rename_enums, rename_enum_values, rename_entity_fields, rename_level_fields, set_layers, set_enums, set_entity_types, set_entity_fields, set_level_fields, set_project, remove_entity_fields, remove_level_fields, remove_enums, remove_entity_types, remove_layers".into());
+            return Err("patch is empty: give at least one of rename_entity_types, rename_enums, rename_enum_values, rename_entity_fields, rename_level_fields, rename_assemblies, set_layers, set_enums, set_entity_types, set_entity_fields, set_level_fields, set_assemblies, set_project, remove_entity_fields, remove_level_fields, remove_enums, remove_entity_types, remove_layers, remove_assemblies".into());
         }
         let label = Self::label("edit_definitions", a.label.as_deref(), &summary);
         let r = self.write(&label, |_| Ok(writes.clone()))?;
@@ -1605,7 +1734,7 @@ impl Engine {
 
     pub(crate) fn screenshot(&mut self, a: Value) -> ToolResult {
         let a: Screenshot = args("screenshot", a)?;
-        if a.level.is_some() == a.world_rect.is_some() {
+        if a.level.is_some() && a.world_rect.is_some() {
             return Err("screenshot needs exactly one of level or world_rect".into());
         }
         let shot = if self.mode()? == Mode::Editor {
@@ -1614,8 +1743,15 @@ impl Engine {
             put(&mut p, "world_rect", &a.world_rect);
             put(&mut p, "layers", &a.layers);
             put(&mut p, "size", &a.size);
+            put(&mut p, "viewport", &a.viewport);
             self.read("view.snapshot", p)?
         } else {
+            if a.viewport.is_some() {
+                return Err("viewport names a map tab of the Worlds editor, which isn't running: open the project in the editor, or give level or world_rect".into());
+            }
+            if a.level.is_none() && a.world_rect.is_none() {
+                return Err("screenshot needs exactly one of level or world_rect".into());
+            }
             crate::screenshot::headless(self, &a)?
         };
         let png = shot["png"].as_str().unwrap_or_default().to_string();
@@ -1685,6 +1821,783 @@ impl Engine {
             out["notices"] = json!(notices);
         }
         Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn copy_fragment(&mut self, a: Value) -> ToolResult {
+        // The arguments are `edit.copy`'s selection, checked there.
+        if !a.is_object() && !a.is_null() {
+            return Err("copy_fragment takes an object of arguments".into());
+        }
+        let selection = if a.is_null() { json!({}) } else { a };
+        let r = self.read("edit.copy", json!({ "selection": selection }))?;
+        self.json_result(r)
+    }
+
+    pub(crate) fn paste_fragment(&mut self, a: Value) -> ToolResult {
+        let a: PasteFragment = args("paste_fragment", a)?;
+        let label = Self::label(
+            "paste_fragment",
+            a.label.as_deref(),
+            &format!("into {}", a.level),
+        );
+        let mut p = json!({ "level": a.level, "origin": a.origin, "fragment": a.fragment });
+        put(&mut p, "layer_map", &a.layer_map);
+        put(&mut p, "flip", &a.flip);
+        let (mut out, raw) = self.write_full(&label, |_| Ok(vec![("edit.paste", p.clone())]))?;
+        if let Some(raw) = raw {
+            for k in ["items", "ids", "problems"] {
+                if let Some(v) = raw.get(k) {
+                    out[k] = v.clone();
+                }
+            }
+        }
+        Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn save_assembly(&mut self, a: Value) -> ToolResult {
+        let a: SaveAssembly = args("save_assembly", a)?;
+        let label = Self::label("save_assembly", a.label.as_deref(), &a.slug);
+        let mut sel = json!({});
+        put(&mut sel, "level", &a.level);
+        put(&mut sel, "entities", &a.entities);
+        put(&mut sel, "notes", &a.notes);
+        put(&mut sel, "tiles", &a.tiles);
+        put(&mut sel, "rect", &a.rect);
+        put(&mut sel, "layers", &a.layers);
+        let has_sel = sel.as_object().is_some_and(|m| !m.is_empty());
+        let mut p = json!({ "slug": a.slug, "name": a.name });
+        match (has_sel, a.fragment) {
+            (true, None) => p["selection"] = sel,
+            (false, Some(f)) => p["fragment"] = f,
+            (true, Some(_)) => {
+                return Err("give either what to copy (level, entities, notes, tiles, rect, layers) or a fragment, not both".into());
+            }
+            (false, None) => {
+                return Err("nothing to save: give entities, notes, tiles and/or rect (as for copy_fragment), or a fragment".into());
+            }
+        }
+        put(&mut p, "category", &a.category);
+        put(&mut p, "tags", &a.tags);
+        put(&mut p, "doc", &a.doc);
+        put(&mut p, "replace", &a.replace);
+        let (mut out, raw) =
+            self.write_full(&label, |_| Ok(vec![("edit.save_assembly", p.clone())]))?;
+        if let Some(raw) = raw {
+            for k in ["items", "size"] {
+                if let Some(v) = raw.get(k) {
+                    out[k] = v.clone();
+                }
+            }
+        }
+        Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn place_assembly(&mut self, a: Value) -> ToolResult {
+        let a: PlaceAssembly = args("place_assembly", a)?;
+        let label = Self::label(
+            "place_assembly",
+            a.label.as_deref(),
+            &format!("{} in {}", a.slug, a.level),
+        );
+        let mut p = json!({ "level": a.level, "slug": a.slug, "origin": a.cell });
+        put(&mut p, "flip", &a.flip);
+        let (mut out, raw) =
+            self.write_full(&label, |_| Ok(vec![("edit.place_assembly", p.clone())]))?;
+        if let Some(raw) = raw {
+            for k in ["items", "ids", "problems"] {
+                if let Some(v) = raw.get(k) {
+                    out[k] = v.clone();
+                }
+            }
+        }
+        Ok(vec![json_block(&out)])
+    }
+
+    pub(crate) fn arrange_levels(&mut self, a: Value) -> ToolResult {
+        let a: ArrangeLevels = args("arrange_levels", a)?;
+        let label = Self::label(
+            "arrange_levels",
+            a.label.as_deref(),
+            &format!("{} {}", a.op, a.levels.join(", ")),
+        );
+        let p = json!({ "levels": a.levels, "op": a.op });
+        let r = self.write(&label, |_| Ok(vec![("level.arrange", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn duplicate_level(&mut self, a: Value) -> ToolResult {
+        let a: DuplicateLevel = args("duplicate_level", a)?;
+        let label = Self::label(
+            "duplicate_level",
+            a.label.as_deref(),
+            &format!("{} as {}", a.level, a.slug),
+        );
+        let mut p = json!({ "level": a.level, "slug": a.slug });
+        put(&mut p, "name", &a.name);
+        put(&mut p, "world", &a.world);
+        put(&mut p, "world_px", &a.world_px);
+        let (mut out, raw) =
+            self.write_full(&label, |_| Ok(vec![("level.duplicate", p.clone())]))?;
+        if let Some(wp) = raw.as_ref().and_then(|r| r.get("world_px")) {
+            out["world_px"] = wp.clone();
+        }
+        Ok(vec![json_block(&out)])
+    }
+
+    /// `find`: `entity.find`, `level.find`, `notes.list` or `tiles.find`
+    /// with the query, at most `limit` results.
+    pub(crate) fn find(&mut self, a: Value) -> ToolResult {
+        let a: Find = args("find", a)?;
+        let query = a.query.unwrap_or_default();
+        let parsed = worlds_core::find::Query::parse(&query).map_err(|e| format!("query: {e}"))?;
+        let limit = a.limit.unwrap_or(FIND_LIMIT);
+        let (method, key, mut p) = match a.kind.as_str() {
+            "entities" => ("entity.find", "entities", json!({})),
+            "levels" => ("level.find", "levels", json!({})),
+            "notes" => {
+                // Guides stay out unless asked for by kind.
+                let p = if parsed.kinds.is_empty() {
+                    json!({ "kinds": ["note", "pin", "path", "region", "connector"] })
+                } else {
+                    json!({})
+                };
+                ("notes.list", "notes", p)
+            }
+            "tiles" => ("tiles.find", "tiles", json!({ "limit": limit })),
+            other => {
+                return Err(format!(
+                    "kind {other:?}: expected entities, levels, notes or tiles"
+                ));
+            }
+        };
+        if !query.trim().is_empty() {
+            p["query"] = json!(query);
+        }
+        let r = self.read(method, p)?;
+        let mut list = r[key].as_array().cloned().unwrap_or_default();
+        let total = r
+            .get("total")
+            .and_then(Value::as_u64)
+            .unwrap_or(list.len() as u64);
+        list.truncate(limit);
+        let mut out = json!({ "rev": r["rev"], "kind": a.kind, "total": total });
+        out[key] = Value::Array(list);
+        self.json_result(out)
+    }
+}
+
+/// How many results `find` returns by default.
+const FIND_LIMIT: usize = 100;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Find {
+    kind: String,
+    query: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PasteFragment {
+    level: String,
+    origin: [i64; 2],
+    fragment: Value,
+    layer_map: Option<BTreeMap<String, String>>,
+    flip: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveAssembly {
+    level: Option<String>,
+    entities: Option<Vec<String>>,
+    notes: Option<Vec<String>>,
+    tiles: Option<BTreeMap<String, Vec<[u32; 2]>>>,
+    rect: Option<[u32; 4]>,
+    layers: Option<Vec<String>>,
+    fragment: Option<Value>,
+    slug: String,
+    name: String,
+    category: Option<String>,
+    tags: Option<Vec<String>>,
+    doc: Option<String>,
+    replace: Option<bool>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlaceAssembly {
+    level: String,
+    slug: String,
+    cell: [i64; 2],
+    flip: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArrangeLevels {
+    levels: Vec<String>,
+    op: String,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DuplicateLevel {
+    level: String,
+    slug: String,
+    name: Option<String>,
+    world: Option<String>,
+    world_px: Option<[i64; 2]>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateWorld {
+    slug: String,
+    name: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct RenameWorld {
+    world: String,
+    slug: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorldLayoutArg {
+    world: String,
+    mode: String,
+    gap: Option<u32>,
+    cell: Option<[u32; 2]>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditWorlds {
+    #[serde(default)]
+    rename: Vec<RenameWorld>,
+    order: Option<Vec<String>>,
+    #[serde(default)]
+    layout: Vec<WorldLayoutArg>,
+    #[serde(default)]
+    remove: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveLevel {
+    level: String,
+    world_px: Option<[i64; 2]>,
+    world: Option<String>,
+    label: Option<String>,
+}
+
+/// The API writes of an `edit_worlds` call, in order: renames, the new
+/// order, removals; and the undo label's summary (the worlds renamed or
+/// removed, each once, or `order`).
+fn plan_worlds(a: &EditWorlds) -> Result<(Vec<ApiWrite>, String), String> {
+    let mut writes = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
+    for r in &a.rename {
+        if r.slug.is_none() && r.name.is_none() {
+            return Err(format!(
+                "rename of world {:?} changes nothing: give slug or name",
+                r.world
+            ));
+        }
+        let mut p = json!({ "world": r.world });
+        put(&mut p, "slug", &r.slug);
+        put(&mut p, "name", &r.name);
+        writes.push(("world.rename", p));
+        if !names.contains(&r.world.as_str()) {
+            names.push(&r.world);
+        }
+    }
+    if let Some(order) = &a.order {
+        writes.push(("world.reorder", json!({ "order": order })));
+    }
+    for l in &a.layout {
+        let mut layout = json!({ "mode": l.mode });
+        put(&mut layout, "gap", &l.gap);
+        put(&mut layout, "cell", &l.cell);
+        writes.push((
+            "world.set_layout",
+            json!({ "world": l.world, "layout": layout }),
+        ));
+        if !names.contains(&l.world.as_str()) {
+            names.push(&l.world);
+        }
+    }
+    for w in &a.remove {
+        let mut p = json!({ "world": w });
+        if a.confirm {
+            p["confirm"] = json!(true);
+        }
+        writes.push(("world.remove", p));
+        if !names.contains(&w.as_str()) {
+            names.push(w);
+        }
+    }
+    let mut summary = if names.is_empty() {
+        "order".to_string()
+    } else {
+        names.join(", ")
+    };
+    if summary.chars().count() > 60 {
+        summary = summary.chars().take(57).collect::<String>() + "...";
+    }
+    Ok((writes, summary))
+}
+
+impl Engine {
+    pub(crate) fn create_world(&mut self, a: Value) -> ToolResult {
+        let a: CreateWorld = args("create_world", a)?;
+        let label = Self::label("create_world", a.label.as_deref(), &a.slug);
+        let mut p = json!({ "slug": a.slug });
+        put(&mut p, "name", &a.name);
+        let r = self.write(&label, |_| Ok(vec![("world.create", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn edit_worlds(&mut self, a: Value) -> ToolResult {
+        let a: EditWorlds = args("edit_worlds", a)?;
+        let (writes, summary) = plan_worlds(&a)?;
+        if writes.is_empty() {
+            return Err("nothing to do: give rename, order, layout or remove".into());
+        }
+        let label = Self::label("edit_worlds", a.label.as_deref(), &summary);
+        let r = self.write(&label, |_| Ok(writes.clone()))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn move_level(&mut self, a: Value) -> ToolResult {
+        let a: MoveLevel = args("move_level", a)?;
+        let label = Self::label("move_level", a.label.as_deref(), &a.level);
+        let write = match (&a.world, a.world_px) {
+            (Some(w), px) => {
+                let mut p = json!({ "level": a.level, "world": w });
+                put(&mut p, "world_px", &px);
+                ("level.move_to_world", p)
+            }
+            (None, Some(px)) => ("level.move", json!({ "level": a.level, "world_px": px })),
+            (None, None) => {
+                return Err(
+                    "give world_px (a new position), world (another world), or both".into(),
+                );
+            }
+        };
+        let r = self.write(&label, |_| Ok(vec![write.clone()]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn import_project(&mut self, a: Value) -> ToolResult {
+        let a: ImportProject = args("import_project", a)?;
+        let mut p = json!({ "source": a.source });
+        put(&mut p, "selection", &a.selection);
+        put(&mut p, "policy", &a.policy);
+        if a.dry_run {
+            let r = self.read("project.import_plan", p)?;
+            return self.json_result(r);
+        }
+        let label = Self::label(
+            "import_project",
+            a.label.as_deref(),
+            &format!("from {}", a.source),
+        );
+        let mut plan = Value::Null;
+        let (mut out, raw) = self.write_full(&label, |e| {
+            let r = e.read("project.import_plan", p.clone())?;
+            if r["empty"] == true {
+                return Err(format!(
+                    "nothing to import: {}",
+                    r["summary"].as_str().unwrap_or("")
+                ));
+            }
+            plan = r.clone();
+            Ok(vec![("project.import", json!({ "plan_id": r["plan_id"] }))])
+        })?;
+        if let Some(o) = plan.as_object_mut() {
+            o.remove("rev");
+            o.remove("plan_id");
+            o.remove("notices");
+        }
+        out["plan"] = plan;
+        if let Some(c) = raw.as_ref().and_then(|r| r.get("copied")) {
+            out["copied"] = c.clone();
+        }
+        Ok(vec![json_block(&out)])
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportProject {
+    source: String,
+    selection: Option<Value>,
+    policy: Option<Value>,
+    #[serde(default)]
+    dry_run: bool,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddReference {
+    scope: Scope,
+    image: String,
+    px: [i64; 2],
+    scale: Option<f64>,
+    opacity: Option<f64>,
+    locked: Option<bool>,
+    visible: Option<bool>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReferencePatch {
+    image: Option<String>,
+    px: Option<[i64; 2]>,
+    scale: Option<f64>,
+    opacity: Option<f64>,
+    locked: Option<bool>,
+    visible: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateReference {
+    id: String,
+    patch: ReferencePatch,
+    #[serde(default)]
+    confirm: bool,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveReference {
+    ids: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LayerOp {
+    Duplicate,
+    MergeDown,
+    MoveTiles,
+    MoveEntities,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayerOperation {
+    op: LayerOp,
+    layer: Option<String>,
+    to: Option<String>,
+    level: Option<String>,
+    cells: Option<Vec<[u32; 2]>>,
+    ids: Option<Vec<String>>,
+    label: Option<String>,
+}
+
+impl Engine {
+    pub(crate) fn add_reference(&mut self, a: Value) -> ToolResult {
+        let a: AddReference = args("add_reference", a)?;
+        a.scope.check()?;
+        let mut reference = json!({ "image": a.image, "px": a.px });
+        put(&mut reference, "scale", &a.scale);
+        put(&mut reference, "opacity", &a.opacity);
+        put(&mut reference, "locked", &a.locked);
+        put(&mut reference, "visible", &a.visible);
+        let label = Self::label("add_reference", a.label.as_deref(), &a.scope.name());
+        let p = json!({ "scope": a.scope, "reference": reference });
+        let r = self.write(&label, |_| Ok(vec![("reference.add", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn update_reference(&mut self, a: Value) -> ToolResult {
+        let a: UpdateReference = args("update_reference", a)?;
+        let pt = &a.patch;
+        let mut patch = json!({});
+        put(&mut patch, "image", &pt.image);
+        put(&mut patch, "px", &pt.px);
+        put(&mut patch, "scale", &pt.scale);
+        put(&mut patch, "opacity", &pt.opacity);
+        put(&mut patch, "locked", &pt.locked);
+        put(&mut patch, "visible", &pt.visible);
+        if patch.as_object().is_some_and(|m| m.is_empty()) {
+            return Err("patch is empty: give image, px, scale, opacity, locked or visible".into());
+        }
+        let label = Self::label("update_reference", a.label.as_deref(), &a.id);
+        let mut p = json!({ "id": a.id, "patch": patch });
+        if a.confirm {
+            p["confirm"] = json!(true);
+        }
+        let r = self.write(&label, |_| Ok(vec![("reference.update", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn remove_reference(&mut self, a: Value) -> ToolResult {
+        let a: RemoveReference = args("remove_reference", a)?;
+        if a.ids.is_empty() {
+            return Err("ids is empty: give the ids of the reference images to remove".into());
+        }
+        let summary = match a.ids.as_slice() {
+            [one] => one.clone(),
+            many => format!("{} references", many.len()),
+        };
+        let label = Self::label("remove_reference", a.label.as_deref(), &summary);
+        let mut p = json!({ "ids": a.ids });
+        if a.confirm {
+            p["confirm"] = json!(true);
+        }
+        let r = self.write(&label, |_| Ok(vec![("reference.remove", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn layer_operation(&mut self, a: Value) -> ToolResult {
+        let a: LayerOperation = args("layer_operation", a)?;
+        let need = |v: &Option<String>, key: &str, op: &str| {
+            v.clone().ok_or_else(|| format!("{op} needs {key}"))
+        };
+        let only = |given: &[(&str, bool)], op: &str| -> Result<(), String> {
+            match given.iter().find(|(_, g)| *g) {
+                Some((k, _)) => Err(format!("{op} doesn't take {k}")),
+                None => Ok(()),
+            }
+        };
+        let (summary, method, p) = match a.op {
+            LayerOp::Duplicate => {
+                let layer = need(&a.layer, "layer", "duplicate")?;
+                only(
+                    &[
+                        ("level", a.level.is_some()),
+                        ("cells", a.cells.is_some()),
+                        ("ids", a.ids.is_some()),
+                    ],
+                    "duplicate",
+                )?;
+                let mut p = json!({ "kind": "layer", "slug": layer });
+                put(&mut p, "to", &a.to);
+                (format!("duplicate {layer}"), "defs.duplicate", p)
+            }
+            LayerOp::MergeDown => {
+                let layer = need(&a.layer, "layer", "merge_down")?;
+                only(
+                    &[
+                        ("to", a.to.is_some()),
+                        ("level", a.level.is_some()),
+                        ("cells", a.cells.is_some()),
+                        ("ids", a.ids.is_some()),
+                    ],
+                    "merge_down",
+                )?;
+                (
+                    format!("merge_down {layer}"),
+                    "defs.merge_down",
+                    json!({ "kind": "layer", "slug": layer }),
+                )
+            }
+            LayerOp::MoveTiles => {
+                let layer = need(&a.layer, "layer", "move_tiles")?;
+                let to = need(&a.to, "to", "move_tiles")?;
+                let level = need(&a.level, "level", "move_tiles")?;
+                only(&[("ids", a.ids.is_some())], "move_tiles")?;
+                let cells = a
+                    .cells
+                    .clone()
+                    .filter(|c| !c.is_empty())
+                    .ok_or("move_tiles needs cells: the [x, y] cells whose tiles move")?;
+                (
+                    format!("move_tiles {layer} in {level}"),
+                    "tiles.move_to_layer",
+                    json!({ "level": level, "layer": layer, "to": to, "cells": cells }),
+                )
+            }
+            LayerOp::MoveEntities => {
+                let to = need(&a.to, "to", "move_entities")?;
+                only(
+                    &[
+                        ("layer", a.layer.is_some()),
+                        ("level", a.level.is_some()),
+                        ("cells", a.cells.is_some()),
+                    ],
+                    "move_entities",
+                )?;
+                let ids = a
+                    .ids
+                    .clone()
+                    .filter(|i| !i.is_empty())
+                    .ok_or("move_entities needs ids: the entities to move")?;
+                (
+                    format!("move_entities to {to}"),
+                    "entity.move_to_layer",
+                    json!({ "ids": ids, "layer": to }),
+                )
+            }
+        };
+        let label = Self::label("layer_operation", a.label.as_deref(), &summary);
+        let r = self.write(&label, |_| Ok(vec![(method, p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReorderLevels {
+    order: Vec<String>,
+    world: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GroupCreate {
+    members: Vec<String>,
+    name: Option<String>,
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GroupUpdate {
+    id: String,
+    name: Option<String>,
+    members: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GroupMembers {
+    id: String,
+    members: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditGroups {
+    level: String,
+    #[serde(default)]
+    create: Vec<GroupCreate>,
+    #[serde(default)]
+    update: Vec<GroupUpdate>,
+    #[serde(default)]
+    add: Vec<GroupMembers>,
+    #[serde(default)]
+    remove_members: Vec<GroupMembers>,
+    #[serde(default)]
+    remove: Vec<String>,
+    label: Option<String>,
+}
+
+impl Engine {
+    pub(crate) fn reorder_levels(&mut self, a: Value) -> ToolResult {
+        let a: ReorderLevels = args("reorder_levels", a)?;
+        if a.order.is_empty() {
+            return Err("order is empty: list every level of the world once".into());
+        }
+        let summary = a.world.clone().unwrap_or_else(|| a.order[0].clone());
+        let label = Self::label("reorder_levels", a.label.as_deref(), &summary);
+        let mut p = json!({ "order": a.order });
+        put(&mut p, "world", &a.world);
+        let r = self.write(&label, |_| Ok(vec![("level.reorder", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn edit_groups(&mut self, a: Value) -> ToolResult {
+        let a: EditGroups = args("edit_groups", a)?;
+        if a.create.is_empty()
+            && a.update.is_empty()
+            && a.add.is_empty()
+            && a.remove_members.is_empty()
+            && a.remove.is_empty()
+        {
+            return Err("nothing to do: give create, update, add, remove_members or remove".into());
+        }
+        // New groups get their ids here, so the result can name them.
+        let ids: Vec<String> = a
+            .create
+            .iter()
+            .map(|c| {
+                c.id.clone()
+                    .unwrap_or_else(|| worlds_core::Id::generate().to_string())
+            })
+            .collect();
+        let label = Self::label("edit_groups", a.label.as_deref(), &a.level);
+        let r = self.write(&label, |e| {
+            let mut w: Vec<ApiWrite> = Vec::new();
+            for (c, id) in a.create.iter().zip(&ids) {
+                let mut p = json!({ "level": a.level, "members": c.members, "id": id });
+                put(&mut p, "name", &c.name);
+                w.push(("group.create", p));
+            }
+            for u in &a.update {
+                let mut p = json!({ "level": a.level, "id": u.id });
+                put(&mut p, "name", &u.name);
+                put(&mut p, "members", &u.members);
+                w.push(("group.update", p));
+            }
+            if !a.add.is_empty() || !a.remove_members.is_empty() {
+                let listed = e.read("group.list", json!({ "level": a.level }))?;
+                let members_of = |id: &str| -> Result<Vec<String>, String> {
+                    listed["groups"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|g| g["id"] == id)
+                        .and_then(|g| serde_json::from_value(g["members"].clone()).ok())
+                        .ok_or_else(|| format!("level {} has no group {id:?}", a.level))
+                };
+                for g in &a.add {
+                    let mut m = members_of(&g.id)?;
+                    for x in &g.members {
+                        if !m.contains(x) {
+                            m.push(x.clone());
+                        }
+                    }
+                    w.push((
+                        "group.update",
+                        json!({ "level": a.level, "id": g.id, "members": m }),
+                    ));
+                }
+                for g in &a.remove_members {
+                    let m: Vec<String> = members_of(&g.id)?
+                        .into_iter()
+                        .filter(|x| !g.members.contains(x))
+                        .collect();
+                    w.push((
+                        "group.update",
+                        json!({ "level": a.level, "id": g.id, "members": m }),
+                    ));
+                }
+            }
+            if !a.remove.is_empty() {
+                w.push(("group.remove", json!({ "level": a.level, "ids": a.remove })));
+            }
+            Ok(w)
+        })?;
+        let mut r = r;
+        if !ids.is_empty() {
+            r["ids"] = json!(ids);
+        }
+        Ok(vec![json_block(&r)])
     }
 }
 

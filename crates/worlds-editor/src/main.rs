@@ -225,6 +225,7 @@ fn main() -> anyhow::Result<()> {
             recover: cli.recover,
             recover_conflicts: cli.recover_conflicts,
             recover_report: cli.recover_report,
+            preferences: worlds_editor::prefs::default_path(),
         });
         let r = match r {
             Ok(r) => r,
@@ -296,6 +297,8 @@ fn main() -> anyhow::Result<()> {
         recover: cli.recover,
         recover_conflicts: cli.recover_conflicts,
         recover_report: cli.recover_report,
+        preferences: worlds_editor::prefs::default_path(),
+        preferences_read_only: false,
     };
     let result = eframe::run_native(
         "Worlds",

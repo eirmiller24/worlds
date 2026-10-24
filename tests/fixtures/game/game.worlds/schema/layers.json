@@ -105,6 +105,13 @@
                 "null"
               ]
             },
+            "folder": {
+              "description": "The Layers pane folder, a `/` path (`Decor/Back`). Never exported.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "grid_size": {
               "description": "Cell size in pixels, if not the project's. Must divide or be a\nmultiple of the project grid; an auto layer uses its source's.",
               "format": "uint32",
@@ -155,6 +162,13 @@
           "additionalProperties": false,
           "properties": {
             "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "folder": {
+              "description": "The Layers pane folder, a `/` path (`Decor/Back`). Never exported.",
               "type": [
                 "string",
                 "null"
@@ -212,6 +226,13 @@
                 "null"
               ]
             },
+            "folder": {
+              "description": "The Layers pane folder, a `/` path (`Decor/Back`). Never exported.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "grid_size": {
               "description": "Cell size in pixels, if not the project's. Must divide or be a\nmultiple of the project grid; an auto layer uses its source's.",
               "format": "uint32",
@@ -248,6 +269,13 @@
           "additionalProperties": false,
           "properties": {
             "doc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "folder": {
+              "description": "The Layers pane folder, a `/` path (`Decor/Back`). Never exported.",
               "type": [
                 "string",
                 "null"

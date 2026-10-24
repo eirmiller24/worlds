@@ -901,3 +901,100 @@ fn preview_rule_unknown_slugs_with_underscores_list_the_rules() {
         );
     }
 }
+
+/// `resize_level` passes `anchor` through; `crop_level` shrinks shaft to
+/// its door, and on disk.
+#[test]
+fn resize_and_crop_level() {
+    let (_t, dir) = mini();
+    let mut e = engine(&dir, true);
+    let level_json = |dir: &std::path::Path| -> Value {
+        let p = dir.join("worlds/main/levels/shaft/level.json");
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    };
+    let r = ok(
+        &mut e,
+        "resize_level",
+        json!({ "level": "shaft", "size": [8, 9], "anchor": [1, 1] }),
+    );
+    assert_eq!(r["undo_label"], "Agent: resize_level shaft");
+    let l = level_json(&dir);
+    assert_eq!(
+        (l["size"].clone(), l["world_px"].clone()),
+        (json!([8, 9]), json!([288, 64]))
+    );
+    let r = ok(
+        &mut e,
+        "crop_level",
+        json!({ "level": "shaft", "label": "tight" }),
+    );
+    assert_eq!(r["undo_label"], "Agent: crop_level tight");
+    let l = level_json(&dir);
+    assert_eq!(
+        (l["size"].clone(), l["world_px"].clone()),
+        (json!([1, 3]), json!([352, 160]))
+    );
+    assert!(err(&mut e, "crop_level", json!({ "level": "nope" })).contains("nope"));
+    assert!(err(&mut e, "resize_level", json!({ "level": "shaft" })).contains("size"));
+}
+
+#[test]
+fn worlds_create_move_edit_and_remove() {
+    let (_t, dir) = mini();
+    let mut e = engine(&dir, true);
+    let r = ok(
+        &mut e,
+        "create_world",
+        json!({ "slug": "dungeon", "name": "Dungeon" }),
+    );
+    assert_eq!(r["undo_label"], "Agent: create_world dungeon");
+    assert!(dir.join("worlds/dungeon/world.json").is_file());
+
+    // move_level into the new world, then within it.
+    let r = ok(
+        &mut e,
+        "move_level",
+        json!({ "level": "shaft", "world": "dungeon", "world_px": [0, 0] }),
+    );
+    assert_eq!(r["undo_label"], "Agent: move_level shaft");
+    assert!(dir.join("worlds/dungeon/levels/shaft/level.json").is_file());
+    assert!(!dir.join("worlds/main/levels/shaft").exists());
+    ok(
+        &mut e,
+        "move_level",
+        json!({ "level": "shaft", "world_px": [16, 0] }),
+    );
+    let (is_err, msg) = call(&mut e, "move_level", json!({ "level": "shaft" }));
+    assert!(is_err, "{msg}");
+
+    let d = ok(&mut e, "describe_project", json!({}));
+    assert_eq!(d["worlds"][1]["slug"], "dungeon");
+    assert_eq!(d["worlds"][1]["level_count"], 1);
+    assert_eq!(d["worlds"][1]["bbox"], json!([16, 0, 96, 128]));
+
+    // Rename and reorder in one undo entry.
+    let r = ok(
+        &mut e,
+        "edit_worlds",
+        json!({ "rename": [{ "world": "dungeon", "slug": "caves", "name": "Caves" }],
+            "order": ["caves", "main"] }),
+    );
+    assert_eq!(r["undo_label"], "Agent: edit_worlds dungeon");
+    assert!(dir.join("worlds/caves/levels/shaft/level.json").is_file());
+    assert!(!dir.join("worlds/dungeon").exists());
+    let d = ok(&mut e, "describe_project", json!({}));
+    assert_eq!(d["worlds"][0]["slug"], "caves");
+
+    // Removing a world with a level needs confirm.
+    let (is_err, msg) = call(&mut e, "edit_worlds", json!({ "remove": ["caves"] }));
+    assert!(is_err && msg.contains("confirm"), "{msg}");
+    ok(
+        &mut e,
+        "edit_worlds",
+        json!({ "remove": ["caves"], "confirm": true }),
+    );
+    assert!(!dir.join("worlds/caves").exists());
+    let r = ok(&mut e, "undo", json!({}));
+    assert_eq!(r["undone"][0], "Agent: edit_worlds caves");
+    assert!(dir.join("worlds/caves/levels/shaft/level.json").is_file());
+}

@@ -19,6 +19,7 @@ Each directory is one export, self-contained (nothing outside it is read):
   enums.json        a few enums
   levels/room.json  one 10x6 level on a 32 px grid; tile layers bottom to
                     top back (tiles), walls (auto), front (tiles, empty)
+  levels/annex.json (the `shaped_*` cases) a second, 4x3 level
   tiles.png         128x64 RGBA atlas: 16x16 blocks of distinct colors, each
                     block's top-left pixel white (so flips show)
   expect.json       the verdict
@@ -58,6 +59,9 @@ path is relative to its export directory. The atlas is sliced three ways:
 | `derived_int_grid` | accept | A `derived: true` int grid next to collision |
 | `annotations` | accept | Pins (world and level scope), a path linking them, a region, a level tag |
 | `dangling_note_link` | accept, warning | A drawing whose `note:` link names no exported annotation |
+| `shaped_level` | accept | `room` is an L (`void` `[[6, 0, 4, 3]]`, its `outline`, walls closing around the inside corner), a second level `annex` in the notch: `touching` with `at` both ways, `open_edges` runs `[first, end, at]` |
+| `shaped_wrong_outline` | refuse | `shaped_level` with an `outline` that doesn't follow the void |
+| `shaped_wall_in_void` | refuse | `shaped_level` with a wall glyph in a void cell |
 
 ## Regenerating
 

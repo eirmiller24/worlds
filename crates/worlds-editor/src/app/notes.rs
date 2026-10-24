@@ -222,7 +222,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
             .selected_text(st.notes.kind.clone().unwrap_or_else(|| "any kind".into()))
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut st.notes.kind, None, "any kind");
-                for k in ["note", "pin", "path", "region", "guide"] {
+                for k in ["note", "pin", "path", "region", "guide", "connector"] {
                     ui.selectable_value(&mut st.notes.kind, Some(k.to_string()), k);
                 }
             });
@@ -524,6 +524,11 @@ pub fn jump(st: &mut EditorState, id: &Id) {
     let Some((rect, level)) = annot::focus_rect(doc, id) else {
         return;
     };
+    // Its world is shown (a world note of another world, too).
+    if let Some(r) = annot::find_note(doc, id) {
+        let w = annot::note_world(doc, r.at);
+        st.view.set_world(doc, w);
+    }
     if let Some(ix) = level {
         st.view.active_level = Some(ix);
     }

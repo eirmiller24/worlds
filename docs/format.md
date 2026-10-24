@@ -24,6 +24,7 @@ mygame.worlds/
   entities/<slug>.json          one entity type per file
   rules/<auto layer>.json       autotile rules for one auto layer
   rules/macros.json             shared patterns, legends and templates (optional)
+  assemblies/<slug>.json        one assembly (a reusable piece of a level) per file (optional)
   worlds/<world>/world.json     world name, guide groups and world-scope notes and guides
   worlds/<world>/levels/<level>/
     level.json                  level placement, size, tags, fields, per-layer rule state
@@ -39,7 +40,8 @@ mygame.worlds/
     autosave/g<N>/<path>        the autosaved bytes of each modified file, generation N
     autosave.discarded/         the last autosave discarded (one kept)
     server.json, server.lock    the live API's discovery file and its lock (api.md)
-    ui.json                     the editor's view state (active level and layer, layer visibility, tool, annotation options)
+    thumbs/assembly-<slug>-<hash>.png  assembly thumbnails the editor renders for its Library
+    ui.json                     the editor's view state (map tabs with their world, camera and level, camera bookmarks, active layer, layer visibility, tool, annotation options)
 ```
 
 Rules for the layout:
@@ -59,6 +61,7 @@ The `$schema` value is the path from the file to `schema/<kind>.json`:
 | `entities/x.json` | `../schema/entity.json` |
 | `rules/x.json` | `../schema/rules.json` |
 | `rules/macros.json` | `../schema/macros.json` |
+| `assemblies/x.json` | `../schema/assembly.json` |
 | `worlds/w/world.json` | `../../schema/world.json` |
 | `worlds/w/levels/l/level.json` | `../../../../schema/level.json` |
 | `worlds/w/levels/l/<int_grid layer>.json` | `../../../../schema/intgrid.json` |
@@ -114,6 +117,7 @@ A layer's grid must divide or be a multiple of the project grid. A level that is
 | `level_fields` | array of field definitions | no | Fields every level has. Same shape as entity fields (see [Field definitions](#field-definitions)). Values go in each `level.json` under `fields` |
 | `default_level_size` | `[w, h]` | no | Size in cells of a level made with the editor's New Level command. Left out, the editor uses the most common level size in the project |
 | `export_on_save` | bool | no | Default `false`. When `true`, the editor writes [export/](#export-generated) on every save, from its cached bakes |
+| `worlds` | array of slugs | no | The display order of the worlds (the editor's world switcher, `project.describe`, the export index). Left out, worlds are in slug order. A world directory it doesn't list is shown after the listed ones, in slug order, and validation reports it, as it does a listed slug with no directory or one listed twice. The world commands write it as soon as a project has more than one world; a project with one world and no list keeps having none |
 
 **Migration rule for `blocking_values`.** When `collision_layer` is set and `blocking_values` is left out, loading fills it with `["solid"]` if the collision layer has a `solid` value. The next full save writes that list out. Other wall kinds (`breakable`, ramps, ...) only block when the project lists them. If the layer has no `solid` value the key stays absent, every border cell is open, and validation reports it; write `"blocking_values": []` to say that on purpose. The export always uses this effective list.
 
@@ -165,6 +169,7 @@ Layer keys:
 | `kind` | string | yes | all | See above |
 | `doc` | string | no | all | Free text for humans and agents |
 | `opacity` | number 0..1 | no, default 1 | all | Display opacity |
+| `folder` | string | no | all | The folder the editor's Layers pane shows the layer in: a `/` path of non-empty segments (`Decor/Back`), like an entity `category`. The folder's visibility, lock and opacity apply to every layer in it (editor state, in `.worlds/ui.json`). Never exported |
 | `grid_size` | integer | no, default the project's | all but `auto` | This layer's cell size in pixels. Must divide or be a multiple of the project grid. An `auto` layer always uses its source's grid; giving it a different one is a validation problem |
 | `values` | array | no | `int_grid` | The values a cell can hold (below) |
 | `groups` | array | no | `int_grid` | Named groups of values: `{ "slug", "name", "color"?, "glyph"? }`. Rule patterns can test "any value in this group". A group `glyph` means that group in patterns without a legend entry; it never appears in grid rows |
@@ -816,6 +821,8 @@ The rules are named `m<mask>`, where the mask adds up the filled neighbours: N 1
   "format": 1,
   "slug": "main",
   "name": "Main",
+  "layout": { "mode": "grid_vania", "cell": [320, 160] },
+  "levels": ["crevasse", "shaft"],
   "guide_groups": [
     { "slug": "ruined", "name": "Ruined wing", "offset": [0, 769], "color": "#c08040" }
   ],
@@ -830,8 +837,11 @@ The rules are named `m<mask>`, where the mask adds up the filled neighbours: N 1
 | --- | --- | --- | --- |
 | `slug` | slug | yes | Must match the directory name |
 | `name` | string | no | Display name |
+| `layout` | object | no | How the editor places the levels: free (the default), a strip or a lattice. See [World layouts](#world-layouts) |
+| `levels` | array of slugs | no | The level order: the editor's Levels pane, PgUp/PgDn, the export's level lists and strip layouts follow it. Left out, levels are in slug order. A level it doesn't list comes after the listed ones, in slug order (a validation problem); so is a slug that names no level of this world, or one given twice. `reorder_levels` writes it, and once it is there the level commands keep it up to date |
 | `guide_groups` | array | no | Named sets of guides, each with an offset, in the order they were added (below) |
 | `notes` | array | no | World-scope annotations, coordinates in world pixels, in the order they were added. See [Annotations](#notesjson-and-annotations) |
+| `references` | array | no | World-scope reference images, world pixels, bottom first. See [Reference images](#reference-images) |
 
 A guide group (`guide_groups[]`) lets a set of guides be shown where it is built rather than where it was designed, such as a ruined wing built one position low. A guide joins it with its `group` key.
 
@@ -845,6 +855,24 @@ A guide group (`guide_groups[]`) lets a set of guides be shown where it is built
 Guides store their points as designed. The editor draws a grouped guide at `points + offset` ("as built"), which is also where levels snap to and where the text view counts it; a view toggle shows the designed position as well. The offset is a translation only.
 
 Levels are the subdirectories of `levels/`. Level placement lives in each `level.json`, not here.
+
+### World layouts
+
+`layout` says how the tools place the world's levels. `world_px` in each `level.json` stays the stored position in every mode: the export and the game never need to know the mode. Files without `layout` load as free, and a free layout with nothing set is left out when written.
+
+```json
+{ "mode": "horizontal", "gap": 32 }
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `mode` | string | required | `free`: levels go where they are put. `horizontal` / `vertical`: a strip; levels sit in the level order, left to right (top to bottom), the first at the world origin, top (left) edges at 0, `gap` pixels apart, measured on their bounding boxes (`size`; a [void](#non-rectangular-levels-void) doesn't change where a level goes). Reordering, creating, duplicating, resizing, deleting or moving a level to another world moves the levels to their places, in the same undo entry. `grid_vania`: levels snap to a lattice of `cell` pixels (from the world origin) while dragged and placed, and must be whole cells |
+| `gap` | integer px | `0` | Strips: the space between two neighbours |
+| `cell` | `[w, h]` px | 16 project cells each way | Grid vania: the lattice cell. A whole number of project cells |
+
+Validation reports, in a strip, a level that isn't where the strip puts it (`level.json` `world_px`: hand edits; reorder or set the layout again to fix it), and in grid vania a level whose corner isn't on a lattice point (`world_px`) or whose size isn't a whole number of cells (`size`) or one of whose void rects isn't (`void[<i>]`), and a `cell` that isn't a whole number of project cells (`world.json` `layout.cell`). Switching modes never loses a setting: `gap` and `cell` are kept while another mode is on.
+
+A project can hold several worlds (`worlds/main/`, `worlds/underdark/`, ...). Each is its own map: its own coordinate space, levels, world-scope annotations and guide groups. Everything else is project-wide: the grid, layers, tilesets, entity types, enums and rules. Level slugs are unique across all worlds, so a `level:` link never needs to say which world. `project.json` `worlds` gives their display order.
 
 ## worlds/&lt;world&gt;/levels/&lt;level&gt;/level.json
 
@@ -879,6 +907,9 @@ Levels are the subdirectories of `levels/`. Level placement lives in each `level
 | `tags` | array of strings | no | Free tags, the same vocabulary as annotation tags (`forest`, `ruined`). Non-empty, no repeats. A level tagged `T` must have its center inside a world region tagged `T` when the world has any (see [Validation](#validation-reference)). Exported on both export files |
 | `fields` | object | no | Values for `project.json` `level_fields`, by field slug |
 | `layers` | object | no | Per-layer rule state, by `auto` layer slug (below). An entry for any other layer is a validation problem |
+| `references` | array | no | Reference images drawn under the level's layers, level pixels, bottom first (below) |
+| `void` | array of `[x, y, w, h]` | no | Rectangles of project-grid cells cut out of the level's box, making it non-rectangular ([below](#non-rectangular-levels-void)). Left out (or `[]`) for a rectangle |
+| `groups` | array | no | Object groups: named sets of the level's entities and annotations that the editor selects and moves together (below) |
 
 Per-layer rule state (`layers.<auto layer slug>`), all optional:
 
@@ -887,6 +918,92 @@ Per-layer rule state (`layers.<auto layer slug>`), all optional:
 | `seed` | integer | `0` | Extra seed for this layer's rules in this level. The randomness already differs per level and layer; set this only to re-roll this layer here. |
 | `optional_groups` | array of slugs | `[]` | Rule groups with `"mode": "optional"` to switch on in this level. Naming an `always` or `off` group is a validation problem |
 | `tilesets` | object | `{}` | Tileset substitutions in this level: `{ "<from tileset>": "<to tileset>" }`. Every rule output drawing from the first draws from the second instead, same `[col, row]`. Rules drawing from other tilesets are unaffected |
+
+### Reference images
+
+A sketch, a concept painting or a screenshot of the old game, put behind the grid to build a level against. `level.json` `references` holds a level's (coordinates in pixels from the level's top-left corner), `world.json` `references` the world's (world pixels). The editor draws them under every layer, the first one lowest; they are never exported (a game background is a different thing). Files written before references existed load as they are: no `references` key means none.
+
+```json
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "crevasse22",
+  "slug": "crevasse",
+  "name": "Crevasse",
+  "world_px": [0, 0],
+  "size": [20, 5],
+  "depth": 0,
+  "references": [
+    { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "scale": 2, "opacity": 0.5, "locked": true }
+  ]
+}
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `id` | id | required | Unique across the project's reference images |
+| `image` | string | required | Path to a PNG, relative to the project directory, `/`-separated, like a tileset's `image`. The editor puts images it is given from outside the project in `art/` |
+| `px` | `[x, y]` | required | Where the image's top-left corner goes, in pixels (level or world, as above) |
+| `scale` | number | `1` | Drawn size over the image's size in pixels; above 0 |
+| `opacity` | number | `1` | 0 (invisible) to 1 |
+| `locked` | bool | `false` | The editor doesn't move or scale it on the canvas (the Inspector still edits it) |
+| `visible` | bool | `true` | Drawn at all |
+
+Keys at their default are left out when written.
+
+### Non-rectangular levels (void)
+
+An L-, T- or U-shaped room is its bounding box with rectangles cut out: `void` lists them as `[x, y, width, height]` in cells of the project grid, the same as `size`. Here a 20x12 room loses its top-right 8x5 corner and becomes an L:
+
+```json
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "hallell222",
+  "slug": "hall_ell",
+  "name": "Hall (L)",
+  "world_px": [320, 0],
+  "size": [20, 12],
+  "depth": 0,
+  "void": [[12, 0, 8, 5]]
+}
+```
+
+- A cell of the project grid is **in the level** when it is inside `size` and in no void rect. Rects may overlap; any grid-aligned shape is a union of rects.
+- A layer with its own `grid_size` has a cell void when every project cell it covers (inside the box) is void, so an 8 px layer's cells are void exactly under void project cells, and a 32 px layer keeps a cell the void only nicks.
+- Layer files don't change: grids stay dense (`size` in the layer's cells) and void cells are empty (`.`). Tiles and entities simply don't sit there.
+- Validation reports content in a void cell (grid values or overrides, tiles, an entity whose cell is void), a void rect that is empty or reaches outside the box, a void that leaves no cell, and a void that splits the level into pieces that don't touch (one level is one 4-connected room). A void rect the level encloses on every side (a hole) is allowed; the export's `outline` is the outer boundary only.
+- Rules treat void cells as outside the level: a pattern cell over the void takes the rule's `out_of_bounds` value, or the rule doesn't fire, exactly as past the level's edge, so walls close around an L's inside corner; no rule anchors in the void; region rules treat the void as the level's border (no region holds a void cell, and edge runs stop at it); derived layers compute nothing there. A level without `void` bakes exactly as before.
+- The editor draws only the level's cells (void is transparent, and a neighbouring level can sit in the notch), and hatches the void of the active level. Commands keep content out of the void ([commands.md](commands.md#set_level_void)).
+- With the grid vania layout ([World layouts](#world-layouts)), where levels are whole cells of a lattice, a level's void must be whole lattice cells too (validation reports a void rect that isn't): a shaped room is then a set of lattice cells.
+
+### Object groups
+
+A puzzle, an encounter, a furnished corner: a named set of a level's entities and annotations that selects and moves together in the editor. Groups are editor organisation: nothing of them is exported. Files written before groups existed load as they are.
+
+```json
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "crevasse22",
+  "slug": "crevasse",
+  "name": "Crevasse",
+  "world_px": [0, 0],
+  "size": [20, 5],
+  "depth": 0,
+  "groups": [
+    { "id": "gapgroup22", "name": "Gap puzzle", "members": ["btncrev222", "doorcrev22", "notecrev22"] }
+  ]
+}
+```
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `id` | id | Unique among the level's groups |
+| `name` | string | Display name |
+| `members` | array of ids | Entities (`entities.json`) and annotations (`notes.json`) of this level. Tile stacks have no id and are never members |
+
+Validation reports a member the level doesn't have (`groups[<id>].members[<i>]`: a deleted entity the file still lists), a member given twice or in a second group (an object is in one group), and a repeated group id.
 
 ## &lt;int_grid layer&gt;.json
 
@@ -1037,7 +1154,7 @@ Coordinates are pixels: world pixels in `world.json`, pixels from the level's to
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `id` | id | required | Unique across the project |
-| `kind` | string | required | `note`, `pin`, `path`, `region` or `guide` |
+| `kind` | string | required | `note`, `pin`, `path`, `region`, `guide` or `connector` |
 | `title` | string | none | |
 | `body` | string | none | Markdown |
 | `tags` | array of strings | `[]` | |
@@ -1051,14 +1168,34 @@ Coordinates are pixels: world pixels in `world.json`, pixels from the level's to
 | `rect` | `[x, y, w, h]` | | `region`, instead of `points` |
 | `closed` | bool | `false` | `guide`: join the last point to the first |
 | `icon` | string | | `pin`: icon name (below) |
-| `label` | string | | `pin`: short label |
-| `group` | slug | none | `guide`: the `world.json` guide group it belongs to (last key) |
+| `label` | string | | `pin`: short label; `connector`: text along the line |
+| `group` | slug | none | `guide`: the `world.json` guide group it belongs to |
+| `from` | end | | `connector` (required): where it starts, `{ "level": slug }` or `{ "entity": id }` |
+| `to` | end | | `connector` (required): where it ends, as `from` |
+| `waypoints` | array of `[x, y]` | `[]` | `connector`: points the line passes through, in pixels |
+| `style` | string | `"arrow"` | `connector`: `"arrow"` (an arrowhead at `to`), `"line"` or `"double"` (both ends) (last key) |
 
-Geometry by kind: `note` and `pin` need `px`; `path` and `guide` need 2+ `points`; `region` needs either `rect` (positive width and height) or 3+ `points`. A level-scope `note` or `pin` must sit inside its level; paths and regions may extend past it. `guide` is world scope only, `locked` in practice, and never exported. A geometry key on the wrong kind (`px` on a `path`, `group` on a `pin`) is a load error; a wrong point count is a validation problem.
+Geometry by kind: `note` and `pin` need `px`; `path` and `guide` need 2+ `points`; `region` needs either `rect` (positive width and height) or 3+ `points`; `connector` needs `from` and `to` ([below](#connectors)). A level-scope `note` or `pin` must sit inside its level; paths and regions may extend past it. `guide` is world scope only, `locked` in practice, and never exported. A geometry key on the wrong kind (`px` on a `path`, `group` on a `pin`) is a load error; a wrong point count is a validation problem.
 
 Pin icon names the editor draws: `pin` (the default), `statue`, `pool`, `door`, `star`, `chest`, `skull`, `eye`, `flag`, `key`. Any other name is kept and drawn as `pin`.
 
 Guides are locked reference lines that levels are built along and snap to, placed by hand or written by a tool (`add_note`). They aren't todo items: tools that count or list notes for an agent leave them out unless asked.
+
+### Connectors
+
+A connector is a planning line from one room (or a door entity) to another, with an optional label such as "needs double jump" or "one-way drop". Its ends are anchored, not stored: `from` and `to` name a level by slug or an entity by id, and the line is computed from where they are, so moving a room or an entity moves the line. In world pixels:
+
+- an **entity** end is the entity's pivot (`level.world_px + (cell + pivot) * layer grid + offset_px`, rounded);
+- a **level** end is the point of the level's edge nearest the next point along the line: the first waypoint for `from` (the last one for `to`), or with no waypoints the other end's center (a level's, `world_px + size * grid / 2`) or pivot. On a [non-rectangular level](#non-rectangular-levels-void) the edge is its `outline` (the nearest point of it, so a line into an L's notch meets the notch's wall); the center is still its box's. A point outside the level is clamped onto its rect; one inside goes straight out to the nearest edge.
+
+So two rooms side by side, `[0, 0, 100, 100]` and `[200, 0, 100, 100]` with no waypoints, are joined from `[100, 50]` to `[200, 50]`; a waypoint at `[150, -50]` makes it `[100, 0]`, `[150, -50]`, `[200, 0]`.
+
+```json
+{ "id": "conncrev22", "kind": "connector", "title": "Back up", "label": "needs double jump",
+  "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" }, "waypoints": [[360, 40]], "style": "double" }
+```
+
+`waypoints` are pixels like any geometry (world pixels in `world.json`, level pixels in `notes.json`); a level-scope connector's waypoints move with its level, and its ends may name other levels. Both ends should be in the connector's world. Old projects have no connectors and load unchanged; `from`, `to`, `waypoints` and `style` on another kind are a load error.
 
 ## export/ (generated)
 
@@ -1083,6 +1220,7 @@ The export has its own `format` (`1`), separate from the project's. Readers must
 | `tile_layers` | Every `tiles` and `auto` layer, bottom first: `{ "layer", "name", "kind", "grid_size", "opacity"?, "tilesets": [...] }`. `layer` is the slug, `name` the display name; `grid_size` is the layer's cell size in pixels (an `auto` layer's is its source's). Each `tilesets` entry is a run of consecutive tiles (in draw order) from one tileset at one alpha: `{ "tileset", "image", "tile_size", "spacing"?, "padding"?, "alpha"?, "tiles" }`. `image` is relative to the export directory (see above), and `tiles` holds `[x, y, col, row, flip]`: level pixels of the tile's top-left corner, atlas tile, flip bits: bit 4 = transpose, applied first (swap the tile's x and y), then bit 1 mirrors left-right and bit 2 top-bottom, all inside the tile's square; so 90° clockwise = 5, 180° = 3, 270° clockwise = 6 (Godot's `TRANSFORM_TRANSPOSE`, `TRANSFORM_FLIP_H` and `TRANSFORM_FLIP_V`). Draw the entries in order and each entry's tiles in order: that is the layer's draw order. A tileset can appear in several entries when another one is drawn in between (`a, a, b, a` is three entries). `auto` layers carry the baked autotiles |
 | `entities` | `{ "id", "type", "layer", "cell", "px", "size", "pivot", "fields", "fields_set" }`, in file order. `type` is the entity type slug (display names are in `world.json` `entity_types`). `cell` is in the entities layer's grid; `px` is the pivot point in level pixels, `(cell + pivot) * layer grid + offset_px`; `size` is in cells of the project grid. `fields` has every field of the type with its effective value, as for levels; `fields_set` lists, sorted, the fields the instance stores in `entities.json` |
 | `notes` | Level notes with `export: true` (never guides), in file order, coordinates moved to world pixels, `export`/`locked` dropped. See [Annotations in the export](#annotations-in-the-export) |
+| `void`?, `outline`? | Only on a [non-rectangular level](#non-rectangular-levels-void) (left out for a rectangle, after `tags`): `void` as in `level.json` (project cells), and `outline`, the level's outer boundary as a polygon in world pixels: `[[x, y], ...]`, clockwise on screen (y down), from the left end of its topmost edge, one point per corner. For a rectangle it would be the corners of `world_px` + `size` x `grid_size`. See [Non-rectangular levels in the export](#non-rectangular-levels-in-the-export) |
 
 `entity_ref` field values (in `fields` of levels and entities) become `{ "level": <slug>, "id": <id> }`, `level` being the level that holds the target, whether that's the referencing entity's own level or another one. `"level": null` only appears for a dangling reference (no entity has that id, a validation problem); a stored `null` stays `null`. In an array field each element is converted.
 
@@ -1096,17 +1234,27 @@ The export has its own `format` (`1`), separate from the project's. Readers must
 | `files` | The export's other files, relative to the export directory: `{ "enums": "enums.json" }` |
 | `entity_types[]` | Every entity type, by slug: `{ "slug", "name", "category"?, "tags" }`. `name` is the display name, `category` the palette path, `tags` possibly `[]` |
 | `worlds[]` | `{ "slug", "name"?, "notes", "levels" }`; `notes` are the world notes with `export: true` (never guides) |
-| `levels[]` | `{ "slug", "id", "name", "file", "rect", "depth", "tags"?, "touching", "open_edges"? }`. `file` is relative to the export directory; `rect` is `[x, y, w, h]` in world pixels; `tags` as in the level file, left out when empty |
-| `touching[]` | Levels of the same world sharing part of an edge: `{ "level", "edge": "left"/"right"/"top"/"bottom" (this level's), "span": [start, end) }` in world pixels. Corner contact doesn't count |
-| `open_edges` | Per edge (`left`, `right`, `top`, `bottom`), runs of open border cells as `[first, end)` cell indices along the edge (top to bottom, left to right), in cells of the collision layer's grid. A cell is open when its collision value isn't in `blocking_values`: empty cells, and also kinds like `oneway` or `water` unless listed. Left out when there's no `collision_layer` (no layer is guessed). `null` when the level's collision grid is absent or all empty: the export doesn't describe that level's seams (an importer falls back on its own) |
+| `levels[]` | `{ "slug", "id", "name", "file", "rect", "depth", "tags"?, "void"?, "outline"?, "touching", "open_edges"? }`. `file` is relative to the export directory; `rect` is `[x, y, w, h]` in world pixels (a non-rectangular level's bounding box); `tags`, `void` and `outline` as in the level file, left out when empty or rectangular |
+| `touching[]` | Levels of the same world sharing part of an edge: `{ "level", "edge": "left"/"right"/"top"/"bottom" (this level's), "span": [start, end), "at"? }` in world pixels. Corner contact doesn't count. When either level is non-rectangular the entries follow the outlines: one per straight stretch shared, with `at`, the coordinate of the edge line (x for `left`/`right`, y for `top`/`bottom`) |
+| `open_edges` | Per edge (`left`, `right`, `top`, `bottom`), runs of open border cells as `[first, end)` cell indices along the edge (top to bottom, left to right), in cells of the collision layer's grid; on a non-rectangular level each run is `[first, end, at]` and follows the outline (see below). A cell is open when its collision value isn't in `blocking_values`: empty cells, and also kinds like `oneway` or `water` unless listed. Left out when there's no `collision_layer` (no layer is guessed). `null` when the level's collision grid is absent or all empty: the export doesn't describe that level's seams (an importer falls back on its own) |
 
 `export/enums.json`: `{ "format": 1, "enums": [...] }`, every project enum in `enums.json` order as `{ "slug", "name", "values": [{ "slug", "name" }] }`, values in definition order. `name` is the display name, or the slug when none is set. Inline `values` of a field definition aren't project enums and aren't listed.
+
+### Non-rectangular levels in the export
+
+A level with a [void](#non-rectangular-levels-void) exports in the same `format` 1, with additive keys: everything a reader of rectangular levels knows keeps its meaning, a level without void exports byte for byte as before, and a reader that ignores the new keys still gets a correct bounding box, grids (dense, void cells `.`), tiles and entities.
+
+- `void` and `outline` are on the level file and its `world.json` entry. `outline` is what a game uses for camera limits and room bounds; collision needs nothing new, since void cells hold nothing.
+- `touching`: an L can touch one neighbour along several edges (the notch's floor and its wall), or along two stretches of one edge line. Each straight shared stretch is an entry, and every entry involving a non-rectangular level carries `at`, the edge line's coordinate in world pixels, which tells an L's two `top` edges apart. Entries are ordered by neighbour (world order), then edge (`left`, `right`, `top`, `bottom`), `at` and `span`. On a rectangle `at` would be redundant, so it is left out when neither level has a void.
+- `open_edges` of a non-rectangular level: a border cell is a cell of the level whose neighbour on that side is void or past the box, so the runs follow the outline, inner edges included. Each run is `[first, end, at]`: `[first, end)` along the edge as before, and `at` the edge line, counted like the cells from the level's top-left in cells of the collision layer (a `top` edge of row `y` is at `y`, a `bottom` edge at `y + 1`; likewise `left` at `x` and `right` at `x + 1`), so the box's own sides are `top` at 0, `left` at 0, `bottom` at the height and `right` at the width. Runs are sorted by `at`, then `first`. A rectangular level keeps `[first, end]` runs.
+
+So the open question of the roadmap (a new `format` 2, or `[first, end, at]` runs within `format` 1) is settled in favour of `format` 1: only levels that didn't exist before (shaped ones) get the longer runs, and the format rule ("readers ignore what they don't know, `format` bumps only when an existing key changes meaning") holds. A reader written before shaped levels reads a shaped level's seams on its bounding box, which is wrong for the inner edges; a reader that handles them checks for `outline`, and for runs and `touching` entries looks at `at` when present. The [Godot addon](../godot/addons/worlds/README.md) stores the outline as `worlds_outline` room metadata.
 
 ### Checking an export
 
 `worlds-cli check-export [<export dir>] [--project <dir>] [--fresh] [--json]` checks an export directory without the game: an independent reading of the files as plain JSON (not through the writer), against this section.
 
-- **format**: every file parses and has `format` 1 and the keys and types above (unknown keys are allowed, as for any reader); `blocking_values` present exactly when `collision_layer` is; level slugs unique; every `world.json` level `file` exists and every `levels/*.json` is listed (a stale file is a problem, reported once even with `--fresh`); a level file's `slug`, `id`, `world` and `grid_size` agree with `world.json`, its `world_px` is on the grid and `world_px` + `size` x `grid_size` is its `rect`; int grid `rows` are the level's size in the layer's cells with glyphs from the legend; a tile layer's `kind` is `tiles` or `auto`; every tile is `[x, y, col, row, flip]` with a flip in 0..7 and its box (a transposed tile's swapped) overlaps the level; `touching` and `open_edges` equal what the rects and collision rows give (a missing `open_edges` is reported even when the rows themselves are wrong); the collision layer isn't derived (reported in each level file, at `int_grids.<collision>.derived`); exported annotations parse as annotations.
+- **format**: every file parses and has `format` 1 and the keys and types above (unknown keys are allowed, as for any reader); `blocking_values` present exactly when `collision_layer` is; level slugs unique; every `world.json` level `file` exists and every `levels/*.json` is listed (a stale file is a problem, reported once even with `--fresh`); a level file's `slug`, `id`, `world` and `grid_size` agree with `world.json`, its `world_px` is on the grid and `world_px` + `size` x `grid_size` is its `rect`; int grid `rows` are the level's size in the layer's cells with glyphs from the legend; a tile layer's `kind` is `tiles` or `auto`; every tile is `[x, y, col, row, flip]` with a flip in 0..7 and its box (a transposed tile's swapped) overlaps the level; `touching` and `open_edges` equal what the rects and collision rows give (a missing `open_edges` is reported even when the rows themselves are wrong); on a non-rectangular level, `void` agrees between the two files and fits `size`, `outline` is exactly the outline the void gives (and is present whenever `void` is, on both files), `touching` and `open_edges` follow it with `at` as described above, and no grid cell (in its layer's cells) or tile of a `tiles` layer of the level file lies in the void (an autotile may overhang it); the collision layer isn't derived (reported in each level file, at `int_grids.<collision>.derived`); exported annotations parse as annotations.
 - **reference**: tileset `image`s exist (resolved from the export directory) and, for a PNG, every atlas tile lies inside it (with `spacing` and `padding`); entity `type`s are in `entity_types`; no `entity_ref` value has `"level": null`.
 - **stale** (`--fresh`): the project (`--project`, else the export directory's parent when it holds `project.json`) is baked in memory exactly as if into the export directory being checked, image paths included (`export::render_files`), and every file whose bytes differ, is missing, or is a level the bake doesn't produce is a problem. Nothing is written. Without an export directory, `--project <dir>` checks `<dir>/export`; `--project` without `--fresh` is a usage error.
 - **annotation** warnings, never problems: a `note:`, `level:` or `entity:` link that names nothing exported.
@@ -1139,10 +1287,17 @@ The export carries geometry plus tags, and no game meaning: what an annotation i
 ```
 
 - Where: world-scope ones in `world.json` `worlds[].notes`; level-scope ones in that level's `levels/<slug>.json` `notes`, moved to world pixels. Every coordinate is in world pixels, so a reader can merge both lists.
-- Kinds: `note` (text at a point), `pin`, `path`, `region` (`rect` or `points`, never both). Never `guide`: guides don't export, and validation reports one flagged `export`.
+- Kinds: `note` (text at a point), `pin`, `path`, `region` (`rect` or `points`, never both), `connector`. Never `guide`: guides don't export, and validation reports one flagged `export`.
 - Keys: `{ id, kind, title?, body?, tags?, color?, links?, status?, px | points | rect, icon?, label? }`; `tags` and `links` are left out when empty, `status` when open.
 - `links` keep the file strings. An exported annotation's `note:` links always point at exported annotations (validation reports one that doesn't), so they resolve inside the export; `entity:<id>` resolves through the level files' `entities[].id`, `level:<slug>` through `world.json` `levels[].slug`.
 - Order: file order (world notes, then each level's), stable across bakes.
+- Connectors: like paths, with their ends resolved. `from` and `to` name levels by slug and entities by id, an entity end with the slug of the level holding it (`{ "entity": "doorshaft2", "level": "shaft" }`); `waypoints` are in world pixels; and `points` is the line as drawn, in world pixels: the two computed ends with the waypoints between (so it has `waypoints + 2` points and reads like a path's). A connector whose end names nothing (validation reports it) isn't exported. These keys are new in export format 1, which readers that ignore unknown keys don't notice; `check-export` takes `points` and an entity end's `level` out before reading the rest as an annotation, and checks that `points` has the right length and that the levels and entities named are in the export.
+
+```
+{ "id": "conncrev22", "kind": "connector", "title": "Back up", "label": "needs double jump",
+  "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2", "level": "shaft" },
+  "waypoints": [[360, 40]], "style": "double", "points": [[320, 40], [360, 40], [360, 208]] }
+```
 
 Tags are free-form: any tag is allowed, and only the region check of [validation](#validation-reference) reads them (a level tagged like a region annotation should lie inside it). The editor treats one specially: `todo` marks a note as a work item, not something for the game.
 
@@ -1201,8 +1356,8 @@ guides over this level: 1 (list_notes kind guide)
 
 Line by line:
 
-- **Header.** `level <slug> <name as a JSON string> world <world> id <id>`, then ` tags [...]` when the level has tags; then size (in cells of the project grid), position, depth and `bg` when set; `fields:` when the level stores any (values as compact JSON); one `rule state <auto layer>:` line per entry of `level.json` `layers`.
-- **`int_grid <layer> (<w>x<h> cells of <n> px)`**, for each int_grid layer in `layers.json` order, then `legend:` with `.` first and the values in definition order, then the picture. Above the rows, a ruler of column numbers: the tens digit at every tenth column (only when the grid is wider than 10), then the ones digit of every column. Each row starts with its row number, right-aligned, and one space. Cell `[x, y]` is the character in column `x` of row `y`, exactly as in the layer file's `rows`. A layer with no content in the level shows as all `.`.
+- **Header.** `level <slug> <name as a JSON string> world <world> id <id>`, then ` tags [...]` when the level has tags; then size (in cells of the project grid), position, depth, `bg` when set, and `void [[x, y, w, h], ...]` for a [non-rectangular level](#non-rectangular-levels-void); `fields:` when the level stores any (values as compact JSON); one `rule state <auto layer>:` line per entry of `level.json` `layers`.
+- **`int_grid <layer> (<w>x<h> cells of <n> px)`**, for each int_grid layer in `layers.json` order, then `legend:` with `.` first and the values in definition order, then the picture. Above the rows, a ruler of column numbers: the tens digit at every tenth column (only when the grid is wider than 10), then the ones digit of every column. Each row starts with its row number, right-aligned, and one space. Cell `[x, y]` is the character in column `x` of row `y`, exactly as in the layer file's `rows`. A layer with no content in the level shows as all `.`. In a non-rectangular level, void cells show as `*` (whatever they hold) and the legend ends with `* void`; `*` is reserved (no value can use it, and in a `grid.set_cells` text block it leaves its cell alone), so a picture pasted back never writes into the void.
 - **Derived layers** are `int_grid` sections whose header ends with ` derived by <writer layer>` (or ` derived` when no layer writes it). The picture is the effective grid when the view has bake results; without them it is the stored overrides, and the header adds ` (not baked: overrides only)`. When the level stores overrides, an extra section follows the picture: `overrides: <n> cells (<v> set, <s> suppressed; . = from the rules)` and the stored rows (`!` for a suppressed cell) with the same ruler; not baked, the picture already is the stored rows, so only the `overrides:` line follows it:
 
   ```
@@ -1215,8 +1370,8 @@ Line by line:
 - **`auto <layer>`**: auto layers are generated, so the view only says where from.
 - **`tiles <layer> (...): <n> tiles`**, then one placement per line in file order (row, then column): `[x, y] <tileset> [col, row]`, then ` flip x|y|xy|t|xt|yt|xyt` and ` alpha <a>` when not the default.
 - **`entities: <n>`**, then one per line in file order: `<id> <type> in <layer> at [x, y]`, then ` offset_px [x, y]`, ` size [w, h]`, ` fields <compact JSON>` when set.
-- **`notes: <n>`**, then one per line in file order: `<id> <kind> open|done`, the geometry (` at [x, y]` for notes and pins, ` points [...]` for paths, guides and polygon regions, ` rect [x, y, w, h]` for rect regions, ` closed` for a closed guide, ` icon` and ` label` for pins), then ` title`, ` tags`, ` links`, ` export`, ` locked`, ` body` and (guides) ` group` when set. Strings are JSON strings, so a body's newlines read as `\n`; tags and links are JSON arrays.
-- **`world notes over this level: <n> (world pixels)`**: the world-scope annotations other than guides whose bounding box meets the level's rect in the world, one per line in the same form as `notes:` (coordinates are world pixels), then **`guides over this level: <n> (list_notes kind guide)`**: only a count of the world's guides over the level, where they are built (group offset applied). Both lines are always there (with `0`), so the shape is predictable. Notes filtered out of `notes:` (done ones, for the MCP `read_level`) are filtered out here too; with no notes section at all, neither line is printed.
+- **`notes: <n>`**, then one per line in file order: `<id> <kind> open|done`, the geometry (` at [x, y]` for notes and pins, ` points [...]` for paths, guides and polygon regions, ` rect [x, y, w, h]` for rect regions, ` closed` for a closed guide, ` icon` and ` label` for pins, ` from <end> to <end>` with ` waypoints [...]`, ` label` and ` style` when set for connectors, each end as `level:<slug>` or `entity:<id>`), then ` title`, ` tags`, ` links`, ` export`, ` locked`, ` body` and (guides) ` group` when set. Strings are JSON strings, so a body's newlines read as `\n`; tags and links are JSON arrays.
+- **`world notes over this level: <n> (world pixels)`**: the world-scope annotations other than guides whose bounding box (a connector's: of its line, ends included) meets the level's rect in the world, one per line in the same form as `notes:` (coordinates are world pixels), then **`guides over this level: <n> (list_notes kind guide)`**: only a count of the world's guides over the level, where they are built (group offset applied). Both lines are always there (with `0`), so the shape is predictable. Notes filtered out of `notes:` (done ones, for the MCP `read_level`) are filtered out here too; with no notes section at all, neither line is printed.
 
 ## Validation reference
 
@@ -1230,13 +1385,104 @@ Line by line:
 - passes and tags: groups in pass order (`groups[<i>].pass`: "group art (pass 0) comes after a pass 1 group; keep the file in pass order"); a `requires_level_tag` with no tags (`groups[<i>].requires_level_tag.tags`: "needs at least one tag"), an empty or repeated tag (`...tags[<k>]`);
 - region rules: `region.grid` (as for a pattern's `grid`: an `int_grid` layer on the auto layer's grid), `region.cells` (not `"*"`: "every cell would be one region"; values and groups the grid has, as are `place.against`'s), a `min_*` greater than its `max_*` (`region.min_width`: "min_width 20 is greater than max_width 10"), `place.align` with a spacing other than `even` and `place.jitter` with one other than `random`;
 - derived grids: a `write.grid` that isn't a derived `int_grid` layer on the auto layer's grid, a `write.value` that isn't a value of it (a group isn't one), a second layer writing a grid one layer already writes (`write.grid`: "pillar_marks is already written by layer pillars"), auto layers that read each other's derived grids (`layers.json` `layers[<first layer of the cycle>]`: "auto layers a and b read each other's derived grids: a → marks_b → b → marks_a → a"), a derived `collision_layer` (`project.json` `collision_layer`), and a derived layer's stored overrides the size of the level in its cells;
-- tile placements and entity cells inside the level;
+- tile placements and entity cells inside the level; for a [non-rectangular level](#non-rectangular-levels-void), `void` rects that are empty or reach outside the box (`level.json` `void[<i>]`), a void that leaves no cell or splits the level into pieces that don't touch (`void`), and content in a void cell: grid values or overrides (`<layer>.json` `rows[<y>]`, counted, with the first cell), tiles (`tiles[x,y]`) and entities (`layers[<layer>].entities[<id>].cell`);
+- the world order: each slug in `project.json` `worlds` names a world and appears once (`worlds[<i>]`), and, when the list is there, every world is in it (`worlds`: "world "x" isn't listed; it is shown after the listed worlds");
+- the level order: each slug in `world.json` `levels` names a level of that world and appears once (`levels[<i>]`), and, when the list is there, every level is in it (`levels`: "level "x" isn't listed; it comes after the listed levels");
+- world layouts: in a strip, each level's `world_px` is where the strip puts it; in grid vania, each level's corner is on the lattice (`world_px`), its size whole lattice cells (`size`) and each void rect whole lattice cells from the level's corner (`void[<i>]`), and `layout.cell` is a whole number of project cells. The lattice check takes any rectangle (`worlds_core::lattice_problem`). A strip places levels by their bounding box (`size`), void or not;
+- object groups (`level.json` `groups[<id>]`): every member is an entity or annotation of the level, none is listed twice or in two groups, group ids are unique in the level;
+- layer folders: a `folder` is a path like an entity `category` (`layers[<i>].folder`);
 - duplicate slugs and ids (layers, values and groups, tilesets, enums and their values, entity types, fields, rule groups, stamps, worlds, levels, entity ids, note ids; in a rules file, rule slugs, reference slugs and expanded slugs together; template rule slugs within a template);
 - field values and defaults against their field type, `min`/`max`, `regex` (the whole value must match), enum values, path extensions, nullability (per element for arrays); `point` and `entity_ref` defaults again in each level or entity that inherits them; a `regex` that doesn't compile;
-- annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;
+- annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); a connector end (`notes[<id>].from`, `notes[<id>].to`) naming no level or entity ("level "x" does not exist: the connector's end dangles"), or one in another world than the connector's; an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;
+- reference images (`references[<id>]`, in `world.json` or `level.json`): `image` is not empty, is a `/`-separated path inside the project (no `..`, not absolute), and the file exists (`image`: "image file "art/sketch.png" doesn't exist"; checked when the project was loaded from a directory); `scale` above 0; `opacity` in 0..1; ids unique across the project's references;
 - entity types: a `category` is a path of non-empty segments separated by `/`, with no `/` at either end and no whitespace around a segment (`Puzzle/Doors`, not `/Puzzle`, `Puzzle//Doors` or `Puzzle / Doors`); no tag appears twice in one type's `tags`;
+- assemblies (`assemblies/<slug>.json`): `category` and `tags` as for entity types; a `grid_size` other than the project's (placing it is refused); a `size` below 1x1; a grid layer that isn't a paintable `int_grid` layer (`grids.<layer>`), a legend value it doesn't have (`grids.<layer>.legend.<glyph>`), row glyphs that mean nothing in it (`grids.<layer>.rows`); a tiles layer that isn't one (`tiles.<layer>`), an unknown tileset (`tiles.<layer>[x,y].tileset`); an unknown entity type or entities layer (`entities[<id>].type`, `.layer`). Placing such an assembly skips what doesn't resolve, as a paste does;
 - layer slugs that collide with file names (`level`, `entities`, `notes`, `macros` for `int_grid`/`tiles` layers, `macros` for `auto` layers);
 - shape rules: at most one `@` per pattern, odd pattern sizes unless the pattern has `@`, rows of one length, at least one tile alternative with weights of 1 or more, `pivot` only in stamp mode, `rotate` only with square tiles (the output's tileset and every level substitute for it), annotation point counts, guides only at world scope, entity `limit`s, numbers that must be in 0..1;
 - enum sources (only when asked): `--enum-source theme=data/themes.json` compares a project enum with the game data file it mirrors. The values are the keys of the object at the JSON pointer (`#/tracks`; the whole file without one; keys starting with `_` are comments and skipped) or the strings of an array there. Each value the enum has and the file doesn't (`enums.json` `enums[<i>].values[<j>]`: "enum theme has "none", which data/themes.json doesn't (enum source drift)"), and each the file has and the enum doesn't (`enums[<i>]`: "enum theme lacks "jungle", which data/themes.json has (enum source drift)"), is a problem. `--enum-extra theme=none` names values only the enum may have (for example a "no theme" value). The file is relative to the current directory. Repeatable; an unknown enum, an unreadable file, a pointer that finds nothing, any other shape, or an `--enum-extra` for an enum no `--enum-source` compares is a usage error. A typical game check: `--enum-source theme=data/themes.json --enum-extra theme=none --enum-source music=data/music.json#/tracks`.
 
-Load errors stop the load and name the file and JSON path: bad JSON, unknown keys, a key of another kind even at its default (`values` on a `tiles` layer, `min` on a `bool` field, `px` on a `path`), wrong types, `format` other than 1, a reserved glyph, a malformed tile alternative, an output mixing tiles and stamp, a rule key on a template reference or a reference key on a rule, a rule with both or neither of `match` and `region`, both or neither of `out` and `write`, `place` without `region` (or `region` without `place`), a pattern-rule key on a region rule, `place` with both or neither of `along` and `across`, `[x, y]` with `along` or `min_length`/`against` with `across`, a region bound of 0, a negative or fractional `pass`, an empty `require` list, a region rule or `write` in a template, `"overrides"` missing on a derived layer's file, present on another file or `false`, `!` in a file of a layer that isn't derived or in a legend, a cell test that isn't `*`, `+`, `.`, a slug, `!slug`, `[a|b]` or `![a|b]`, an IntGrid row with an unknown glyph or a different length, an IntGrid legend that disagrees with `layers.json`, a slug that doesn't match its file name, an unknown file in a level directory.
+Load errors stop the load and name the file and JSON path: bad JSON, unknown keys, a key of another kind even at its default (`values` on a `tiles` layer, `min` on a `bool` field, `px` on a `path`, `from` on a `path`), wrong types, `format` other than 1, a reserved glyph, a malformed tile alternative, an output mixing tiles and stamp, a rule key on a template reference or a reference key on a rule, a rule with both or neither of `match` and `region`, both or neither of `out` and `write`, `place` without `region` (or `region` without `place`), a pattern-rule key on a region rule, `place` with both or neither of `along` and `across`, `[x, y]` with `along` or `min_length`/`against` with `across`, a region bound of 0, a negative or fractional `pass`, an empty `require` list, a region rule or `write` in a template, `"overrides"` missing on a derived layer's file, present on another file or `false`, `!` in a file of a layer that isn't derived or in a legend, a cell test that isn't `*`, `+`, `.`, a slug, `!slug`, `[a|b]` or `![a|b]`, an IntGrid row with an unknown glyph or a different length, an IntGrid legend that disagrees with `layers.json`, a slug that doesn't match its file name, an unknown file in a level directory.
+
+## Clipboard fragments
+
+A **fragment** is a piece of a level as one JSON object: grid cells, tile stacks, entities and annotations, cut loose from where they came from. It is what Copy puts on the system clipboard (as text, so it pastes into a second editor, a file or a chat with an agent), what `edit.copy` returns and `edit.paste` takes, and the shape [assemblies](#assembliesslugjson) store. It is not a project file (no `$schema`, no `format`); its JSON Schema is the MCP resource `worlds://schema/fragment.json` (`worlds_core::fragment::schema()`), and in Rust it is `worlds_core::fragment::Fragment`.
+
+```json
+{ "worlds_fragment": 1, "grid_size": 16, "size": [7, 2],
+  "source": { "level": "crevasse", "origin": [12, 2] },
+  "grids": { "collision": { "legend": { "o": "oneway" }, "rows": ["ooo    ", "......."] } },
+  "tiles": { "decor_back": [ { "cell": [1, 1], "tileset": "castle_main", "tile": [3, 2] } ] },
+  "entities": [
+    { "id": "btncrev222", "type": "floor_button", "layer": "objects", "cell": [0, 1], "offset_px": [0, -2],
+      "fields": { "channel": 3, "target": "doorcrev22" } },
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [6, 1], "size": [1, 2] } ],
+  "notes": [ { "id": "notecrev22", "kind": "note", "title": "Widen the gap", "px": [8, 4],
+               "links": ["entity:btncrev222"] } ] }
+```
+
+- **`worlds_fragment`**: the version, `1`. A paste of another version is refused.
+- **`grid_size`**, **`size`**: the project grid (pixels) of the project it came from and the fragment's `[width, height]` in cells of it. A paste into a project with another grid size is refused.
+- **`source`** (optional): the level it was copied from and its top-left corner there, in cells of the project grid (without a level, the world's). Paste in place uses it.
+- **Coordinates are from the fragment's origin**, its top-left corner: grid rows, tile `cell`s and entity `cell`s in each layer's own grid (so `decor_back`, an 8 px layer, has twice the cells per axis), entity `point` field values too, and annotation geometry in pixels. A copy puts the origin at the top-left of what it copied, rounded down to a whole cell of every layer involved.
+- **`grids`**: int_grid layers by slug, each `{ legend?, rows }`. One glyph per cell; `.` is empty, a space is not part of the fragment (a paste leaves that cell as it is), rows may be short. `legend` maps a glyph to a value slug (or `null`, empty); a glyph it doesn't list means what the destination layer's definition says. A copy writes the legend of every value it uses, so a paste matches values by slug even where the glyphs differ. A rectangle copy includes its empty cells, so its paste replaces the whole rectangle.
+- **`tiles`**: tiles layers by slug, placements as in a [tiles layer file](#tiles-layerjson). A paste replaces the whole stack at each cell it writes.
+- **`entities`**: instances as in [entities.json](#entitiesjson) plus `layer` (default: the destination's first entities layer). `id` is the id where it was copied from.
+- **`notes`**: annotations as in [notes.json](#notesjson-and-annotations). World annotations copied with a level come in level pixels; a pasted annotation is a level note of the destination level, except a guide, which goes to that level's world (in world pixels).
+
+### What a paste does
+
+`worlds_core::fragment::paste(project, fragment, { level, origin, layer_map? })` works out a plan; nothing changes until its command is applied. The plan is one `batch` of existing commands, labelled `Paste <n> items` (one undo entry): a `paint_cells` per grid layer, a `set_tiles` per tiles layer, an `add_entity` per entity and an `add_note` per annotation. `origin` is where the fragment's origin goes, in cells of the destination level's project grid; a layer with a coarser grid than the project's puts it on the layer cell holding that pixel. `layer_map` sends a fragment layer to another destination layer (`{ "collision": "collision_b" }`).
+
+- **New ids.** Every pasted entity and annotation gets a new id. References inside the fragment follow together: a pasted button's `entity_ref` to a door in the fragment points at the pasted door, and annotation links `entity:<id>` and `note:<id>` to things in the fragment point at their copies.
+- **References outside the fragment** are kept when the destination resolves them: an `entity_ref` whose target is in the destination level, or anywhere in the project when the field is `cross_level`; a link to an entity, annotation or level the project has. Otherwise an `entity_ref` is set to `null` (dropped from an array) and a link is dropped, each with a problem.
+- **Clipping.** Grid cells and tile stacks that fall outside the level are left out (one problem counts them). An entity whose cell would be outside the level is not pasted, with a problem naming it. A [non-rectangular level](#non-rectangular-levels-void)'s void counts as outside: grid cells and tile stacks there are left out (another problem counts them) and an entity there is not pasted. Annotations are pasted wherever they land.
+- **Skipped, with a problem:** a layer the destination doesn't have, or has with another kind; a glyph or value slug the layer doesn't define; a tile of a tileset the project doesn't have; an entity of a type it doesn't have; a guide's group the destination world doesn't have (the guide is pasted with no group).
+
+## assemblies/&lt;slug&gt;.json
+
+An **assembly** is a named, reusable piece of a level: a doorway with its door, switch and wiring, a furnished room corner, an encounter. It is a [fragment](#clipboard-fragments) kept in the project, one per file, committed with it so a team shares them. The file name must be `<slug>.json`. A project without an `assemblies/` directory has none; nothing else changes.
+
+```json
+{
+  "$schema": "../schema/assembly.json",
+  "format": 1,
+  "slug": "doorway",
+  "name": "Doorway",
+  "category": "Puzzle/Doors",
+  "tags": ["door", "puzzle"],
+  "doc": "A locked door with its button, wired together.",
+  "grid_size": 16,
+  "size": [7, 3],
+  "grids": {
+    "collision": {
+      "legend": { "#": "solid" },
+      "rows": [
+        "       ",
+        "       ",
+        "#######"
+      ]
+    }
+  },
+  "entities": [
+    { "id": "btncrev222", "type": "floor_button", "layer": "objects", "cell": [0, 1],
+      "fields": { "channel": 3, "target": "doorcrev22" } },
+    { "id": "doorcrev22", "type": "locked_door", "layer": "objects", "cell": [6, 1], "size": [1, 2] }
+  ]
+}
+```
+
+| Key | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `slug` | slug | yes | Must match the file name |
+| `name` | string | yes | Display name in the Library |
+| `category` | string | no | `/`-separated palette path, like an entity type's (`Puzzle/Doors`) |
+| `tags` | array of strings | no | Free tags, for the Library's search |
+| `doc` | string | no | Shown on hover |
+| `grid_size`, `size`, `grids`, `tiles`, `entities`, `notes` | | `grid_size` and `size` | Exactly as in a [fragment](#clipboard-fragments): the project grid it was saved in, its size in cells of it, then the content with coordinates from its top-left corner |
+
+A fragment's `worlds_fragment` and `source` aren't in the file: `format` versions it, and an assembly belongs nowhere. Ids in it are the ids of what it was saved from; placing it gives everything new ids, exactly like a paste, and references inside it follow (the button above still opens the door it is placed with).
+
+**Placing** an assembly is a [paste](#what-a-paste-does) of its fragment, optionally turned first (mirrored or rotated, the turn written like a tile's [`flip`](#common-value-types); [commands.md](commands.md#transforms)): one batch, one undo entry, labelled `Place assembly <slug>`. Copies are independent: editing a placed copy doesn't touch the assembly, and changing the assembly doesn't touch copies placed before.
+
+**Thumbnails** are not stored in the project. The editor renders one per assembly into `.worlds/thumbs/assembly-<slug>-<hash>.png` (`<hash>` is of the file's content, so an edited assembly gets a new picture) and shows it in its Library.
+

@@ -45,6 +45,17 @@ pub fn mini() -> (tempfile::TempDir, PathBuf) {
     (tmp, dir)
 }
 
+/// The game fixture (`tests/fixtures/game/`: `game.worlds` and the
+/// `assets/` its tilesets name) copied next to `dir`, so `../game.worlds`
+/// is a second project to import from.
+pub fn game_beside(dir: &Path) -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/game");
+    let parent = dir.parent().unwrap();
+    copy_dir(&root.join("game.worlds"), &parent.join("game.worlds"));
+    copy_dir(&root.join("assets"), &parent.join("assets"));
+    parent.join("game.worlds")
+}
+
 pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Connect to a server on `port`.

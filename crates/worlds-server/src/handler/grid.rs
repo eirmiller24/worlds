@@ -127,12 +127,34 @@ pub(crate) fn set_cells(project: &Project, method: &str, p: Value) -> Result<Wri
             text_cells(def, &text, origin, p.legend.unwrap_or_default())?
         }
     };
+    let cells = clip_void(project, &p.level, &p.layer, cells);
     Ok(Write::one(Command::PaintCells {
         level: p.level,
         layer: p.layer,
         cells,
         keep_empty: p.keep_empty,
     }))
+}
+
+/// `cells` without the writes of a value (or `"!"`) into the level's void
+/// (a non-rectangular level's cut-out cells): grid writes clip at the void
+/// as the editor's tools do. Clearing a void cell is kept. Unknown levels
+/// and layers are left for the command to refuse.
+pub(crate) fn clip_void(
+    project: &Project,
+    level: &Slug,
+    layer: &Slug,
+    mut cells: Vec<CellValue>,
+) -> Vec<CellValue> {
+    if let (Some(l), Some(def)) = (project.level(level.as_str()), project.layer(layer.as_str()))
+        && l.has_void()
+    {
+        cells.retain(|c| {
+            c.value == GridValue::Clear
+                || !project.layer_cell_void(def, l, c.cell[0] as i64, c.cell[1] as i64)
+        });
+    }
+    cells
 }
 
 /// The cells a text block paints (see `docs/api.md`, `grid.set_cells`):
@@ -255,6 +277,7 @@ pub(crate) fn line(project: &Project, method: &str, p: Value) -> Result<Write, R
         .into_iter()
         .map(|[x, y]| CellValue::new(x as u32, y as u32, p.value.clone()))
         .collect();
+    let cells = clip_void(project, &p.level, &p.layer, cells);
     Ok(Write::one(Command::PaintCells {
         level: p.level,
         layer: p.layer,

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Worlds
+GenericName=Level editor
+Comment=2D tile-based level editor for Godot games
+Exec=worlds %f
+Icon=worlds
+Terminal=false
+Categories=Development;Graphics;2DGraphics;
+MimeType=inode/directory;
+Keywords=level;tile;map;editor;godot;
+StartupWMClass=worlds

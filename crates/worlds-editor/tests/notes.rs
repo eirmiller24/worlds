@@ -489,7 +489,10 @@ fn levels_snap_to_guides_within_8_screen_px_and_not_beyond() {
     r.view.annotations.snap_to_guides = true;
     r.view.annotations.hidden_kinds.insert("guide".into());
     let (d, snaps) = annot::drag_delta(&r.doc, &r.view, &[shaft], [79.0, 0.0], false);
-    assert_eq!((d, snaps.len()), ([80, 0], 0));
+    // (The shaft's top stays on crevasse's bottom edge: a level-edge snap
+    // on y.)
+    let on_x = snaps.iter().filter(|s| s.axis == 0).count();
+    assert_eq!((d, on_x), ([80, 0], 0));
     r.view.annotations.hidden_kinds.clear();
     // A guide group's offset counts (as built): moved 20 px right, the
     // guide is at 520, which a drag by 99 reaches (right edge 515) and a
@@ -620,6 +623,7 @@ fn undo_prunes_the_selection_of_every_kind() {
     r.apply(Command::DeleteLevel {
         world: Slug::new("main").unwrap(),
         level: shaft,
+        keep_layout: false,
     })
     .unwrap();
     assert!(r.view.selection.is_empty());
@@ -829,8 +833,8 @@ fn shift_nudge_moves_every_kind() {
 }
 
 /// C3: what is selected inside a selected level rides along when the level
-/// moves (nudge), but is copied when the level isn't (Ctrl-D: levels aren't
-/// duplicated), not silently skipped.
+/// moves (nudge) and when it is duplicated (Ctrl-D copies the level with
+/// everything in it), so it isn't copied twice.
 #[test]
 fn items_in_a_selected_level_ride_along_or_are_copied() {
     let mut r = Rig::new();
@@ -846,11 +850,16 @@ fn items_in_a_selected_level_ride_along_or_are_copied() {
     assert!(matches!(n.commands.as_slice(), [Command::MoveLevel { .. }]));
     // A3: the stack inside the moved level keeps its (level-local) cell.
     assert!(n.selection.contains(&r.stack("crevasse", [4, 1])));
-    // Ctrl-D: the note and the stack are copied, the level isn't.
+    // Ctrl-D: the level is duplicated, the note and the stack with it.
     let d = annot::plan_duplicate(&r.doc, &r.view);
-    assert_eq!(d.label, "Duplicate 2 items");
-    assert_eq!(d.message.as_deref(), Some("Levels aren't duplicated"));
-    assert_eq!(d.selection.len(), 2);
+    assert_eq!(d.label, "Duplicate level crevasse");
+    assert_eq!(d.message, None);
+    assert!(d.selection.is_empty());
+    assert_eq!(d.levels, [worlds_core::slug("crevasse_copy")]);
+    assert!(matches!(
+        d.commands.as_slice(),
+        [Command::DuplicateLevel { .. }]
+    ));
     // A drag that rounds to no level movement moves the inside items
     // instead of dropping them: 6 px moves the 8 px stack a cell while the
     // level (16 px grid) stays.
@@ -966,6 +975,7 @@ fn world_notes_are_selectable_with_no_level() {
         r.apply(Command::DeleteLevel {
             world: w.clone(),
             level: Slug::new(l).unwrap(),
+            keep_layout: false,
         })
         .unwrap();
     }

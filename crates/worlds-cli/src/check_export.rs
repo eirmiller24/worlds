@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::check_shape::{self, Shape};
+
 /// What a finding is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -306,6 +308,10 @@ pub fn check(dir: &Path) -> anyhow::Result<Report> {
         rect: Option<[i64; 4]>,
         path: String,
         index: Value,
+        /// A non-rectangular level's `void` (empty for a rectangle).
+        void: Vec<[i64; 4]>,
+        /// Its cells, when the rect is whole cells.
+        shape: Option<Shape>,
     }
     let mut listed: Vec<Listed> = Vec::new();
     let mut notes: Vec<NoteAt> = Vec::new();
@@ -341,6 +347,21 @@ pub fn check(dir: &Path) -> anyhow::Result<Report> {
                 let rect = w.ints::<4>(lv, &lp, "rect");
                 w.int(lv, &lp, "depth");
                 w.arr(lv, &lp, "touching");
+                // A non-rectangular level: its void, and the outline it gives.
+                let void = match check_shape::parse_void(lv.get("void")) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        w.bad(&join(&lp, "void"), e);
+                        Vec::new()
+                    }
+                };
+                let shape = rect.and_then(|r| Shape::new(r, grid, &void));
+                if let Some(s) = &shape {
+                    for (p, msg) in check_shape::void_problems(&void, s.w, s.h) {
+                        w.bad(&join(&lp, &p), msg);
+                    }
+                    check_outline(&mut w, &lp, lv, s);
+                }
                 listed.push(Listed {
                     world: wslug.clone(),
                     slug,
@@ -349,6 +370,8 @@ pub fn check(dir: &Path) -> anyhow::Result<Report> {
                     rect,
                     path: lp,
                     index: lv.clone(),
+                    void,
+                    shape,
                 });
             }
         }
@@ -364,9 +387,17 @@ pub fn check(dir: &Path) -> anyhow::Result<Report> {
         let want: Vec<Value> = listed
             .iter()
             .filter(|b| b.world == a.world && b.slug != a.slug)
-            .filter_map(|b| {
-                let (edge, span) = touch(ra, b.rect?)?;
-                Some(json!({ "level": b.slug, "edge": edge, "span": span }))
+            .flat_map(|b| match (&a.shape, &b.shape) {
+                // Either one non-rectangular: along the outlines, with `at`.
+                (Some(sa), Some(sb)) if sa.shaped || sb.shaped => {
+                    check_shape::shaped_touching(sa, sb, &b.slug)
+                }
+                _ => b
+                    .rect
+                    .and_then(|rb| touch(ra, rb))
+                    .map(|(edge, span)| json!({ "level": b.slug, "edge": edge, "span": span }))
+                    .into_iter()
+                    .collect(),
             })
             .collect();
         if *given != Value::Array(want.clone()) {
@@ -445,6 +476,8 @@ pub fn check(dir: &Path) -> anyhow::Result<Report> {
             slug: &l.slug,
             id: &l.id,
             rect: l.rect,
+            void: &l.void,
+            shape: l.shape.as_ref(),
             collision: collision.as_deref(),
             blocking: &blocking,
             entity_types: &entity_types,
@@ -485,7 +518,11 @@ pub fn check(dir: &Path) -> anyhow::Result<Report> {
     let level_slugs: HashSet<&str> = listed.iter().map(|l| l.slug.as_str()).collect();
     let mut ids: HashSet<String> = HashSet::new();
     for n in &notes {
-        if let Err(e) = serde_json::from_value::<worlds_core::Annotation>(n.note.clone()) {
+        let mut note = n.note.clone();
+        if note.get("kind").and_then(Value::as_str) == Some("connector") {
+            connector_ends(&mut report, n, &mut note, &level_slugs, &entity_ids);
+        }
+        if let Err(e) = serde_json::from_value::<worlds_core::Annotation>(note) {
             report.problem(
                 Kind::Format,
                 &n.file,
@@ -530,9 +567,37 @@ struct LevelCtx<'a> {
     slug: &'a str,
     id: &'a str,
     rect: Option<[i64; 4]>,
+    /// world.json's `void` for the level (empty for a rectangle).
+    void: &'a [[i64; 4]],
+    /// The level's cells from world.json's rect and void.
+    shape: Option<&'a Shape>,
     collision: Option<&'a str>,
     blocking: &'a HashSet<String>,
     entity_types: &'a HashSet<String>,
+}
+
+/// `outline` of a level (in either file) against the one its void gives:
+/// required on a non-rectangular level, right wherever it is given.
+fn check_outline(r: &mut Reader, prefix: &str, v: &Value, shape: &Shape) {
+    let want = shape.outline();
+    match v.get("outline") {
+        None if shape.shaped => r.bad(
+            prefix,
+            "missing key \"outline\" (the level has a void)".to_string(),
+        ),
+        None => {}
+        Some(given) if *given != json!(want) => r.bad(
+            &join(prefix, "outline"),
+            format!(
+                "the outline doesn't follow the level's rect and void; they give {}",
+                serde_json::to_string(&want).unwrap_or_default()
+            ),
+        ),
+        Some(_) => {}
+    }
+    if shape.shaped && !(0..shape.h).any(|y| (0..shape.w).any(|x| shape.is_in(x, y))) {
+        r.bad(&join(prefix, "void"), "the void covers the whole level");
+    }
 }
 
 fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) {
@@ -585,6 +650,19 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) {
         );
     }
     let [w_px, h_px] = size.map_or([0, 0], |s| [s[0] * g, s[1] * g]);
+    // A non-rectangular level: the same void as world.json, and its outline.
+    match check_shape::parse_void(v.get("void")) {
+        Ok(void) if void != cx.void => r.bad(
+            "void",
+            format!("{void:?}, but world.json says {:?}", cx.void),
+        ),
+        Ok(_) => {}
+        Err(e) => r.bad("void", e),
+    }
+    if let Some(shape) = cx.shape {
+        check_outline(&mut r, "", v, shape);
+    }
+    let shape = cx.shape.filter(|s| s.shaped);
     r.obj(v, "", "fields");
     r.arr(v, "", "fields_set");
     r.arr(v, "", "notes");
@@ -655,6 +733,24 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) {
                     if let Some(c) = s.chars().find(|c| !legend.contains(c)) {
                         r.bad(&rp, format!("glyph {c:?} isn't in the legend"));
                     }
+                    // Nothing in the void: its cells are empty.
+                    let filled = |c: char| {
+                        gv.get("legend")
+                            .and_then(|l| l.get(c.to_string()))
+                            .is_some_and(|x| !x.is_null())
+                    };
+                    if let Some(sh) = shape
+                        && let Some(x) = s
+                            .chars()
+                            .enumerate()
+                            .find(|&(x, c)| filled(c) && sh.void_on(gs, x as i64, y as i64))
+                            .map(|(x, _)| x)
+                    {
+                        r.bad(
+                            &rp,
+                            format!("cell [{x}, {y}] is in the level's void but isn't empty"),
+                        );
+                    }
                 }
             }
         }
@@ -708,6 +804,17 @@ fn check_level(cx: &LevelCtx, file: &str, v: &Value, report: &mut Report) {
                             &tp,
                             format!("tile at [{x}, {y}] lies outside the level's {w_px}x{h_px} px"),
                         );
+                    }
+                    // A hand-placed tile sits on its cell: never in the void
+                    // (a baked one may overhang it).
+                    if kind == "tiles"
+                        && grid_size > 0
+                        && let Some(sh) = shape
+                        && x % grid_size == 0
+                        && y % grid_size == 0
+                        && sh.void_on(grid_size, x / grid_size, y / grid_size)
+                    {
+                        r.bad(&tp, format!("tile at [{x}, {y}] is in the level's void"));
                     }
                     if col < 0 || row < 0 {
                         r.report
@@ -917,6 +1024,12 @@ fn check_open_edges(cx: &LevelCtx, path: &str, index: &Value, level: &Value, rep
                 None
             } else if all_empty || w == 0 || rows.iter().any(|r| r.len() != w) {
                 Some(Value::Null)
+            } else if let Some(shape) = cx.shape.filter(|s| s.shaped) {
+                let open =
+                    |x: usize, y: usize| value(rows[y][x]).is_none_or(|s| !cx.blocking.contains(s));
+                Some(check_shape::shaped_open_edges(
+                    shape, gs, w as i64, h as i64, &open,
+                ))
             } else {
                 let open =
                     |x: usize, y: usize| value(rows[y][x]).is_none_or(|s| !cx.blocking.contains(s));
@@ -1027,4 +1140,71 @@ pub fn fresh(project_dir: &Path, export_dir: &Path, report: &mut Report) -> anyh
         }
     }
     Ok(())
+}
+
+/// An exported connector's resolved parts: each end's `level` (an entity
+/// end's too) names an exported level, an entity end an exported entity,
+/// and `points` is the line, its two ends plus the waypoints. They are
+/// taken out of `note` (the export-only keys), which is then the file form
+/// to parse as an annotation.
+fn connector_ends(
+    report: &mut Report,
+    n: &NoteAt,
+    note: &mut Value,
+    level_slugs: &HashSet<&str>,
+    entity_ids: &HashSet<String>,
+) {
+    let waypoints = note
+        .get("waypoints")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let points = note.as_object_mut().and_then(|m| m.remove("points"));
+    let ok_points = points
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.len() == waypoints + 2 && a.iter().all(|p| ints_of::<2>(p).is_some()));
+    if !ok_points {
+        report.problem(
+            Kind::Format,
+            &n.file,
+            format!("{}.points", n.path),
+            format!(
+                "a connector's points are its line: {} [x, y] (both ends and the waypoints)",
+                waypoints + 2
+            ),
+        );
+    }
+    for key in ["from", "to"] {
+        let Some(end) = note.get_mut(key).and_then(Value::as_object_mut) else {
+            continue; // the annotation parse reports it
+        };
+        let path = format!("{}.{key}", n.path);
+        let level = end.get("level").and_then(Value::as_str).map(str::to_string);
+        match &level {
+            None => report.problem(
+                Kind::Format,
+                &n.file,
+                &path,
+                "a connector end needs \"level\"",
+            ),
+            Some(l) if !level_slugs.contains(l.as_str()) => report.problem(
+                Kind::Reference,
+                &n.file,
+                &path,
+                format!("level {l:?} is not in the export"),
+            ),
+            Some(_) => {}
+        }
+        if let Some(id) = end.get("entity").and_then(Value::as_str) {
+            if !entity_ids.contains(id) {
+                report.problem(
+                    Kind::Reference,
+                    &n.file,
+                    &path,
+                    format!("entity {id} is not in the export"),
+                );
+            }
+            end.remove("level");
+        }
+    }
 }

@@ -161,6 +161,7 @@ impl EditorApp {
             doc,
             editing,
             view: &mut self.st.view,
+            viewport: &mut self.st.viewport,
             invalidate: &mut self.invalidations,
             own_writes: &mut self.own_writes,
             snapshots: &mut self.live.snapshots,
@@ -178,9 +179,6 @@ impl EditorApp {
         if let Some(old) = effects.reloaded {
             self.finish_reload(&old);
             self.reset_problems();
-        }
-        if let Some(fit) = effects.focus {
-            self.st.viewport.request_fit(fit);
         }
         if effects.problems
             && let (Some(s), Some(doc)) = (self.live.server.as_mut(), self.st.doc.as_ref())
@@ -302,6 +300,7 @@ impl EditorApp {
         // from the old document, so nothing keyed on it matches again.
         self.st.view.entities.retain_known(&doc.project);
         self.st.entities.document_replaced();
+        self.st.thumbs.clear();
         doc.defs_gen = old.defs_gen + 1;
         if headless {
             doc.inline_layer_bakes = true;

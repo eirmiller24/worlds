@@ -194,6 +194,10 @@ The content keeps its place in the world: when the left edge moves, `world_px` c
 - **Inverse:** `replace_level` with the level as it was, `restore: true` (a resize can crop, so the inverse carries the old content).
 - **Changes:** `level_meta` part `size`, `level_meta` part `position` when the content shifted, a `grid` or `tiles` per layer with content (whole layer), an `entity` and `note` per item that moved, and `entity_outside` for each entity now outside the level.
 
+The editor's tools (dragging an edge, the Inspector's Size, Crop to content) refuse a resize that would leave an entity outside the level, as they refuse moving one out; `Project::resize_leaves_outside` says which. The command itself keeps them, so agents and inverses are never refused.
+
+**Crop to content** is not a command of its own: `Project::crop_level` builds a `batch` labelled `Crop level <slug>` of one or two `resize_level`s that shrink the level to the bounding box of its content: non-empty int_grid cells, derived overrides, tile stacks and entities (each one's cell and box, as far as they lie inside the level); notes don't count. The first trims the left and top edges (anchoring the far ones), the second the right and bottom (`anchor: [-1, -1]`). The left and top are rounded out to where every layer of the level moves by whole cells of its own grid. A level with no content is refused (`invalid`); one that already fits its content gives nothing to apply. Over the API it is `level.crop`, over MCP `crop_level`.
+
 ### rename_level
 
 Change the slug (the level's directory, and its name in the export) and the display name. Every note link `level:<old slug>` becomes `level:<new slug>`. Refused if the new slug is taken, or if a note already links to `level:<new slug>` (undo couldn't tell it from a rewritten link).
@@ -250,8 +254,38 @@ Replace a level's `tags` (stored as given, order kept; an empty list removes the
 { "op": "delete_level", "world": "main", "level": "shaft" }
 ```
 
-- **Inverse:** `create_level` with the full level, content included, and `restore: true`, so the level comes back byte for byte even if it held a validation problem a fresh `create_level` would refuse.
-- **Changes:** `level_deleted` (the whole level directory is dirty, and saving removes its files).
+- **Inverse:** `create_level` with the full level, content included, and `restore: true`, so the level comes back byte for byte even if it held a validation problem a fresh `create_level` would refuse; then `reorder_levels` with the old list (`restore: true`) when the world's [level order](#reorder_levels) changed.
+- **Changes:** `level_deleted` (the whole level directory is dirty, and saving removes its files), and `world_meta` when the level order changed.
+- In a [strip layout](#set_world_layout) the levels after it move up (see there). `keep_layout: true` leaves them where they are; inverses set it.
+
+### duplicate_level
+
+Copy a level under a new `slug`: its `level.json` (fields, tags, per-layer rule state and tileset substitutions, depth, background), every layer's content, its entities and its notes. The copy gets a new level id, and every entity and note in it a new id; references between them follow the copies (a button's `entity_ref` to a door in the level points at the copied door, as do level fields of type `entity_ref` and notes' `entity:` and `note:` links), while references to anything outside the level are kept as they are. `name` defaults to the original's with ` copy` added; `world` (where the copy goes) to the original's world; `world_px` to just right of the original: at its top, starting at its right edge and moved right past every level of that world it would overlap. The new ids are derived from the copy's level id and the old ids, so the same duplicate of the same project gives the same ids.
+
+```json
+{ "op": "duplicate_level", "level": "crevasse", "slug": "crevasse_b", "name": "Crevasse B" }
+```
+
+- **Inverse:** `delete_level` of the copy.
+- **Changes:** `level_created`, and `world_meta` when the world keeps a [level order](#reorder_levels) (the copy goes last in it).
+- [Object groups](#set_group) are copied with their ids, their members following the copies. In a strip layout the copy takes its place at the end of the strip.
+
+### set_level_void
+
+Give a level a non-rectangular shape: replace its `void`, the rectangles `[x, y, width, height]` (cells of the project grid) cut out of its box ([format.md](format.md#non-rectangular-levels-void)). `[]` makes it a rectangle again. Grid cells, derived overrides and tiles that fall in the new void are cleared; an entity whose cell would be void refuses the command (move or remove it first), as does a rect that is empty or reaches outside the box, and a void that leaves no cell. A layer cell is void when every project cell it covers is, so a coarse layer keeps a cell the void only nicks.
+
+`restore: true` (default `false`) takes the rects as given and clears nothing: inverses set it to put back an old void exactly (whatever it held), edits leave it off.
+
+```json
+{ "op": "set_level_void", "level": "wing", "void": [[6, 0, 2, 2]] }
+```
+
+This cuts the top-right 2x2 cells out of `wing` (8x4 here), turning it into an L, and clears the three wall cells of its collision layer that were there.
+
+- **Inverse:** a `batch` putting the cleared content back (`paint_cells`, `set_tiles`), then `set_level_void` with the old void and `restore: true`; just that `set_level_void` when nothing was cleared.
+- **Changes:** `level_meta` part `void` (every `auto` layer of the level rebakes), then a `grid` or `tiles` per layer it cleared cells of.
+
+Void cells read as outside the level for the other commands too. `fill_rect`, `flood_fill` and `replace_value` leave them out when they write a value (clearing them is allowed, so content a file put there can be removed), and a flood doesn't cross them; `add_entity` and `move_entity` refuse a void cell (unless `allow_outside`, which inverses set); `resize_level` moves the rects with the content and clips them to the new box, refusing a size that would leave only void; `Project::crop_level` (two `resize_level`s) does the same and refuses a crop that would leave only void; `duplicate_level` and `move_level_to_world` keep `void` (and the level's `references`, which the void doesn't touch); a project import (`worlds_core::merge`) creates levels with their `void` through `create_level`, so it drops grid cells and tiles there and refuses a level with an entity there; the layer operations keep the void as they are (a merge down or a tile move stays on one grid, so nothing lands in it, and an entity a file put there moves to its new layer as it is); `create_level` and `replace_level` take `void` in `level`, check it as above (unless `restore`), drop grid cells and tiles in it and refuse entities there. `paint_cells` and `set_tiles` write exactly the cells they name, void or not (they are what undo uses); the editor's tools and the live API's grid and tile writes drop void cells before building them, as they clip at the level's edge, and `validate` reports content in a void cell.
 
 ## Entity commands
 
@@ -319,6 +353,14 @@ Annotations live at world scope (`world.json`, world pixels) or level scope (`no
 ```json
 { "op": "add_note", "scope": { "level": "wing" },
   "note": { "id": "wingnote22", "kind": "note", "title": "Needs a key room", "px": [40, 24], "tags": ["todo"] } }
+```
+
+A connector names the rooms (or entities) it joins; its ends are computed from them ([format.md](format.md#connectors)):
+
+```json
+{ "op": "add_note", "scope": { "world": "main" },
+  "note": { "id": "conndrop22", "kind": "connector", "label": "one-way drop",
+    "from": { "level": "crevasse" }, "to": { "entity": "doorshaft2" }, "waypoints": [[360, 40]] } }
 ```
 
 - **Inverse:** `remove_note`. **Changes:** `note`.
@@ -752,6 +794,175 @@ Removes the field and every level's value for it; `keep_values` as for `remove_e
 - **Inverse:** as for `remove_entity_field_def`: `set_level_field_def` at the old `index`, or, with stored values, a `batch` that puts the field back and then each level's value (the command ran as a `batch` of `set_level_field` without `value` per level, then the remove).
 - **Changes:** a `level_meta` part `fields` per level that stored a value, then `project` key `level_fields`.
 
+## World commands
+
+A project holds one or more worlds, each its own map with its own levels, world-scope annotations and guide groups (`worlds/<world>/`). Layers, tilesets, entity types, enums, rules and the grid are project-wide. Level slugs stay unique across worlds, so moving a level never breaks a `level:` link.
+
+The display order of the worlds is `project.json` `worlds` (see [format.md](format.md#projectjson)). A project with one world and no list keeps having none. Once there is more than one world, or the list is already there, creating or removing a world rewrites the list to the display order (a new world goes last). Every inverse puts the list back exactly as it was.
+
+### create_world
+
+An empty world, last in the display order. `name` is optional (`world.json` `name`).
+
+```json
+{ "op": "create_world", "slug": "underdark", "name": "Underdark" }
+```
+
+- **Inverse:** `remove_world`, then `reorder_worlds` with the old list (`restore: true`) when the list changed.
+- **Changes:** `world_created` (the world's directory), and `project` key `worlds` when the list changed.
+
+### move_level_to_world
+
+Move a level to another world. It keeps its slug, id and all its content; `world_px` (optional) is its top-left corner in the new world, default where it was. Moving a level to its own world with a new `world_px` is a `move_level`.
+
+```json
+{ "op": "move_level_to_world", "level": "wing", "world": "underdark", "world_px": [0, 0] }
+```
+
+- **Inverse:** `move_level_to_world` back, with the old `world_px`, then `reorder_levels` (`restore: true`) for each world whose [level order](#reorder_levels) changed.
+- **Changes:** `level_deleted` in the old world, then `level_created` in the new one (both level directories are dirty; saving moves the files), and `world_meta` for a world whose level order changed (the level goes last in the new world's). Within one world: `level_meta` part `position`.
+- A strip layout in either world puts its levels back in their places (see [set_world_layout](#set_world_layout)); `keep_layout: true` leaves them, and inverses set it.
+
+### rename_world
+
+Change a world's slug (its directory: saving moves every file of it) and/or its display name. Leave out `slug` or `name` to keep it; `"name": ""` removes the name. The slug in `project.json` `worlds` follows, and the world keeps its place in the order. Nothing else names a world on disk; commands and API calls that take a `world` take the new slug.
+
+```json
+{ "op": "rename_world", "world": "underdark", "slug": "caves", "name": "The Caves" }
+```
+
+- **Inverse:** `rename_world` back.
+- **Changes:** `world_renamed` (dirties both directories) and `project` key `worlds` if the slug is listed, when the slug changed; `world_meta` when the name changed.
+
+### reorder_worlds
+
+Set the display order: `order` lists every world once. `[]` drops the list (worlds then show in slug order). `restore: true` takes the list as given, even one naming unknown worlds or leaving some out (the file can hold that; validation reports it). Edits leave it off; inverses set it.
+
+```json
+{ "op": "reorder_worlds", "order": ["caves", "main"] }
+```
+
+- **Inverse:** `reorder_worlds` with the old list, `restore: true`.
+- **Changes:** `project` key `worlds`.
+
+### remove_world
+
+Remove a world with everything in it. Refused unless the world is empty (no levels, world notes, guide groups or reference images) or `confirm` is `true`, and refused for the last world: a project keeps at least one.
+
+```json
+{ "op": "remove_world", "world": "caves", "confirm": true }
+```
+
+- **Inverse:** a `batch` that creates the world again, puts back its guide groups, world notes and reference images in order, each level with `create_level` and `restore: true`, and the old list with `reorder_worlds`.
+- **Changes:** `level_deleted` per level, `note` per world note, `reference` per world reference image, `world_removed` (saving deletes the directory), and `project` key `worlds` when the list changed.
+
+## Layer operations
+
+Copying a layer is a command of its own; merging a tiles layer down and moving tiles or entities to another layer are `batch`es of the commands above, built by `worlds_core::command::layer_ops` so the editor, the [live API](api.md#layer-operations) and the MCP server build the same ones.
+
+### duplicate_layer
+
+Copies a layer under the new `slug`: its definition (right above it in draw order), its content in every level (grid or derived overrides, tiles, the `entities.json` entry), its rule state in each `level.json` and, for an `auto` layer, its `rules/<layer>.json` as `rules/<slug>.json`. A derived `int_grid` stays derived. Copied entities get new ids, derived from the original id and `slug` (the same every time), and keep their fields, so an `entity_ref` still points at the original. Refused when `slug` is taken (`duplicate_def`) or a layer of that kind can't have it. The editor suggests `<layer>_copy`.
+
+Copying an `auto` layer whose rules `write` a derived grid gives that grid a second writer, which validation reports: change the copy's rules, or remove them.
+
+```json
+{ "op": "duplicate_layer", "layer": "decor_back", "slug": "decor_back_copy" }
+```
+
+- **Inverse:** `remove_layer_def` of the copy.
+- **Changes:** what `set_layer_def` of a new layer with that content reports: `def` kind `layer`, `def` kind `rules` for an `auto` layer, then per level a `grid` or `tiles` (whole layer), an `entity_layer` and an `entity` per copied instance, and a `layer_state`.
+
+**Merge down** (`layer_ops::merge_down(project, layer)`): a tiles layer into the layer right below it in draw order, which must be a tiles layer on the same grid (otherwise refused as `wrong_layer_kind` or `invalid`, with the reason). One `batch` labelled "Merge \<layer\> down into \<lower\>": per level where the layer has tiles, a `set_tiles` on the lower layer whose stack at each of those cells is the lower layer's stack with the upper's on top, then `remove_layer_def` of the upper layer. Undo puts the upper layer and every lower stack back.
+
+**Move to layer** (`layer_ops::move_tiles(project, level, from, to, cells)` and `layer_ops::move_entities(project, ids, to)`): tile stacks to another tiles layer on the same grid, on top of what it holds at those cells (a `set_tiles` on `to`, then a `set_tiles` clearing the cells of `from`), or entities to another entities layer of their level on the same grid (per entity a `remove_entity` and an `add_entity` with the same id, cell and fields, at the end of the new layer's list). Cells without tiles, and entities already on `to`, are skipped; when nothing is left the result is an empty `batch`.
+
+## Reference image commands
+
+Reference images (`references` in `world.json`, world pixels, or `level.json`, level pixels; see [format.md](format.md#reference-images)) are drawn under the layer stack and never exported. `scope` is `{ "world": "<slug>" }` or `{ "level": "<slug>" }`, as for notes. Ids are unique across the project's references. Moving, scaling, hiding or locking one is an `update_reference`. Commands ignore `locked` (the editor's tools honour it).
+
+### add_reference
+
+`reference` is the entry exactly as in the file. `index` is its position in the list, bottom first (default: the end, drawn over the others).
+
+```json
+{ "op": "add_reference", "scope": { "level": "crevasse" },
+  "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [0, -16], "opacity": 0.5 } }
+```
+
+- **Inverse:** `remove_reference`. **Changes:** `reference`.
+
+### update_reference
+
+Replace a reference wholesale; `reference.id` must equal `id`.
+
+```json
+{ "op": "update_reference", "id": "refsketch2",
+  "reference": { "id": "refsketch2", "image": "art/sketch.png", "px": [8, -16], "scale": 2, "opacity": 0.5, "locked": true } }
+```
+
+- **Inverse:** `update_reference` with the old entry. **Changes:** `reference`.
+
+### remove_reference
+
+```json
+{ "op": "remove_reference", "id": "refsketch2" }
+```
+
+- **Inverse:** `add_reference` at the old scope and index. **Changes:** `reference`.
+
+## Level order, world layouts and object groups
+
+### reorder_levels
+
+A world's levels have an order: the Levels pane lists them in it, PgUp and PgDn step through it, the export writes them in it, and strip layouts lay them out in it. It is `world.json` `levels` (see [format.md](format.md#worldsltworldgtworldjson)); a world without the list has its levels in slug order. `order` lists every level of the world once. `[]` drops the list. `restore: true` takes the list as given, even one naming unknown levels or leaving some out (validation reports those), and moves nothing; edits leave it off, inverses set it.
+
+Once a world has a list (or a strip layout), the level commands keep it: `create_level`, `duplicate_level` and `move_level_to_world` put the new level last, `delete_level` and moving a level away take it out, `rename_level` renames it in place. A world without one stays without one, so old projects save byte for byte.
+
+```json
+{ "op": "reorder_levels", "world": "main", "order": ["crevasse_b", "crevasse"] }
+```
+
+- **Inverse:** `reorder_levels` with the old list, `restore: true` (behind the inverses of the moves, in a strip layout).
+- **Changes:** `world_meta`; in a strip layout also `level_meta` part `position` per level that moved.
+
+### set_world_layout
+
+How the tools place a world's levels (`world.json` `layout`, see [format.md](format.md#world-layouts)): `free` (they go where they are put), `horizontal` or `vertical` (a strip in the level order, `gap` pixels apart, from the world origin), or `grid_vania` (they snap to a lattice of `cell` pixels and must be whole cells). `world_px` stays the stored position in every mode; the game and the export never see the mode.
+
+In a strip layout, `reorder_levels`, `create_level`, `duplicate_level`, `resize_level`, `delete_level` and `move_level_to_world` end by moving every level of the world that isn't where the strip puts it: `move_level`s in the same command result, so one undo entry. Switching to a strip writes the world's level order when it has none (so renaming a level never reorders the strip) and moves the levels at once. Grid vania moves nothing: the editor snaps drags and new levels to the lattice, and validation reports a level off it. A `cell` of 0 is refused; one that isn't a whole number of project cells is left to validation. `restore: true` moves nothing and writes no order (inverses set it).
+
+```json
+{ "op": "set_world_layout", "world": "main", "layout": { "mode": "horizontal", "gap": 32 } }
+```
+
+- **Inverse:** `set_world_layout` with the old layout and `restore: true`, then `reorder_levels` (`restore: true`) when the level order was written; behind the inverses of the moves.
+- **Changes:** `world_meta`; `level_meta` part `position` per level that moved.
+
+### set_group
+
+An object group is a named set of a level's entities and annotations (`level.json` `groups`, see [format.md](format.md#object-groups)) that the editor selects and moves together: a puzzle, an encounter. Tile stacks have no id and are never members. `group` is the entry as in the file; one with an `id` the level has replaces it in place. `index` is the position of a new group, or where to move an existing one (default: the end, or where it is). Members aren't checked: a member the level doesn't have is a validation problem, never a refusal, so undo can always put a group back.
+
+Deleting a member doesn't change its group on its own. The editor's, the API's and the MCP server's deletes add the `set_group` (or `remove_group`, for a group left empty) that drops it, in the same batch: `worlds_core::command::groups::drop_members(project, ids)` builds them.
+
+```json
+{ "op": "set_group", "level": "crevasse",
+  "group": { "id": "gapgroup22", "name": "Gap puzzle", "members": ["btncrev222", "notecrev22"] } }
+```
+
+- **Inverse:** `remove_group` for a new group; `set_group` with the old entry and index otherwise.
+- **Changes:** `level_meta` part `groups`.
+
+### remove_group
+
+Remove a group; its members stay where they are. An unknown id is refused (`invalid`).
+
+```json
+{ "op": "remove_group", "level": "crevasse", "id": "gapgroup22" }
+```
+
+- **Inverse:** `set_group` with the entry at its old index. **Changes:** `level_meta` part `groups`.
+
 ## batch
 
 Apply several commands as one: all of them or none. If command `i` fails, the ones before it are undone in reverse and the error is `batch "<label>", command <i>: <why>`. Batches nest. Inverses are built to always apply to the state they came from, so the rollback can't fail in practice; if one is refused anyway, the rest are still applied, every file the batch touched is marked dirty, and the error is `rollback` (it names the batch error and the refused inverses). Treat the project as changed after a `rollback` error. An agent's request and an editor gesture are each one batch, and one undo entry.
@@ -775,7 +986,7 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | --- | --- | --- |
 | `grid` | `world`, `level`, `layer`, `rect` | `worlds/<world>/levels/<level>/<layer>.json` |
 | `tiles` | `world`, `level`, `layer`, `rect` | same |
-| `level_meta` | `world`, `level`, `part`: `position`, `size`, `name`, `depth`, `bg_color`, `fields`, `tags` or `all` | `.../<level>/level.json` |
+| `level_meta` | `world`, `level`, `part`: `position`, `size`, `name`, `depth`, `bg_color`, `fields`, `tags`, `all`, `void` or `groups` (object groups) | `.../<level>/level.json` |
 | `level_created` | `world`, `level` | the directory `.../levels/<level>` (every file in it) |
 | `level_deleted` | `world`, `level` | the directory (saving deletes its files) |
 | `level_renamed` | `world`, `from`, `to` | both directories (`change.files()` lists them) |
@@ -785,10 +996,15 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | `note` | `world`, `level` (`null` at world scope), `id` | `worlds/<world>/world.json` or `.../<level>/notes.json` |
 | `layer_state` | `world`, `level`, `layer` | `.../<level>/level.json` |
 | `guide_group` | `world`, `slug` | `worlds/<world>/world.json`; a guide group was added, replaced, moved or removed |
-| `project` | `key`: `name`, `bg_color`, `collision_layer`, `seed` or `level_fields` | `project.json` |
-| `def` | `kind`: `layer`, `entity`, `enum`, `tileset`, `rules` or `macros`; `slug` | `layers.json`, `entities/<slug>.json`, `enums.json`, `tilesets.json`, `rules/<slug>.json` (the slug of a rule set is its layer's) or `rules/macros.json` (slug `macros`) |
-| `def_renamed` | `kind`, `from`, `to` | the file of `to`; for `entity` and `rules` also the file of `from`, which saving deletes |
+| `project` | `key`: `name`, `bg_color`, `collision_layer`, `seed`, `level_fields` or `worlds` (the display order of the worlds) | `project.json` |
+| `def` | `kind`: `layer`, `entity`, `enum`, `tileset`, `rules`, `macros` or `assembly`; `slug` | `layers.json`, `entities/<slug>.json`, `enums.json`, `tilesets.json`, `rules/<slug>.json` (the slug of a rule set is its layer's), `rules/macros.json` (slug `macros`) or `assemblies/<slug>.json` |
+| `def_renamed` | `kind`, `from`, `to` | the file of `to`; for `entity`, `rules` and `assembly` also the file of `from`, which saving deletes |
 | `layer_file_renamed` | `world`, `level`, `from`, `to` | `.../<level>/<to>.json`, and `.../<level>/<from>.json`, which saving deletes |
+| `world_created` | `world` | the directory `worlds/<world>` (every file in it) |
+| `world_removed` | `world` | the directory (saving deletes its files) |
+| `world_renamed` | `from`, `to` | both world directories (saving moves the files) |
+| `world_meta` | `world` | `worlds/<world>/world.json`; the world's name, level order or layout changed |
+| `reference` | `world`, `level` (`null` at world scope), `id` | `worlds/<world>/world.json` or `.../<level>/level.json`; a reference image was added, replaced or removed |
 
 Rects are in cells of the layer's grid and cover the cells whose value or tile stack changed. A tile drawn from a cell can overhang it; the renderer knows tile sizes.
 
@@ -812,15 +1028,24 @@ Rects are in cells of the layer's grid and cover the cells whose value or tile s
 { "change": "guide_group", "world": "main", "slug": "ruined" }
 ```
 
+```json
+{ "change": "world_renamed", "from": "underdark", "to": "caves" }
+```
+
+```json
+{ "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" }
+```
+
 ## Undo and redo
 
-`worlds_core::command::History` keeps two stacks of entries. An entry is a label for the UI, an origin (`user`, or `{ "agent": "<name>" }`) and one command: on the undo stack, the inverse of what was done; on the redo stack, the command that redoes it. Undoing applies the entry's command and moves its inverse to the other stack, so undo and redo are the same operation. Depth is unlimited.
+`worlds_core::command::History` keeps two stacks of entries. An entry is a label for the UI, an origin (`user`, `{ "agent": "<name>" }`, or `disk` for files changed on disk that the editor applied) and one command: on the undo stack, the inverse of what was done; on the redo stack, the command that redoes it. Undoing applies the entry's command and moves its inverse to the other stack, so undo and redo are the same operation. Depth is unlimited.
 
 - `push(project, cmd)` applies and records one entry labelled by the command. `push_as(project, cmd, origin)` sets the origin (an agent's batch).
 - `begin_gesture(label, origin)`, then any number of `push`, then `end_gesture()`: one entry whose command is a `batch` of the collected inverses in reverse. A brush stroke is one gesture. `cancel_gesture(project)` reverts it instead (Escape during a drag).
 - `undo(project)` and `redo(project)` return the changes (or `None` when the stack is empty). Undo first closes an open gesture. If an entry fails to apply, nothing changes and the entry stays.
 - A command that changes nothing records nothing. A new entry clears the redo stack.
-- `record(label, origin, inverses) -> bool` records one entry for commands the caller applied itself with `Project::apply`, without touching the open gesture: `inverses` in the order the commands were applied (the entry undoes them last first), no-ops dropped, `false` and nothing recorded when none are left.
+- `record(label, origin, inverses) -> bool` records one entry for commands the caller applied itself with `Project::apply`, without touching the open gesture: `inverses` in the order the commands were applied (the entry undoes them last first), no-ops dropped, `false` and nothing recorded when none are left. `record_with(label, origin, inverses, parts, changes)` also gives the labels of the commands applied (`parts`) and what they changed.
+- Every entry also keeps, for the editor's History pane, the time it was recorded (`time`), the project files it touched (`files`, from its changes; an entry recorded without them learns them the first time it is undone) and `parts`: the label of its one command, each write of an agent's batch, or nothing for a gesture.
 
 An agent's batch on the [live API](api.md#history) uses `record`, not a gesture, because the one gesture slot belongs to the user: if the agent shared it, the user's pushes would join the agent's entry, the user's next `begin_gesture` would end the agent's batch, and cancelling the batch would revert the user's edits. So the server collects the inverses of the batch's writes itself and records them as one entry when the batch ends. When the user records an entry while an agent batch is open, the server first records the agent's part so far, so the batch becomes two entries (the undo stack stays in the order things happened, and each entry undoes only its own edits). When the agent's connection drops, the server reverts only the part it hasn't recorded yet.
 
@@ -834,6 +1059,54 @@ An agent's batch on the [live API](api.md#history) uses `record`, not a gesture,
 
 ## Errors
 
-`CommandError` says why a command was refused; its message is meant for the agent to read. The kinds: unknown world, level, layer, value, tileset, entity type, field, entity, note, guide group (`unknown_guide_group`), enum, enum value, rule group, rule (`unknown_rule`), macro (`unknown_macro`) or stamp (`unknown_stamp`); a definition slug that is taken; a field slug that is taken (`duplicate_field`: renaming a field to the slug of another); a definition still in use (`in_use`: removing a tileset, macro or stamp something uses, with the first few uses); a level that is in another world; a layer of the wrong kind; a cell outside the layer (with the layer size); a stored grid whose size doesn't match the level; a cell holding a value index the layer doesn't define; a duplicate id or level slug; an invalid argument (bad anchor, index past the end, `note.id` mismatch, `"!"` on a layer that isn't derived, `derived` switched on a layer with content); a failed batch step (`batch`, with the index and the cause); a batch whose rollback failed too (`rollback`: the project may differ from before).
+`CommandError` says why a command was refused; its message is meant for the agent to read. The kinds: unknown world, level, layer, value, tileset, entity type, field, entity, note, guide group (`unknown_guide_group`), enum, enum value, rule group, rule (`unknown_rule`), macro (`unknown_macro`), stamp (`unknown_stamp`) or assembly (`unknown_assembly`); a definition slug that is taken; a field slug that is taken (`duplicate_field`: renaming a field to the slug of another); a definition still in use (`in_use`: removing a tileset, macro or stamp something uses, with the first few uses); a level that is in another world; a layer of the wrong kind; a cell outside the layer (with the layer size); a stored grid whose size doesn't match the level; a cell holding a value index the layer doesn't define; a duplicate id or level slug; a world slug that is taken (`duplicate_world { world }`); an invalid argument (bad anchor, index past the end, `note.id` mismatch, `"!"` on a layer that isn't derived, `derived` switched on a layer with content); a failed batch step (`batch`, with the index and the cause); a batch whose rollback failed too (`rollback`: the project may differ from before).
 
 On the wire (the [live API](api.md#errors)) a `CommandError` serializes as `{ "kind": <variant in snake_case>, ...fields, "message": <the Display text> }`: `{ "kind": "unknown_value", "layer": "collision", "value": "lava", "message": "\"lava\" is not a value of layer \"collision\"" }`. Variants with one unnamed field name it (`unknown_level { level }`, `unknown_entity_type { type }`, `unknown_entity { id }`, ...), `enum_` is `enum`, the definition kind of `duplicate_def` and `in_use` is `def_kind` (a stamp in use is `in_use` with `def_kind: "stamp"` and its `layer`), the macro kind of `unknown_macro` is `macro_kind`, `unknown_guide_group` is `{ world, group }`, `unknown_field` and `duplicate_field` are `{ owner, field }` with `owner` naming the list (`entity type "door"` or `project level_fields`), and `invalid` has only its `message`. `batch { label, index, source }` and `rollback { batch, failed }` nest errors in the same form.
+
+## Assembly commands
+
+An assembly is a named, reusable piece of content (a doorway with its door, switch and wiring) in `assemblies/<slug>.json`: a [fragment](format.md#clipboard-fragments)'s content plus a name, category, tags and doc (see [format.md](format.md#assembliesslugjson)). Nothing refers to an assembly: a placed copy is independent of it, so these commands only ever touch its own file. Placing one is not a command of its own but a paste: `worlds_core::assembly::place(project, slug, level, origin, flip)` works out the same plan as [a paste](format.md#what-a-paste-does) of the assembly's fragment (turned by `flip` first, see below), one `batch` labelled `Place assembly <slug>`.
+
+### set_assembly
+
+Create or replace an assembly; `assembly.slug` names it.
+
+```json
+{ "op": "set_assembly",
+  "assembly": { "slug": "ledge", "name": "Ledge", "category": "Platforms", "tags": ["small"],
+                "grid_size": 16, "size": [3, 2],
+                "grids": { "collision": { "legend": { "#": "solid" }, "rows": ["###", "   "] } } } }
+```
+
+- **Inverse:** a new one: `remove_assembly`. A replaced one: `set_assembly` with the old assembly.
+- **Changes:** `def` kind `assembly` (its file is `assemblies/<slug>.json`).
+
+### rename_assembly
+
+Change an assembly's slug (and so its file name).
+
+```json
+{ "op": "rename_assembly", "slug": "ledge", "new_slug": "stone_ledge" }
+```
+
+- **Inverse:** `rename_assembly` back.
+- **Changes:** `def_renamed` kind `assembly` (saving deletes the old file).
+
+### remove_assembly
+
+Remove an assembly. Copies placed from it stay as they are.
+
+```json
+{ "op": "remove_assembly", "slug": "stone_ledge" }
+```
+
+- **Inverse:** `set_assembly` with the assembly.
+- **Changes:** `def` kind `assembly` (saving deletes the file).
+
+## Transforms
+
+Mirroring and rotating are not commands either: `worlds_core::transform` works them out as batches of the commands above, one undo entry each. A turn is written like a tile's [`flip`](format.md#common-value-types): `t` (transpose) first, then `x` mirrors left-right and `y` top-bottom; a quarter turn clockwise is `xt`. A turn with `t` needs square tiles: it is refused when a tile in it comes from a tileset whose tiles aren't square.
+
+- **`transform::fragment(project, fragment, flip)`** turns a fragment about its own box (the paste ghost, an assembly before it lands): grid cells and tile stacks move and each tile's flip composes with the turn; an entity moves so that its box (its size kept, not turned) is centered where the turned box's center lands; annotation geometry turns (a rect region stays a rect). Entity field values never change.
+- **`transform::selection(project, selection, flip)`** turns a [copy selection](api.md#clipboard-copy-and-paste) in place about its bounding box (around what a copy would take: grid cells, tiles (a tile bigger than its cell with its whole box), entity boxes and annotation geometry, rounded out to whole cells of the grid and tiles layers involved; entities and annotations alone turn about their exact box, so mirroring one entity leaves it where it is; a rotation keeps the box's center): one `batch` of a `paint_cells` per grid layer (the old cells emptied, then the turned ones written), a `set_tiles` per tiles layer (the old stacks in `clear`, the turned ones in `tiles`), a `move_entity` per entity (same id, size and fields) and an `update_note` per annotation, labelled like `Mirror 4 items left-right` or `Rotate 4 items a quarter turn`. Cells and stacks that would leave the level are dropped, and the plan's notes say how many; an entity that would leave it refuses the whole transform. **A transform never changes an entity's field values**: when a turned entity's type has an `enum` field with at least two values that look like directions (`left`, `right`, `up`, `down`, `north`, ..., also as a part of a slug like `facing_left`), the plan's notes say so, so the editor can point it out.
+- **`transform::arrange_levels(project, levels, op)`** arranges two or more levels of one world: one `batch` of `move_level`, labelled like `Align 3 levels left`, leaving out levels that don't move. `op` is `align_left`, `align_right`, `align_top`, `align_bottom` (onto the outermost edge), `align_center_x`, `align_center_y` (onto the first level's center), `distribute_x`, `distribute_y` (equal gaps between neighbours, the outer two stay), or `butt_left`, `butt_right`, `butt_up`, `butt_down` (close the gaps in that direction: the level furthest that way stays, each next one goes against the previous one). Positions that a center or a distribution puts between cells are rounded to the project grid. In a `horizontal` or `vertical` world layout it is refused (the level order places those levels, see `reorder_levels`); in `grid_vania` every resulting position is snapped to the world's lattice.

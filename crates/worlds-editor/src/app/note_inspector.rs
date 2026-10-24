@@ -6,8 +6,10 @@
 //!   "missing" in red when it doesn't resolve, ×), "+ Link" (a URL or
 //!   `kind:id`) and Pick (an entity, a level or an annotation on the map);
 //!   a pin's icon and label, a guide's group and point count, a path's
-//!   length; the points as JSON (vertex editing). Each change is one
-//!   `update_note` labelled "Edit note <id>: <field>".
+//!   length, a connector's from and to (each with Pick: a level or an
+//!   entity on the map), label and style; the points as JSON (vertex
+//!   editing). Each change is one `update_note` labelled
+//!   "Edit note <id>: <field>".
 //! - Several annotations: their common tags (add, ×), done, export, locked,
 //!   color; mixed values shown as such. One batch each.
 //! - Levels (selected, or the active level): `tags` (comma separated,
@@ -345,6 +347,62 @@ fn single(
                     ));
                     ui.end_row();
                 }
+                Shape::Connector {
+                    from,
+                    to,
+                    label,
+                    style,
+                    ..
+                } => {
+                    for (field, end) in [("from", from), ("to", to)] {
+                        ui.weak(if field == "from" { "From" } else { "To" });
+                        ui.horizontal(|ui| {
+                            if let Some(e) = connector_end_row(ui, doc, view, a, field, end) {
+                                update(pending, a, field, |n| {
+                                    if let Shape::Connector { from, to, .. } = &mut n.shape {
+                                        *(if field == "from" { from } else { to }) = e;
+                                    }
+                                });
+                            }
+                        });
+                        ui.end_row();
+                    }
+                    ui.weak("Label");
+                    if let Some(t) = text_commit(
+                        ui,
+                        bufs,
+                        &k("label"),
+                        label.as_deref().unwrap_or(""),
+                        false,
+                        false,
+                        180.0,
+                    ) {
+                        update(pending, a, "label", |n| {
+                            if let Shape::Connector { label, .. } = &mut n.shape {
+                                *label = Some(t.clone()).filter(|t| !t.is_empty());
+                            }
+                        });
+                    }
+                    ui.end_row();
+                    ui.weak("Style");
+                    let r = egui::ComboBox::from_id_salt(k("style"))
+                        .selected_text(style.name())
+                        .show_ui(ui, |ui| {
+                            for s in worlds_core::ConnectorStyle::ALL {
+                                if ui.selectable_label(*style == s, s.name()).clicked()
+                                    && *style != s
+                                {
+                                    update(pending, a, "style", |n| {
+                                        if let Shape::Connector { style, .. } = &mut n.shape {
+                                            *style = s;
+                                        }
+                                    });
+                                }
+                            }
+                        });
+                    mark(ui, &k("style"), r.response.rect);
+                    ui.end_row();
+                }
                 _ => {}
             }
             // Geometry as JSON (vertex editing).
@@ -441,6 +499,57 @@ fn single(
     });
 }
 
+/// A connector end in the Inspector: `level:<slug>` or `entity:<id>`
+/// ("missing" in red when it names nothing) and Pick, which arms a pick of
+/// a level or an entity on the map. Returns the end picked. Locked: Pick
+/// is disabled (a new end moves the line).
+fn connector_end_row(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    view: &mut ViewState,
+    a: &Annotation,
+    field: &str,
+    end: &worlds_core::Endpoint,
+) -> Option<worlds_core::Endpoint> {
+    let link = end.link();
+    ui.label(&link);
+    if !link_resolves(doc, &link) {
+        ui.colored_label(ERROR, "missing");
+    }
+    let pick_key = format!("note:{}:{field}:pick", a.id);
+    let armed = view.pick.as_ref().is_some_and(|p| p.target == pick_key);
+    let b = ui
+        .add_enabled(!a.locked, egui::Button::selectable(armed, "Pick"))
+        .on_hover_text("Click a level or an entity on the map")
+        .on_disabled_hover_text("Locked: untick Locked to move it");
+    mark(ui, &pick_key, b.rect);
+    if b.clicked() {
+        if armed {
+            view.pick = None;
+        } else {
+            view.start_pick(
+                PickAccept {
+                    entity: true,
+                    level: true,
+                    note: false,
+                    cell: false,
+                },
+                pick_key.clone(),
+                format!("Click the level or entity the connector goes {field}"),
+            );
+        }
+    }
+    let picked = view.take_picked(&pick_key)?;
+    match picked {
+        PickedThing::Entity { id, .. } => Some(worlds_core::Endpoint::Entity(id)),
+        PickedThing::Level { level } | PickedThing::Cell { level, .. } => {
+            Some(worlds_core::Endpoint::Level(doc.level(level).slug.clone()))
+        }
+        PickedThing::Note { .. } => None,
+    }
+    .filter(|_| !a.locked)
+}
+
 /// The title box: a single line that commits on Enter or focus loss, with
 /// a stable id so a new note can focus it.
 fn title_edit(
@@ -502,6 +611,9 @@ pub fn geometry_json(a: &Annotation) -> String {
         Shape::Region { points, .. } | Shape::Path { points } | Shape::Guide { points, .. } => {
             serde_json::json!({ "points": points }).to_string()
         }
+        Shape::Connector { waypoints, .. } => {
+            serde_json::json!({ "waypoints": waypoints }).to_string()
+        }
     }
 }
 
@@ -528,6 +640,11 @@ pub fn set_geometry(a: &Annotation, text: &str) -> Result<Annotation, String> {
         Shape::Path { points } | Shape::Guide { points, .. } => {
             *points = serde_json::from_value(get("points").ok_or("expected {\"points\": [...]}")?)
                 .map_err(|e| e.to_string())?;
+        }
+        Shape::Connector { waypoints, .. } => {
+            *waypoints =
+                serde_json::from_value(get("waypoints").ok_or("expected {\"waypoints\": [...]}")?)
+                    .map_err(|e| e.to_string())?;
         }
     }
     Ok(n)

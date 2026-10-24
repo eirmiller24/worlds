@@ -13,17 +13,23 @@
 
 mod baked;
 mod defs;
+mod edit;
 mod entity;
 pub(crate) mod events;
 mod grid;
+mod groups;
 mod history;
+mod import;
+mod layer_ops;
 mod level;
 mod notes;
 pub(crate) mod params;
 mod project;
+mod references;
 mod rules;
 mod tiles;
 mod view;
+mod world;
 mod write;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -111,6 +117,11 @@ pub(crate) struct OpenBatch {
     pub client: Client,
     /// Inverses of the writes not recorded in the history yet.
     pub inverses: Vec<Command>,
+    /// The labels of those writes' commands (the entry's parts, for the
+    /// editor's History pane).
+    pub parts: Vec<String>,
+    /// Where in `changes` the unrecorded writes start.
+    pub recorded_changes: usize,
     /// Every change of the batch so far (for `end_batch` and its event).
     pub changes: Vec<Change>,
     /// Entries recorded so far (parts flushed before a user edit or undo).
@@ -149,6 +160,10 @@ pub struct Handler {
     pub(crate) last_batch: Option<String>,
     /// Changes applied since the last [`Handler::take_applied`].
     pub(crate) applied: Vec<Change>,
+    /// `project.import_plan` results waiting for `project.import`.
+    pub(crate) import_plans: Vec<import::StoredPlan>,
+    /// Plans made so far (`plan_<n>` ids).
+    pub(crate) import_seq: u64,
 }
 
 /// Methods that change the project (or step the history). While one
@@ -166,6 +181,7 @@ pub fn is_write(method: &str) -> bool {
             | "level.delete"
             | "level.move"
             | "level.resize"
+            | "level.crop"
             | "level.update"
             | "level.set_fields"
             | "level.set_layer_state"
@@ -202,6 +218,31 @@ pub fn is_write(method: &str) -> bool {
             | "history.undo"
             | "history.redo"
             | "history.begin_batch"
+            | "edit.paste"
+            | "level.duplicate"
+            | "world.create"
+            | "world.rename"
+            | "world.remove"
+            | "world.reorder"
+            | "level.move_to_world"
+            | "defs.duplicate"
+            | "defs.merge_down"
+            | "tiles.move_to_layer"
+            | "entity.move_to_layer"
+            | "reference.add"
+            | "reference.update"
+            | "reference.remove"
+            | "project.import"
+            | "edit.place_assembly"
+            | "edit.save_assembly"
+            | "edit.transform"
+            | "level.arrange"
+            | "level.set_void"
+            | "level.reorder"
+            | "world.set_layout"
+            | "group.create"
+            | "group.update"
+            | "group.remove"
     )
 }
 
@@ -217,6 +258,8 @@ impl Handler {
             out: Vec::new(),
             last_batch: None,
             applied: Vec::new(),
+            import_plans: Vec::new(),
+            import_seq: 0,
         }
     }
 
@@ -275,6 +318,9 @@ impl Handler {
         }
         if let Some(builder) = write_builder(method) {
             return self.run_write(host, client, method, &mut params, builder);
+        }
+        if method == "project.import" {
+            return import::apply(self, host, client, method, &mut params);
         }
         if method == "history.end_batch" {
             return history::end_batch(self, host, client, method, Value::Object(params));
@@ -342,6 +388,7 @@ impl Handler {
             "project.export" => project::export(self, host, method, params),
             "project.save" => project::save(self, host, method, params),
             "project.read_file" => read(host, project::read_file),
+            "project.import_plan" => import::plan(self, host, method, params),
             "project.reload" | "project.update" => unreachable_write(method),
             "defs.get" => read(host, defs::get),
             "level.list" => read(host, level::list),
@@ -352,6 +399,8 @@ impl Handler {
             "entity.get" => read(host, entity::get),
             "entity.find" => read(host, entity::find),
             "notes.list" => read(host, notes::list),
+            "level.find" => read(host, level::find),
+            "tiles.find" => read(host, tiles::find),
             "rules.list" => read(host, rules::list),
             "rules.get_group" => read(host, rules::get_group),
             "rules.get_macros" => read(host, rules::get_macros),
@@ -360,12 +409,17 @@ impl Handler {
             "rules.regions" => rules::regions(self, host, method, params),
             "history.cancel_batch" => history::cancel_batch(self, host, client, method, params),
             "history.batch_status" => history::batch_status(self, method, params),
-            "view.focus" | "view.select" | "view.snapshot" => {
-                view::call(self, host, method, params)
-            }
+            "view.focus"
+            | "view.select"
+            | "view.snapshot"
+            | "view.list_viewports"
+            | "view.open_viewport" => view::call(self, host, method, params),
             "events.subscribe" | "events.unsubscribe" => {
                 events::subscribe(self, client, method, params)
             }
+            "edit.copy" => read(host, edit::copy),
+            "reference.list" => read(host, references::list),
+            "group.list" => read(host, groups::list),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
@@ -408,6 +462,7 @@ fn write_builder(method: &str) -> Option<Builder> {
         "level.delete" => level::delete,
         "level.move" => level::move_level,
         "level.resize" => level::resize,
+        "level.crop" => level::crop,
         "level.update" => level::update,
         "level.set_fields" => level::set_fields,
         "level.set_layer_state" => level::set_layer_state,
@@ -444,6 +499,30 @@ fn write_builder(method: &str) -> Option<Builder> {
         "history.undo" => history::undo_builder,
         "history.redo" => history::redo_builder,
         "history.begin_batch" => history::begin_builder,
+        "edit.paste" => edit::paste,
+        "level.duplicate" => level::duplicate,
+        "world.create" => world::create,
+        "world.rename" => world::rename,
+        "world.remove" => world::remove,
+        "world.reorder" => world::reorder,
+        "level.move_to_world" => world::move_level,
+        "defs.duplicate" => layer_ops::duplicate,
+        "defs.merge_down" => layer_ops::merge_down,
+        "tiles.move_to_layer" => layer_ops::move_tiles,
+        "entity.move_to_layer" => layer_ops::move_entities,
+        "reference.add" => references::add,
+        "reference.update" => references::update,
+        "reference.remove" => references::remove,
+        "edit.place_assembly" => edit::place_assembly,
+        "edit.save_assembly" => edit::save_assembly,
+        "edit.transform" => edit::transform,
+        "level.arrange" => edit::arrange,
+        "level.set_void" => level::set_void,
+        "level.reorder" => world::reorder_levels,
+        "world.set_layout" => world::set_layout,
+        "group.create" => groups::create,
+        "group.update" => groups::update,
+        "group.remove" => groups::remove,
         _ => return None,
     })
 }

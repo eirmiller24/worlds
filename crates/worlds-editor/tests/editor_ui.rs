@@ -1,12 +1,14 @@
 //! The editor's own UI driven offscreen through the real app (keys, clicks,
 //! frames): a note's title takes the keyboard when the Note tool adds it, so
 //! typing never fires tool shortcuts; the Paint and Note strips never cover
-//! the active level's name tab; zoomed out, every level shows its name.
+//! the active level's name tab; zoomed out, every level shows its name;
+//! the `vertex` and connector script gestures edit geometry.
 //! Need a GPU (or a software driver), so they only run with
 //! `WORLDS_GPU_TESTS=1`. They work on temp copies of the `game` fixture.
 
 use std::path::{Path, PathBuf};
 
+use worlds_editor::app::actions::Action;
 use worlds_editor::app::{AppOptions, EditorApp};
 use worlds_editor::headless::Headless;
 use worlds_editor::tools::Tool;
@@ -136,6 +138,96 @@ impl Rig {
         self.frames(vec![egui::Event::PointerMoved(p), b(true)], 0);
         self.frames(vec![b(false)], 3);
     }
+}
+
+/// Picking a tool picks a layer it can use: the entity tool goes to the
+/// entities layer used last, the painting tools to the int_grid or tiles
+/// layer used last (the first of the kind when none was), and tools that
+/// work anywhere leave the layer alone.
+#[test]
+fn tools_switch_to_a_layer_they_can_use() {
+    if !gpu_tests() {
+        return;
+    }
+    let mut r = Rig::new([1400, 800]);
+    let layer = |r: &Rig| {
+        let doc = r.app.st.doc.as_ref().unwrap();
+        r.app
+            .st
+            .view
+            .active_layer
+            .map(|i| doc.project.layers[i].slug.to_string())
+            .unwrap_or_default()
+    };
+    // Painting on decor_front, then the entity tool: the entities layer.
+    r.steps(r#"[{ "ui": "layers", "active": "decor_front" }]"#);
+    r.app.run(Action::SetTool(Tool::Brush));
+    assert_eq!(layer(&r), "decor_front", "a tiles layer suits a brush");
+    r.app.run(Action::SetTool(Tool::Entity));
+    assert_eq!(layer(&r), "entities");
+    // Back to a brush: the decor layer used last, not the first one.
+    r.app.run(Action::SetTool(Tool::Brush));
+    assert_eq!(layer(&r), "decor_front");
+    // The remembered layer follows what was used: collision, then the
+    // entity tool, then the eraser lands on collision.
+    r.steps(r#"[{ "ui": "layers", "active": "collision" }]"#);
+    r.app.run(Action::SetTool(Tool::Entity));
+    assert_eq!(layer(&r), "entities");
+    r.app.run(Action::SetTool(Tool::Eraser));
+    assert_eq!(layer(&r), "collision");
+    assert!(
+        r.app
+            .st
+            .view
+            .status
+            .as_ref()
+            .is_some_and(|m| m.text.contains("Collision")),
+        "the status bar names the layer"
+    );
+    // Select and Hand leave the layer alone; an auto layer stays under
+    // them too.
+    r.steps(r#"[{ "ui": "layers", "active": "main_tiling" }]"#);
+    r.app.run(Action::SetTool(Tool::Select));
+    assert_eq!(layer(&r), "main_tiling");
+    r.app.run(Action::SetTool(Tool::Hand));
+    assert_eq!(layer(&r), "main_tiling");
+    // A brush can't paint an auto layer: back to collision.
+    r.app.run(Action::SetTool(Tool::Line));
+    assert_eq!(layer(&r), "collision");
+}
+
+/// T switches to the entity tool and leaves the keyboard on the map, so
+/// another tool key right after still switches tools; T a second time,
+/// with the tool already on, gives the search box the keyboard.
+#[test]
+fn t_focuses_the_entity_search_only_when_the_tool_is_already_on() {
+    if !gpu_tests() {
+        return;
+    }
+    let mut r = Rig::new([1400, 800]);
+    r.steps(r#"[{ "ui": "focus", "level": "crevasse" }]"#);
+    assert_eq!(r.app.st.view.tool, Tool::Select);
+    r.type_key(egui::Key::T, "t");
+    assert_eq!(r.app.st.view.tool, Tool::Entity);
+    assert!(
+        !r.ctx.egui_wants_keyboard_input(),
+        "switching to the tool leaves the keyboard on the map"
+    );
+    // A change of mind: E is the Eraser, not a letter in the search box.
+    r.type_key(egui::Key::E, "e");
+    assert_eq!(r.app.st.view.tool, Tool::Eraser);
+    assert_eq!(r.app.st.entities.query, "");
+    // T, then T again: now the search box has the keyboard.
+    r.type_key(egui::Key::T, "t");
+    assert!(!r.ctx.egui_wants_keyboard_input());
+    r.type_key(egui::Key::T, "t");
+    assert!(
+        r.ctx.egui_wants_keyboard_input(),
+        "T with the tool on focuses the search"
+    );
+    r.type_key(egui::Key::E, "e");
+    assert_eq!(r.app.st.view.tool, Tool::Entity, "typing, not a shortcut");
+    assert_eq!(r.app.st.entities.query, "e");
 }
 
 /// The Note tool's click adds a note and gives its title in the Inspector
@@ -346,4 +438,75 @@ fn rules_pane_renames_a_rule_inline() {
     keep(&r.hl, "ui_rules_renamed.png");
     r.steps(r#"[{ "undo": 1 }]"#);
     assert_eq!(slugs(&r), before);
+}
+
+/// Geometry editing and connectors through the real app and `--script`:
+/// the `vertex` gesture drags a path's point, Alt+clicks a new one in and
+/// deletes it again; a `note` gesture of kind
+/// `connector` joins two rooms through a waypoint. Pictures (with
+/// `WORLDS_TEST_OUT`): `geometry_handles.png` (the path selected, its
+/// handles), `geometry_connector.png` (the connector selected).
+#[test]
+fn vertex_and_connector_script_gestures() {
+    if !gpu_tests() {
+        return;
+    }
+    let mut r = Rig::new([1280, 800]);
+    r.steps(
+        r#"[
+          { "op": "add_note", "scope": { "world": "main" },
+            "note": { "id": "pathgeoaaa", "kind": "path", "title": "Route",
+                      "points": [[2100, -1200], [2400, -1000], [2600, -1200]] } },
+          { "ui": "focus", "world_rect": [1900, -1500, 2700, 1100] }
+        ]"#,
+    );
+    let points = |r: &Rig| {
+        let doc = r.app.document().unwrap();
+        let id = worlds_core::Id::new("pathgeoaaa").unwrap();
+        worlds_editor::annot::find_note(doc, &id)
+            .unwrap()
+            .note
+            .shape
+            .points()
+    };
+    r.steps(r#"[{ "gesture": "vertex", "note": "pathgeoaaa", "vertex": 1, "world_px": [[2400, -900]] }]"#);
+    assert_eq!(points(&r), [[2100, -1200], [2400, -896], [2600, -1200]]);
+    r.steps(r#"[{ "gesture": "vertex", "note": "pathgeoaaa", "insert": [2250, -1048] }]"#);
+    assert_eq!(
+        points(&r),
+        [[2100, -1200], [2256, -1056], [2400, -896], [2600, -1200]]
+    );
+    keep(&r.hl, "geometry_handles.png");
+    r.steps(r#"[{ "gesture": "vertex", "note": "pathgeoaaa", "vertex": 1, "delete": true }]"#);
+    assert_eq!(points(&r), [[2100, -1200], [2400, -896], [2600, -1200]]);
+    r.steps(
+        r#"[{ "gesture": "note", "kind": "connector",
+              "world_px": [[2100, -900], [3136, -1400], [4400, -600]] }]"#,
+    );
+    let doc = r.app.document().unwrap();
+    let c = worlds_editor::annot::all_notes(doc)
+        .into_iter()
+        .find(|n| matches!(n.note.shape, worlds_core::Shape::Connector { .. }))
+        .expect("a connector");
+    let worlds_core::Shape::Connector {
+        from,
+        to,
+        waypoints,
+        ..
+    } = &c.note.shape
+    else {
+        unreachable!()
+    };
+    assert_eq!(*waypoints, [[3136, -1408]]);
+    assert_eq!(
+        worlds_editor::annot::end_level(doc, from),
+        doc.level_ix("level_1")
+    );
+    assert_eq!(
+        worlds_editor::annot::end_level(doc, to),
+        doc.level_ix("level_4")
+    );
+    let id = c.note.id.to_string();
+    r.steps(&format!(r#"[{{ "ui": "select", "notes": ["{id}"] }}]"#));
+    keep(&r.hl, "geometry_connector.png");
 }

@@ -43,7 +43,9 @@
 
 mod apply;
 mod error_serde;
+pub mod groups;
 mod history;
+pub mod layer_ops;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -53,10 +55,12 @@ use std::path::PathBuf;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::assembly::Assembly;
 use crate::format::IntGridFile;
 use crate::id::{Id, Slug};
 use crate::model::{
-    Annotation, Color, EntitiesLayer, EntityInstance, GuideGroup, Level, TilePlacement,
+    Annotation, Color, EntitiesLayer, EntityInstance, GuideGroup, Level, ObjectGroup, Reference,
+    TilePlacement, WorldLayout,
 };
 use crate::model::{CellMatch, RuleEntry, Stamp, Template};
 use crate::model::{EntityDef, EnumDef, FieldDef, LayerDef, RuleGroup, RuleSet, TilesetDef};
@@ -147,6 +151,10 @@ pub enum Command {
     DeleteLevel {
         world: Slug,
         level: Slug,
+        /// Leave the world's strip layout as it is (don't move the levels
+        /// after it). Inverses set it; edits leave it off.
+        #[serde(default, skip_serializing_if = "is_false")]
+        keep_layout: bool,
     },
     /// Replace a level (found by `level.slug`) wholesale: metadata and all
     /// content. The inverse of `resize_level`.
@@ -567,6 +575,170 @@ pub enum Command {
         label: String,
         commands: Vec<Command>,
     },
+
+    // ---- levels (continued) ----
+    /// Copy a level under a new slug: `level.json` (fields, tags, rule state
+    /// and tileset substitutions, depth, background), every layer's content,
+    /// entities and notes. Entities and notes get new ids and the copy's
+    /// references between them (`entity_ref` fields, level fields, note
+    /// links) follow; references to anything outside the level are kept.
+    /// `world` defaults to the level's; `world_px` to just right of the
+    /// original (the first spot there no other level of that world covers);
+    /// `name` to the original's with " copy".
+    DuplicateLevel {
+        level: Slug,
+        slug: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world: Option<Slug>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world_px: Option<[i64; 2]>,
+    },
+
+    // ---- worlds ----
+    /// Add an empty world (`worlds/<slug>/world.json`), last in the display
+    /// order.
+    CreateWorld {
+        slug: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Change a world's slug (its directory) and/or display name. Leave a
+    /// key out to keep it; `name: ""` removes the name.
+    RenameWorld {
+        world: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slug: Option<Slug>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Remove a world with its levels, notes and guide groups. Refused
+    /// unless the world is empty or `confirm` is set, and for the last world.
+    RemoveWorld {
+        world: Slug,
+        #[serde(default, skip_serializing_if = "is_false")]
+        confirm: bool,
+    },
+    /// Set the display order (`project.json` `worlds`): every world once.
+    /// `[]` drops the list (slug order). `restore` takes the list as given
+    /// (unknown or missing slugs); inverses set it.
+    ReorderWorlds {
+        order: Vec<Slug>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
+    /// Move a level to another world, keeping its slug, id and content;
+    /// `world_px` places it there (default: where it was).
+    MoveLevelToWorld {
+        level: Slug,
+        world: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world_px: Option<[i64; 2]>,
+        /// Leave both worlds' strip layouts as they are. Inverses set it;
+        /// edits leave it off.
+        #[serde(default, skip_serializing_if = "is_false")]
+        keep_layout: bool,
+    },
+
+    // ---- layer operations ----
+    /// Copy a layer: its definition (placed right above it in draw order),
+    /// its content in every level, its per-level rule state and, for an
+    /// `auto` layer, its rule set, all under the new slug. Copied entities
+    /// get ids derived from the original id and `slug`. The inverse is
+    /// `remove_layer_def` of the copy.
+    DuplicateLayer {
+        layer: Slug,
+        slug: Slug,
+    },
+
+    // ---- reference images ----
+    /// Add a reference image at world or level scope. `index`: position in
+    /// the list, bottom first (default: the end, drawn on top).
+    AddReference {
+        scope: NoteScope,
+        reference: Reference,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Replace a reference image wholesale; `reference.id` must be `id`.
+    UpdateReference {
+        id: Id,
+        reference: Reference,
+    },
+    RemoveReference {
+        id: Id,
+    },
+
+    // ---- assemblies ----
+    /// Create or replace an assembly (`assemblies/<slug>.json`, named by
+    /// `assembly.slug`).
+    SetAssembly {
+        assembly: Assembly,
+    },
+    /// Remove an assembly. Copies placed from it stay: they never were
+    /// linked to it.
+    RemoveAssembly {
+        slug: Slug,
+    },
+    /// Rename an assembly (its file follows).
+    RenameAssembly {
+        slug: Slug,
+        new_slug: Slug,
+    },
+    // ---- level shape ----
+    /// Replace a level's `void` (rects of project-grid cells cut out of its
+    /// box; `[]` makes it rectangular again). Grid cells, derived overrides
+    /// and tiles that fall in the new void are cleared; the inverse puts the
+    /// old void and that content back. Refused when an entity's cell would
+    /// be void, a rect is empty or reaches outside the box, or no cell would
+    /// be left (unless `restore`).
+    SetLevelVoid {
+        level: Slug,
+        void: Vec<Rect>,
+        /// Accept the rects as given (what the project held before;
+        /// `validate` reports them). Inverses set it; edits leave it off.
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
+    // ---- level order and world layouts ----
+    /// Set a world's level order (`world.json` `levels`): every level of
+    /// the world once. `[]` drops the list (slug order). `restore` takes the
+    /// list as given (unknown or missing slugs) and leaves a strip layout
+    /// as it is; inverses set it. In a strip layout the levels move to
+    /// their new places, in the same undo entry.
+    ReorderLevels {
+        world: Slug,
+        order: Vec<Slug>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
+    /// Set a world's layout (`world.json` `layout`). Switching to a strip
+    /// writes the level order (if the world has none) and moves every level
+    /// to its place in the strip; `restore` (inverses) moves nothing.
+    SetWorldLayout {
+        world: Slug,
+        layout: WorldLayout,
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
+
+    // ---- object groups ----
+    /// Add an object group to a level, or replace the one with this id in
+    /// place. `index`: position for a new group, or where to move an
+    /// existing one (default: the end / where it is). Members are not
+    /// checked (validation reports a member the level doesn't have).
+    SetGroup {
+        level: Slug,
+        group: ObjectGroup,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Remove an object group (its members stay).
+    RemoveGroup {
+        level: Slug,
+        id: Id,
+    },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -683,10 +855,40 @@ impl Command {
             RenameMacro { kind, from, to } => format!("Rename {kind} {from} to {to}"),
             SetStamp { layer, stamp, .. } => format!("Set stamp {stamp} on {layer}"),
             RemoveStamp { layer, stamp, .. } => format!("Remove stamp {stamp} from {layer}"),
+            SetLevelVoid { level, void, .. } if void.is_empty() => {
+                format!("Clear the void of level {level}")
+            }
+            SetLevelVoid { level, .. } => format!("Shape level {level}"),
             Batch { label, commands } if label.is_empty() => {
                 format!("{} edits", commands.len())
             }
             Batch { label, .. } => label.clone(),
+            DuplicateLevel { level, slug, .. } => format!("Duplicate level {level} as {slug}"),
+            CreateWorld { slug, .. } => format!("Create world {slug}"),
+            RenameWorld {
+                world,
+                slug: Some(slug),
+                ..
+            } if slug != world => format!("Rename world {world} to {slug}"),
+            RenameWorld { world, .. } => format!("Rename world {world}"),
+            RemoveWorld { world, .. } => format!("Delete world {world}"),
+            ReorderWorlds { .. } => "Reorder worlds".into(),
+            MoveLevelToWorld { level, world, .. } => {
+                format!("Move level {level} to world {world}")
+            }
+            DuplicateLayer { layer, slug } => format!("Duplicate layer {layer} as {slug}"),
+            AddReference { .. } => "Add reference image".into(),
+            UpdateReference { id, .. } => format!("Edit reference image {id}"),
+            RemoveReference { id } => format!("Remove reference image {id}"),
+            SetAssembly { assembly } => format!("Set assembly {}", assembly.slug),
+            RemoveAssembly { slug } => format!("Remove assembly {slug}"),
+            RenameAssembly { slug, new_slug } => format!("Rename assembly {slug} to {new_slug}"),
+            ReorderLevels { world, .. } => format!("Reorder levels of {world}"),
+            SetWorldLayout { world, layout, .. } => {
+                format!("Set layout of {world} to {}", layout.mode.label())
+            }
+            SetGroup { group, .. } => format!("Set group {}", group.name),
+            RemoveGroup { id, .. } => format!("Remove group {id}"),
         }
     }
 }
@@ -1005,6 +1207,8 @@ pub enum ProjectKey {
     DefaultLevelSize,
     /// Matters only to saving.
     ExportOnSave,
+    /// `worlds`: the display order of the worlds.
+    Worlds,
 }
 
 impl ProjectKey {
@@ -1019,6 +1223,7 @@ impl ProjectKey {
             ProjectKey::BlockingValues => "blocking_values",
             ProjectKey::DefaultLevelSize => "default_level_size",
             ProjectKey::ExportOnSave => "export_on_save",
+            ProjectKey::Worlds => "worlds",
         }
     }
 }
@@ -1071,6 +1276,8 @@ pub enum DefKind {
     Rules,
     /// `rules/macros.json` (the slug is always `macros`).
     Macros,
+    /// `assemblies/<slug>.json`.
+    Assembly,
 }
 
 impl DefKind {
@@ -1082,6 +1289,7 @@ impl DefKind {
             DefKind::Tileset => "tileset",
             DefKind::Rules => "rule set",
             DefKind::Macros => "macro",
+            DefKind::Assembly => "assembly",
         }
     }
 
@@ -1094,6 +1302,7 @@ impl DefKind {
             DefKind::Tileset => PathBuf::from("tilesets.json"),
             DefKind::Rules => PathBuf::from("rules").join(format!("{slug}.json")),
             DefKind::Macros => PathBuf::from("rules").join("macros.json"),
+            DefKind::Assembly => PathBuf::from("assemblies").join(format!("{slug}.json")),
         }
     }
 }
@@ -1263,6 +1472,11 @@ pub enum LevelPart {
     Tags,
     /// Everything (`replace_level`).
     All,
+    /// `void` (the level's shape; layer content in the new void was
+    /// cleared, reported as its own changes).
+    Void,
+    /// `groups` (object groups; editor organisation only).
+    Groups,
 }
 
 impl LevelPart {
@@ -1270,7 +1484,11 @@ impl LevelPart {
     pub fn affects_bake(self) -> bool {
         matches!(
             self,
-            LevelPart::Size | LevelPart::Fields | LevelPart::Tags | LevelPart::All
+            LevelPart::Size
+                | LevelPart::Fields
+                | LevelPart::Tags
+                | LevelPart::All
+                | LevelPart::Void
         )
     }
 }
@@ -1373,6 +1591,36 @@ pub enum Change {
         from: Slug,
         to: Slug,
     },
+    /// A world was added (its directory is dirty).
+    WorldCreated {
+        world: Slug,
+    },
+    /// A world was removed with everything in it (saving deletes its
+    /// directory). Its levels are reported as `level_deleted` first.
+    WorldRemoved {
+        world: Slug,
+    },
+    /// A world's slug changed: its directory moved, levels and all.
+    WorldRenamed {
+        from: Slug,
+        to: Slug,
+    },
+    /// A world's `world.json` name, level order (`levels`) or `layout`
+    /// changed.
+    WorldMeta {
+        world: Slug,
+    },
+    /// A reference image was added, replaced or removed. `level: None` is
+    /// world scope.
+    Reference {
+        world: Slug,
+        level: Option<Slug>,
+        id: Id,
+    },
+}
+
+fn world_dir(world: &Slug) -> PathBuf {
+    PathBuf::from("worlds").join(world.as_str())
 }
 
 fn level_dir(world: &Slug, level: &Slug) -> PathBuf {
@@ -1431,6 +1679,19 @@ impl Change {
             LayerFileRenamed {
                 world, level, to, ..
             } => level_dir(world, level).join(format!("{to}.json")),
+            WorldCreated { world } | WorldRemoved { world } => world_dir(world),
+            WorldRenamed { to, .. } => world_dir(to),
+            WorldMeta { world } => world_dir(world).join("world.json"),
+            Reference {
+                world, level: None, ..
+            } => PathBuf::from("worlds")
+                .join(world.as_str())
+                .join("world.json"),
+            Reference {
+                world,
+                level: Some(level),
+                ..
+            } => level_dir(world, level).join("level.json"),
         }
     }
 
@@ -1442,6 +1703,7 @@ impl Change {
             Change::LevelRenamed { world, from, to } => {
                 vec![level_dir(world, from), level_dir(world, to)]
             }
+            Change::WorldRenamed { from, to } => vec![world_dir(from), world_dir(to)],
             Change::DefRenamed { kind, from, to } => {
                 let (a, b) = (kind.file(from), kind.file(to));
                 if a == b { vec![b] } else { vec![a, b] }
@@ -1477,8 +1739,15 @@ impl Change {
             | LayerState { level, .. }
             | LayerFileRenamed { level, .. } => Some(level),
             LevelRenamed { to, .. } => Some(to),
-            Note { level, .. } => level.as_ref(),
-            GuideGroup { .. } | Project { .. } | Def { .. } | DefRenamed { .. } => None,
+            Note { level, .. } | Reference { level, .. } => level.as_ref(),
+            GuideGroup { .. }
+            | Project { .. }
+            | Def { .. }
+            | DefRenamed { .. }
+            | WorldCreated { .. }
+            | WorldRemoved { .. }
+            | WorldRenamed { .. }
+            | WorldMeta { .. } => None,
         }
     }
 }
@@ -1533,7 +1802,10 @@ pub fn coalesce(changes: Vec<Change>) -> Vec<Change> {
             | Change::LevelDeleted { .. }
             | Change::LevelRenamed { .. }
             | Change::DefRenamed { .. }
-            | Change::LayerFileRenamed { .. } => {
+            | Change::LayerFileRenamed { .. }
+            | Change::WorldCreated { .. }
+            | Change::WorldRemoved { .. }
+            | Change::WorldRenamed { .. } => {
                 seen.clear();
                 out.push(c);
                 continue;
@@ -1685,6 +1957,12 @@ pub enum CommandError {
         batch: Box<CommandError>,
         failed: Vec<CommandError>,
     },
+    #[error("a world {0:?} already exists")]
+    DuplicateWorld(Slug),
+    #[error("no reference image {0:?}")]
+    UnknownReference(Id),
+    #[error("no assembly {0:?}")]
+    UnknownAssembly(Slug),
 }
 
 impl fmt::Display for NoteScope {

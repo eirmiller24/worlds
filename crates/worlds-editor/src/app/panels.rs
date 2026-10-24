@@ -61,7 +61,12 @@ fn rgb(c: [u8; 4]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
-/// Layer list, top layer first: visibility, lock, active, opacity.
+/// Layer list, top layer first: visibility, lock, active, opacity. Layers
+/// with a `folder` sit under collapsible folder rows (a `/` path nests
+/// them) whose eye, lock and opacity apply to every layer inside (editor
+/// state, `ui.json` `folders`). Dragging a layer's ☰ onto a folder row
+/// puts it in that folder, onto another layer's row in that layer's folder
+/// (`set_layer_def` with the new `folder`, one entry).
 pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
     let Some(doc) = &st.doc else {
         ui.weak("No project");
@@ -80,65 +85,17 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
             edit = Some(None);
         }
     }
+    let tree = layer_tree(doc);
+    let mut refile: Option<(usize, Option<String>)> = None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for i in (0..doc.project.layers.len()).rev() {
-                let def = &doc.project.layers[i];
-                let Some(v) = st.view.layers.get_mut(i) else {
-                    continue;
-                };
-                let active = st.view.active_layer == Some(i);
-                ui.horizontal(|ui| {
-                    let eye = RichText::new(if v.visible { "👁" } else { "–" }).size(15.0);
-                    ui.toggle_value(&mut v.visible, eye)
-                        .on_hover_text("Visible");
-                    let lock = if v.locked {
-                        RichText::new("🔒").size(15.0)
-                    } else {
-                        RichText::new("🔓").size(15.0).weak()
-                    };
-                    ui.toggle_value(&mut v.locked, lock)
-                        .on_hover_text("Locked: painting tools skip this layer");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().slider_width = 64.0;
-                        ui.add(egui::Slider::new(&mut v.opacity, 0.0..=1.0).show_value(false))
-                            .on_hover_text(format!(
-                                "View opacity {:.0}% (definition: {:.0}%)",
-                                v.opacity * 100.0,
-                                def.opacity * 100.0
-                            ));
-                        // Name takes what's left, truncated.
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                            let name = RichText::new(&def.name);
-                            let r = ui.selectable_label(active, name).on_hover_text(format!(
-                                "{} ({}). Double click or right click to edit it",
-                                def.slug.as_str(),
-                                def.kind.name()
-                            ));
-                            if r.clicked() {
-                                st.view.active_layer = Some(i);
-                            }
-                            if r.double_clicked() {
-                                edit = Some(Some(def.slug.clone()));
-                            }
-                            r.context_menu(|ui| {
-                                if ui.button("Edit layer…").clicked() {
-                                    edit = Some(Some(def.slug.clone()));
-                                    ui.close();
-                                }
-                            });
-                            // A derived layer says so where the kind goes.
-                            if def.is_derived() {
-                                derived_badge(ui, doc, def, st.accent);
-                            } else {
-                                ui.weak(def.kind.name());
-                            }
-                        });
-                    });
-                });
+            for node in &tree {
+                draw_node(ui, st, node, 0, &mut edit, &mut refile);
             }
+            let Some(doc) = &st.doc else {
+                return;
+            };
             if !doc.project.layers.is_empty() {
                 ui.add_space(4.0);
                 if ui
@@ -154,10 +111,386 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
                 }
             }
         });
+    super::references::layers_row(ui, st);
+    if let Some((i, folder)) = refile
+        && let Some(cmd) = st.doc.as_ref().and_then(|d| folder_command(d, i, folder))
+    {
+        st.pending.push(cmd);
+    }
     match edit {
         Some(Some(slug)) => st.project.show_layer(slug),
         Some(None) => st.project.show(super::project_pane::Section::Layers),
         None => {}
+    }
+}
+
+/// A row of the Layers pane's tree: a layer, or a folder with what is in it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LayerNode {
+    Layer(usize),
+    Folder {
+        /// The full path (`Decor/Back`).
+        path: String,
+        children: Vec<LayerNode>,
+    },
+}
+
+/// The Layers pane's tree, top layer first: each folder where its topmost
+/// layer is, holding its layers and subfolders in the same order.
+pub fn layer_tree(doc: &crate::doc::Document) -> Vec<LayerNode> {
+    fn insert(nodes: &mut Vec<LayerNode>, parts: &[&str], prefix: String, i: usize) {
+        let Some((first, rest)) = parts.split_first() else {
+            nodes.push(LayerNode::Layer(i));
+            return;
+        };
+        let path = if prefix.is_empty() {
+            first.to_string()
+        } else {
+            format!("{prefix}/{first}")
+        };
+        let pos = nodes
+            .iter()
+            .position(|n| matches!(n, LayerNode::Folder { path: p, .. } if *p == path));
+        let pos = pos.unwrap_or_else(|| {
+            nodes.push(LayerNode::Folder {
+                path: path.clone(),
+                children: Vec::new(),
+            });
+            nodes.len() - 1
+        });
+        if let LayerNode::Folder { children, .. } = &mut nodes[pos] {
+            insert(children, rest, path, i);
+        }
+    }
+    let mut out = Vec::new();
+    for i in (0..doc.project.layers.len()).rev() {
+        let parts: Vec<&str> = doc.project.layers[i]
+            .folder
+            .as_deref()
+            .map(|f| f.split('/').filter(|p| !p.is_empty()).collect())
+            .unwrap_or_default();
+        insert(&mut out, &parts, String::new(), i);
+    }
+    out
+}
+
+/// The `set_layer_def` that puts layer `i` in `folder` (`None`: out of any
+/// folder), one entry; `None` when it is there already.
+pub fn folder_command(
+    doc: &crate::doc::Document,
+    i: usize,
+    folder: Option<String>,
+) -> Option<Command> {
+    let def = doc.project.layers.get(i)?;
+    let folder = folder.map(|f| f.trim().trim_matches('/').to_string());
+    let folder = folder.filter(|f| !f.is_empty());
+    if def.folder == folder {
+        return None;
+    }
+    let label = match &folder {
+        Some(f) => format!("Move layer {} to folder {f}", def.slug),
+        None => format!("Take layer {} out of its folder", def.slug),
+    };
+    let mut new = def.clone();
+    new.folder = folder;
+    Some(Command::Batch {
+        label,
+        commands: vec![Command::SetLayerDef {
+            layer: def.slug.clone(),
+            def: new,
+            index: None,
+            content: Vec::new(),
+            rules: None,
+        }],
+    })
+}
+
+/// What a layer's ☰ carries while dragged: its index.
+#[derive(Debug, Clone, Copy)]
+struct LayerDrag(usize);
+
+fn draw_node(
+    ui: &mut egui::Ui,
+    st: &mut EditorState,
+    node: &LayerNode,
+    depth: usize,
+    edit: &mut Option<Option<worlds_core::Slug>>,
+    refile: &mut Option<(usize, Option<String>)>,
+) {
+    match node {
+        LayerNode::Layer(i) => layer_row(ui, st, *i, depth, edit, refile),
+        LayerNode::Folder { path, children } => {
+            let f = st.view.folders.entry(path.clone()).or_default();
+            let name = path.rsplit('/').next().unwrap_or(path);
+            let row = ui.horizontal(|ui| {
+                ui.add_space(depth as f32 * 14.0);
+                let arrow = if f.collapsed { "⏵" } else { "⏷" };
+                let a = ui
+                    .add(egui::Button::new(arrow).frame(false))
+                    .on_hover_text("Fold or unfold the folder");
+                super::fields::mark(ui, &format!("layers:folder:{path}:fold"), a.rect);
+                if a.clicked() {
+                    f.collapsed = !f.collapsed;
+                }
+                let eye = RichText::new(if f.visible { "👁" } else { "–" }).size(15.0);
+                let r = ui
+                    .toggle_value(&mut f.visible, eye)
+                    .on_hover_text("Show or hide every layer in the folder");
+                super::fields::mark(ui, &format!("layers:folder:{path}:eye"), r.rect);
+                let lock = if f.locked {
+                    RichText::new("🔒").size(15.0)
+                } else {
+                    RichText::new("🔓").size(15.0).weak()
+                };
+                ui.toggle_value(&mut f.locked, lock)
+                    .on_hover_text("Locked: painting tools skip every layer in the folder");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().slider_width = 64.0;
+                    ui.add(egui::Slider::new(&mut f.opacity, 0.0..=1.0).show_value(false))
+                        .on_hover_text(format!(
+                            "Folder opacity {:.0}% (times each layer's)",
+                            f.opacity * 100.0
+                        ));
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                        ui.label(RichText::new(format!("🗀 {name}")).strong())
+                            .on_hover_text(format!(
+                                "Folder {path}: drag a layer's ☰ here to put it in"
+                            ));
+                    });
+                });
+            });
+            let resp = row.response;
+            super::fields::mark(ui, &format!("layers:folder:{path}"), resp.rect);
+            if resp.dnd_hover_payload::<LayerDrag>().is_some() {
+                ui.painter().rect_stroke(
+                    resp.rect,
+                    3.0,
+                    Stroke::new(2.0, st.accent),
+                    StrokeKind::Inside,
+                );
+            }
+            if let Some(p) = resp.dnd_release_payload::<LayerDrag>() {
+                *refile = Some((p.0, Some(path.clone())));
+            }
+            let collapsed = st.view.folders.get(path).is_some_and(|f| f.collapsed);
+            if !collapsed {
+                for c in children {
+                    draw_node(ui, st, c, depth + 1, edit, refile);
+                }
+            }
+        }
+    }
+}
+
+/// One layer's row: ☰ (drag into a folder, when the project has folders),
+/// eye, lock, name (click: make active; double click or menu: edit), kind,
+/// opacity.
+fn layer_row(
+    ui: &mut egui::Ui,
+    st: &mut EditorState,
+    i: usize,
+    depth: usize,
+    edit: &mut Option<Option<worlds_core::Slug>>,
+    refile: &mut Option<(usize, Option<String>)>,
+) {
+    let Some(doc) = &st.doc else {
+        return;
+    };
+    let def = &doc.project.layers[i];
+    let folders = doc.project.layers.iter().any(|l| l.folder.is_some());
+    let Some(v) = st.view.layers.get_mut(i) else {
+        return;
+    };
+    let active = st.view.active_layer == Some(i) && !st.view.references.active;
+    let row = ui.horizontal(|ui| {
+        ui.add_space(depth as f32 * 14.0);
+        if folders {
+            let h = ui
+                .add(egui::Label::new(RichText::new("☰").weak()).sense(Sense::drag()))
+                .on_hover_text("Drag onto a folder (or a layer in one) to put the layer in it");
+            super::fields::mark(ui, &format!("layers:{}:handle", def.slug), h.rect);
+            if h.dragged() {
+                h.dnd_set_drag_payload(LayerDrag(i));
+            }
+        }
+        let eye = RichText::new(if v.visible { "👁" } else { "–" }).size(15.0);
+        ui.toggle_value(&mut v.visible, eye)
+            .on_hover_text("Visible");
+        let lock = if v.locked {
+            RichText::new("🔒").size(15.0)
+        } else {
+            RichText::new("🔓").size(15.0).weak()
+        };
+        ui.toggle_value(&mut v.locked, lock)
+            .on_hover_text("Locked: painting tools skip this layer");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().slider_width = 64.0;
+            ui.add(egui::Slider::new(&mut v.opacity, 0.0..=1.0).show_value(false))
+                .on_hover_text(format!(
+                    "View opacity {:.0}% (definition: {:.0}%)",
+                    v.opacity * 100.0,
+                    def.opacity * 100.0
+                ));
+            // Name takes what's left, truncated.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                let name = RichText::new(&def.name);
+                let r = ui.selectable_label(active, name).on_hover_text(format!(
+                    "{} ({}). Double click or right click to edit it",
+                    def.slug.as_str(),
+                    def.kind.name()
+                ));
+                if r.clicked() {
+                    st.view.active_layer = Some(i);
+                    st.view.references.active = false;
+                }
+                if r.double_clicked() {
+                    *edit = Some(Some(def.slug.clone()));
+                }
+                r.context_menu(|ui| {
+                    if ui.button("Edit layer…").clicked() {
+                        *edit = Some(Some(def.slug.clone()));
+                        ui.close();
+                    }
+                    folder_menu(ui, doc, def, i, refile);
+                    ui.separator();
+                    layer_ops_menu(ui, doc, &st.view.selection, def, &mut st.actions);
+                });
+                // A derived layer says so where the kind goes.
+                if def.is_derived() {
+                    derived_badge(ui, doc, def, st.accent);
+                } else {
+                    ui.weak(def.kind.name());
+                }
+            });
+        });
+    });
+    super::fields::mark(ui, &format!("layers:{}", def.slug), row.response.rect);
+    // Dropping a layer on a layer: into that layer's folder.
+    if let Some(p) = row.response.dnd_release_payload::<LayerDrag>()
+        && p.0 != i
+    {
+        *refile = Some((p.0, def.folder.clone()));
+    }
+}
+
+/// A layer menu's folder part: the folders to move it to, out of its
+/// folder, a new one.
+fn folder_menu(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    def: &worlds_core::LayerDef,
+    i: usize,
+    refile: &mut Option<(usize, Option<String>)>,
+) {
+    let mut folders: Vec<&str> = doc
+        .project
+        .layers
+        .iter()
+        .filter_map(|l| l.folder.as_deref())
+        .collect();
+    folders.sort();
+    folders.dedup();
+    ui.menu_button("Move to folder", |ui| {
+        for f in folders {
+            if def.folder.as_deref() != Some(f) && ui.button(f).clicked() {
+                *refile = Some((i, Some(f.to_string())));
+                ui.close();
+            }
+        }
+        if def.folder.is_some() && ui.button("Out of its folder").clicked() {
+            *refile = Some((i, None));
+            ui.close();
+        }
+        ui.separator();
+        ui.label("New folder (a / path):");
+        let id = egui::Id::new(("new layer folder", i));
+        let mut text: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .hint_text("Decor/Back")
+                .desired_width(120.0),
+        );
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (enter || ui.button("Move").clicked()) && !text.trim().is_empty() {
+            *refile = Some((i, Some(text.trim().to_string())));
+            text.clear();
+            ui.close();
+        }
+        ui.data_mut(|d| d.insert_temp(id, text));
+    });
+}
+
+/// The layer operations of a layer's right-click menu: duplicate, merge
+/// down (greyed out, saying why, unless the layer below is a tiles layer on
+/// the same grid), move the selection here (tile stacks to a tiles layer,
+/// entities to an entities layer).
+fn layer_ops_menu(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    selection: &crate::view::Selection,
+    def: &worlds_core::LayerDef,
+    actions: &mut Vec<Action>,
+) {
+    let slug = def.slug.clone();
+    if ui
+        .button("Duplicate layer")
+        .on_hover_text(format!(
+            "A copy of {} and its content in every level, right above it",
+            def.name
+        ))
+        .clicked()
+    {
+        actions.push(Action::DuplicateLayer(Some(slug.clone())));
+        ui.close();
+    }
+    if def.is_tiles() {
+        let target = worlds_core::command::layer_ops::merge_target(&doc.project, &slug);
+        let r = ui.add_enabled(target.is_ok(), egui::Button::new("Merge down"));
+        let r = match &target {
+            Ok(lower) => r.on_hover_text(format!(
+                "Put its tiles on top of {}'s in every level, then remove it",
+                lower.name
+            )),
+            Err(e) => r.on_disabled_hover_text(e.to_string()),
+        };
+        if r.clicked() {
+            actions.push(Action::MergeLayerDown(Some(slug.clone())));
+            ui.close();
+        }
+    }
+    let n = if def.is_tiles() {
+        selection.tiles().filter(|(_, l, _)| **l != slug).count()
+    } else if def.is_entities() {
+        selection
+            .entities()
+            .filter(|id| doc.find_entity(id).is_some_and(|(_, l, _)| *l != slug))
+            .count()
+    } else {
+        return;
+    };
+    let what = match (def.is_tiles(), n == 1) {
+        (true, true) => "tile stack",
+        (true, false) => "tile stacks",
+        (false, true) => "entity",
+        (false, false) => "entities",
+    };
+    let text = if n == 0 {
+        "Move selection here".to_string()
+    } else {
+        format!("Move {n} selected {what} here")
+    };
+    let r = ui
+        .add_enabled(n > 0, egui::Button::new(text))
+        .on_disabled_hover_text(if def.is_tiles() {
+            "Select tile stacks on another tiles layer first"
+        } else {
+            "Select entities on another entities layer first"
+        });
+    if r.clicked() {
+        actions.push(Action::MoveSelectionToLayer(Some(slug)));
+        ui.close();
     }
 }
 
@@ -185,6 +518,10 @@ fn derived_badge(
 
 /// Palette for the active layer.
 pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
+    if st.doc.is_some() && crate::library::switch(ui, &mut st.view) {
+        crate::library::library(ui, st);
+        return;
+    }
     let Some(doc) = &st.doc else {
         ui.weak("No project");
         return;
@@ -299,24 +636,28 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
                 .entry(slug.clone())
                 .or_insert(default)
                 .clone();
-            egui::ScrollArea::horizontal()
-                .id_salt("tileset tabs")
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for t in tilesets {
-                            if ui
-                                .selectable_label(current == t.slug.as_str(), t.slug.as_str())
-                                .clicked()
-                            {
-                                st.palette_tab.insert(slug.clone(), t.slug.to_string());
-                            }
-                        }
-                    });
-                });
+            if let Some(t) = tileset_picker(
+                ui,
+                doc,
+                &mut st.edit_bufs,
+                &mut st.project,
+                &mut st.palette_rects,
+                &slug,
+                &current,
+            ) {
+                st.palette_tab.insert(slug.clone(), t);
+            }
             ui.separator();
             let Some(ts) = doc.project.tileset(&current) else {
                 return;
             };
+            random_section(
+                ui,
+                &mut st.view,
+                &mut st.edit_bufs,
+                &mut st.palette_tab,
+                &slug,
+            );
             let tex = atlas_texture(&mut st.atlas, ui.ctx(), doc, ts);
             let Some(tex) = tex else {
                 ui.colored_label(
@@ -342,6 +683,12 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
                     if resp.drag_started() || resp.clicked() {
                         st.atlas_drag = pointer.map(to_tile);
                     }
+                    let random = matches!(st.view.palette.brush(&slug), Some(Brush::Random { .. }));
+                    if random && (resp.drag_started() || resp.clicked()) {
+                        // A random brush keeps what it had before this drag
+                        // (Ctrl and Shift add to it).
+                        st.random_base = st.view.palette.brush(&slug).cloned();
+                    }
                     if let (Some(a), Some(p)) = (st.atlas_drag, pointer)
                         && (resp.dragged() || resp.drag_stopped() || resp.clicked())
                     {
@@ -352,32 +699,66 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
                             a[0].abs_diff(b[0]) + 1,
                             a[1].abs_diff(b[1]) + 1,
                         ];
-                        st.view.palette.brushes.insert(
-                            slug.clone(),
+                        let m = ui.input(|i| i.modifiers);
+                        let brush = if random {
+                            random_pick(st.random_base.as_ref(), ts.slug.clone(), rect, m)
+                        } else {
                             Brush::Tiles {
                                 tileset: ts.slug.clone(),
                                 rect,
-                            },
-                        );
+                            }
+                        };
+                        st.view.palette.brushes.insert(slug.clone(), brush);
                     }
                     if resp.drag_stopped() || resp.clicked() {
                         st.atlas_drag = None;
                     }
                     let p = ui.painter_at(resp.rect);
-                    if let Some(Brush::Tiles { tileset, rect }) = st.view.palette.brush(&slug)
-                        && tileset == &ts.slug
-                    {
+                    let outline = |rect: [u32; 4]| {
                         let a = ts.tile_px([rect[0], rect[1]]);
                         let b = ts.tile_px([rect[0] + rect[2] - 1, rect[1] + rect[3] - 1]);
-                        let r = egui::Rect::from_min_max(
+                        egui::Rect::from_min_max(
                             resp.rect.min + Vec2::new(a[0] as f32, a[1] as f32) * scale,
                             resp.rect.min
                                 + Vec2::new(
                                     (b[0] + ts.tile_size[0]) as f32,
                                     (b[1] + ts.tile_size[1]) as f32,
                                 ) * scale,
-                        );
-                        p.rect_stroke(r, 0.0, Stroke::new(2.0, st.accent), StrokeKind::Outside);
+                        )
+                    };
+                    match st.view.palette.brush(&slug) {
+                        Some(Brush::Tiles { tileset, rect }) if tileset == &ts.slug => {
+                            p.rect_stroke(
+                                outline(*rect),
+                                0.0,
+                                Stroke::new(2.0, st.accent),
+                                StrokeKind::Outside,
+                            );
+                        }
+                        // A random brush: every alternative's tiles, dashed
+                        // look by a thinner stroke and a tint.
+                        Some(Brush::Random {
+                            tileset,
+                            alternatives,
+                        }) if tileset == &ts.slug => {
+                            for a in alternatives {
+                                let rects: Vec<[u32; 4]> = match a.as_rect() {
+                                    Some(r) => vec![r],
+                                    None => a.tiles.iter().map(|t| [t[0], t[1], 1, 1]).collect(),
+                                };
+                                for r in rects {
+                                    let r = outline(r);
+                                    p.rect_filled(r, 0.0, st.accent.gamma_multiply(0.18));
+                                    p.rect_stroke(
+                                        r,
+                                        0.0,
+                                        Stroke::new(1.5, st.accent),
+                                        StrokeKind::Inside,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                     if let Some(h) = resp.hover_pos() {
                         let t = to_tile(h);
@@ -396,6 +777,163 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
         }
         LayerKind::Entities => super::entities::palette(ui, st),
     }
+}
+
+/// The random brush an atlas drag over `rect` makes: each tile of it one
+/// alternative, replacing `base`'s (a plain drag), added to them (Ctrl),
+/// or the whole rect added as one stamp alternative (Shift). A `base` of
+/// another tileset is replaced.
+pub fn random_pick(
+    base: Option<&Brush>,
+    tileset: worlds_core::Slug,
+    rect: [u32; 4],
+    m: egui::Modifiers,
+) -> Brush {
+    let mut alternatives = match base {
+        Some(Brush::Random {
+            tileset: t,
+            alternatives,
+        }) if *t == tileset && (m.shift || crate::tools::pixel_mod(m)) => alternatives.clone(),
+        _ => Vec::new(),
+    };
+    let fresh: Vec<worlds_core::TileAlt> = if m.shift {
+        vec![worlds_core::TileAlt::rect(
+            rect[0], rect[1], rect[2], rect[3],
+        )]
+    } else {
+        match Brush::random_of_rect(tileset.clone(), rect) {
+            Brush::Random { alternatives, .. } => alternatives,
+            _ => Vec::new(),
+        }
+    };
+    for a in fresh {
+        if !alternatives.iter().any(|b| b.tiles == a.tiles) {
+            alternatives.push(a);
+        }
+    }
+    Brush::Random {
+        tileset,
+        alternatives,
+    }
+}
+
+/// The palette's random brush part, above the atlas of tiles layer
+/// `layer`: the current random brush's alternatives with their weights
+/// (`×` drops one) and Save as preset; then the saved presets (a click
+/// makes one the brush, `×` forgets it).
+fn random_section(
+    ui: &mut egui::Ui,
+    view: &mut crate::view::ViewState,
+    edit_bufs: &mut std::collections::HashMap<String, String>,
+    palette_tab: &mut std::collections::HashMap<String, String>,
+    layer: &str,
+) {
+    let presets = &mut view.palette.presets;
+    let brush = view.palette.brushes.get_mut(layer);
+    let mut load = None;
+    if let Some(Brush::Random {
+        tileset,
+        alternatives,
+    }) = brush
+    {
+        ui.horizontal(|ui| {
+            ui.strong("Random");
+            ui.weak(format!(
+                "{} alternative{} from {tileset}",
+                alternatives.len(),
+                if alternatives.len() == 1 { "" } else { "s" }
+            ));
+        });
+        let mut remove = None;
+        egui::Grid::new("random alternatives")
+            .num_columns(3)
+            .show(ui, |ui| {
+                for (i, a) in alternatives.iter_mut().enumerate() {
+                    let what = match (a.as_rect(), a.tiles.as_slice()) {
+                        (Some([c, r, 1, 1]), _) => format!("[{c}, {r}]"),
+                        (Some([c, r, w, h]), _) => format!("[{c}, {r}] {w}x{h}"),
+                        (None, t) => format!("stack of {}", t.len()),
+                    };
+                    ui.label(what);
+                    let r = ui
+                        .add(
+                            egui::DragValue::new(&mut a.weight)
+                                .range(0..=1000)
+                                .prefix("w "),
+                        )
+                        .on_hover_text("Weight: picked in proportion to it (0: never)");
+                    super::fields::mark(ui, &format!("random:weight:{i}"), r.rect);
+                    if ui.small_button("×").clicked() {
+                        remove = Some(i);
+                    }
+                    ui.end_row();
+                }
+            });
+        if let Some(i) = remove {
+            alternatives.remove(i);
+        }
+        ui.horizontal(|ui| {
+            let name = edit_bufs.entry("random:preset_name".into()).or_default();
+            let r = ui.add(
+                egui::TextEdit::singleline(name)
+                    .hint_text("preset name")
+                    .desired_width(110.0),
+            );
+            super::fields::mark(ui, "random:preset_name", r.rect);
+            let ok = !name.trim().is_empty() && !alternatives.is_empty();
+            let b = ui.add_enabled(ok, egui::Button::new("Save preset"));
+            super::fields::mark(ui, "random:save", b.rect);
+            if b.clicked() {
+                let name = name.trim().to_string();
+                let p = crate::tools::BrushPreset {
+                    name: name.clone(),
+                    tileset: tileset.clone(),
+                    alternatives: alternatives.clone(),
+                };
+                match presets.iter_mut().find(|q| q.name == name) {
+                    Some(q) => *q = p,
+                    None => presets.push(p),
+                }
+                edit_bufs.remove("random:preset_name");
+            }
+        });
+    }
+    if !presets.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Presets");
+            let mut forget = None;
+            for (i, p) in presets.iter().enumerate() {
+                let r = ui.button(&p.name).on_hover_text(format!(
+                    "{} alternatives from {} (right click: forget)",
+                    p.alternatives.len(),
+                    p.tileset
+                ));
+                super::fields::mark(ui, &format!("random:preset:{}", p.name), r.rect);
+                if r.clicked() {
+                    load = Some(i);
+                }
+                if r.secondary_clicked() {
+                    forget = Some(i);
+                }
+            }
+            if let Some(i) = forget {
+                presets.remove(i);
+            }
+        });
+    }
+    if let Some(i) = load
+        && let Some(p) = view.palette.presets.get(i).cloned()
+    {
+        palette_tab.insert(layer.to_string(), p.tileset.to_string());
+        view.palette.brushes.insert(
+            layer.to_string(),
+            Brush::Random {
+                tileset: p.tileset,
+                alternatives: p.alternatives,
+            },
+        );
+    }
+    ui.separator();
 }
 
 /// The egui texture of a tileset's atlas (nearest sampling), loaded on
@@ -433,6 +971,124 @@ pub(crate) fn atlas_texture(
         .clone()
 }
 
+/// The Inspector's Resize section: a new size in project cells, a 3x3
+/// anchor picker (the dot stays put in the world; the default is the
+/// center, as for `resize_level`), Resize, and Crop to content. A resize
+/// that would leave an entity outside is refused in the status bar.
+fn level_resize(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    view: &mut crate::view::ViewState,
+    pending: &mut Vec<Command>,
+    bufs: &mut std::collections::HashMap<String, String>,
+    ix: crate::doc::LevelIx,
+) {
+    let l = doc.level(ix);
+    let world = &doc.project.worlds[doc.levels[ix].world].slug;
+    let key_size = format!("{}:resize", l.id);
+    let key_anchor = format!("{}:anchor", l.id);
+    let pair = |k: &str| -> Option<[i64; 2]> {
+        let (a, b) = bufs.get(k)?.split_once(',')?;
+        Some([a.parse().ok()?, b.parse().ok()?])
+    };
+    let mut size = pair(&key_size).map_or(l.size, |p| p.map(|n| n.clamp(1, 100_000) as u32));
+    let mut anchor = pair(&key_anchor).map_or([0, 0], |p| p.map(|n| n.clamp(-1, 1) as i8));
+    ui.add_space(8.0);
+    ui.strong("Resize");
+    ui.horizontal(|ui| {
+        anchor_picker(ui, &mut anchor);
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut size[0]).range(1..=100_000));
+                ui.label("x");
+                ui.add(egui::DragValue::new(&mut size[1]).range(1..=100_000));
+                ui.weak("cells");
+            });
+            ui.horizontal(|ui| {
+                let b = ui
+                    .add_enabled(size != l.size, egui::Button::new("Resize"))
+                    .on_hover_text(
+                        "The anchor (the dot) stays put in the world; content keeps its place",
+                    );
+                super::fields::mark(ui, "level:resize", b.rect);
+                if b.clicked() {
+                    match crate::tools::resize_command(&doc.project, world, &l.slug, size, anchor) {
+                        Ok(cmd) => {
+                            pending.push(cmd);
+                            size = l.size;
+                        }
+                        Err(e) => view.set_status(e, true),
+                    }
+                }
+                let b = ui
+                    .button("Crop to content")
+                    .on_hover_text("Shrink to the bounding box of the cells, tiles and entities");
+                super::fields::mark(ui, "level:crop", b.rect);
+                if b.clicked() {
+                    match crate::tools::crop_command(&doc.project, world, &l.slug) {
+                        Ok(cmd) => pending.push(cmd),
+                        Err(e) => view.set_status(e, true),
+                    }
+                }
+            });
+        });
+    });
+    if size == l.size {
+        bufs.remove(&key_size);
+    } else {
+        bufs.insert(key_size, format!("{},{}", size[0], size[1]));
+    }
+    bufs.insert(key_anchor, format!("{},{}", anchor[0], anchor[1]));
+}
+
+/// A 3x3 grid of buttons as in image editors' canvas size dialogs: the
+/// dot marks the anchor, what stays put; arrows point where the level
+/// grows.
+pub fn anchor_picker(ui: &mut egui::Ui, anchor: &mut [i8; 2]) {
+    let names = |a: [i8; 2]| -> String {
+        let x = ["left", "center", "right"][(a[0] + 1) as usize];
+        let y = ["top", "middle", "bottom"][(a[1] + 1) as usize];
+        match (a[0], a[1]) {
+            (0, 0) => "the center".to_string(),
+            (_, 0) => format!("the {x} edge"),
+            (0, _) => format!("the {y} edge"),
+            _ => format!("the {y}-{x} corner"),
+        }
+    };
+    // Drawn, not glyphs: the default fonts lack some arrows.
+    egui::Grid::new(ui.id().with("anchor_picker"))
+        .spacing([2.0, 2.0])
+        .show(ui, |ui| {
+            for ay in -1i8..=1 {
+                for ax in -1i8..=1 {
+                    let d = [ax - anchor[0], ay - anchor[1]];
+                    let on = d == [0, 0];
+                    let (rect, b) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), Sense::click());
+                    let b = b.on_hover_text(format!("Keep {} in place", names([ax, ay])));
+                    let v = ui.style().interact_selectable(&b, on);
+                    let p = ui.painter();
+                    p.rect(rect, 3.0, v.bg_fill, v.bg_stroke, StrokeKind::Inside);
+                    let c = rect.center();
+                    if on {
+                        p.circle_filled(c, 4.0, v.fg_stroke.color);
+                    } else if d[0].abs() <= 1 && d[1].abs() <= 1 {
+                        let dir = egui::vec2(d[0] as f32, d[1] as f32).normalized();
+                        p.arrow(
+                            c - dir * 5.0,
+                            dir * 10.0,
+                            Stroke::new(1.5, v.fg_stroke.color),
+                        );
+                    }
+                    super::fields::mark(ui, &format!("level:anchor:{ax},{ay}"), b.rect);
+                    if b.clicked() {
+                        *anchor = [ax, ay];
+                    }
+                }
+                ui.end_row();
+            }
+        });
+}
+
 /// The active level's part of the Inspector (or the project's when no
 /// level is active): rename, delete, and the level fields, every type
 /// editable through [`super::fields`] (`×` removes the stored value, `null`
@@ -465,6 +1121,11 @@ pub fn level_inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                 ui.weak("Levels");
                 ui.label(doc.levels.len().to_string());
                 ui.end_row();
+                if doc.project.worlds.len() > 1 {
+                    ui.weak("Worlds");
+                    ui.label(doc.project.worlds.len().to_string());
+                    ui.end_row();
+                }
                 ui.weak("Layers");
                 ui.label(doc.project.layers.len().to_string());
                 ui.end_row();
@@ -574,10 +1235,19 @@ pub fn level_inspector(ui: &mut egui::Ui, st: &mut EditorState) {
             bufs.remove(&key_slug);
             bufs.remove(&key_name);
         }
+        if ui
+            .button("Duplicate")
+            .on_hover_text("A copy just right of it (Ctrl+D with the level selected)")
+            .clicked()
+        {
+            actions.push(Action::DuplicateLevel(ix));
+        }
         if ui.button("Delete level…").clicked() {
             actions.push(Action::DeleteLevel);
         }
     });
+    level_resize(ui, doc, view, pending, bufs, ix);
+    super::shape_inspector::shape_section(ui, doc, view, pending, bufs, actions, ix);
 
     if !doc.project.level_fields.is_empty() {
         ui.add_space(8.0);
@@ -833,11 +1503,424 @@ pub fn log(ui: &mut egui::Ui, st: &mut EditorState) {
     });
 }
 
+/// The tilesets that match `query` (the palette picker's search box), best
+/// first: a fuzzy match on the slug, ties by slug. An empty query lists
+/// every tileset in project order.
+pub fn rank_tilesets<'a>(
+    tilesets: &'a [worlds_core::TilesetDef],
+    query: &str,
+) -> Vec<&'a worlds_core::TilesetDef> {
+    let q = super::actions::fuzzy_query(query);
+    if q.is_empty() {
+        return tilesets.iter().collect();
+    }
+    let mut v: Vec<(i32, &worlds_core::TilesetDef)> = tilesets
+        .iter()
+        .filter_map(|t| super::actions::fuzzy_score_chars(&q, t.slug.as_str()).map(|s| (s, t)))
+        .collect();
+    v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.slug.cmp(&b.1.slug)));
+    v.into_iter().map(|(_, t)| t).collect()
+}
+
+/// The tiles palette's tileset picker: a button naming the tileset the
+/// atlas shows, whose popup has a search box (Enter or Tab takes the first
+/// match), the matching tilesets with their tile sizes, and Edit… / Add a
+/// tileset… (both go to the Project pane's Tilesets part). Ten tilesets in
+/// a row of tabs can't be read or searched; a list with a search box can.
+/// Returns the slug picked, if any.
+fn tileset_picker(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    bufs: &mut std::collections::HashMap<String, String>,
+    project: &mut super::project_pane::ProjectState,
+    rects: &mut std::collections::HashMap<String, egui::Rect>,
+    layer: &str,
+    current: &str,
+) -> Option<String> {
+    use egui::{Key, Modifiers, Popup, PopupCloseBehavior};
+    let key = format!("tileset search:{layer}");
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        ui.weak("Tileset");
+        let button = ui.button(format!("{current} ⏷")).on_hover_text(
+            "The tileset the atlas below shows. Click to pick another (type to search), \
+                 edit this one, or add a tileset",
+        );
+        rects.insert("tileset button".into(), button.rect);
+        let popup = Popup::from_toggle_button_response(&button)
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+        // The rects are last frame's: a closed popup has no rows.
+        rects.retain(|k, _| !k.starts_with("tileset row:") && k != "tileset edit");
+        if !popup.is_open() {
+            bufs.remove(&key);
+        }
+        popup.show(|ui| {
+            ui.set_min_width(240.0);
+            ui.set_max_width(320.0);
+            // Tab completes before the text field can move the focus.
+            let complete = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab));
+            // No buffer yet: the popup just opened, so the search box takes
+            // the keyboard.
+            let just_opened = !bufs.contains_key(&key);
+            let query = bufs.entry(key.clone()).or_default();
+            let search = ui.add(
+                egui::TextEdit::singleline(query)
+                    .hint_text("Search tilesets")
+                    .desired_width(280.0),
+            );
+            if just_opened {
+                search.request_focus();
+            }
+            let entered = search.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            let ranked = rank_tilesets(&doc.project.tilesets, query);
+            if (complete || entered)
+                && let Some(t) = ranked.first()
+            {
+                picked = Some(t.slug.to_string());
+            }
+            ui.separator();
+            if ranked.is_empty() {
+                ui.weak("No tileset matches");
+            }
+            egui::ScrollArea::vertical()
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    for t in &ranked {
+                        let r = ui.selectable_label(
+                            current == t.slug.as_str(),
+                            format!("{}  {}x{}", t.slug, t.tile_size[0], t.tile_size[1]),
+                        );
+                        rects.insert(format!("tileset row:{}", t.slug), r.rect);
+                        if r.clicked() {
+                            picked = Some(t.slug.to_string());
+                        }
+                    }
+                });
+            ui.separator();
+            if let Ok(cur) = worlds_core::Slug::new(current) {
+                let r = ui.button(format!("Edit {current}…")).on_hover_text(
+                    "Its form in the Project pane: slug, image, tile size, spacing, padding",
+                );
+                rects.insert("tileset edit".into(), r.rect);
+                if r.clicked() {
+                    project.show_tileset(cur);
+                    ui.close();
+                }
+            }
+            if ui
+                .button("Add a tileset…")
+                .on_hover_text(
+                    "Pick a PNG (the Project pane's + Tileset…). One outside the project is \
+                     copied into art/ first",
+                )
+                .clicked()
+            {
+                project.pick_new_tileset(ui.ctx(), &doc.dir);
+                ui.close();
+            }
+            if picked.is_some() {
+                ui.close();
+            }
+        });
+    });
+    picked
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    #[test]
+    fn tileset_search_ranks_by_fuzzy_match_and_keeps_project_order_when_empty() {
+        let ts = |slug: &str| worlds_core::TilesetDef {
+            slug: worlds_core::Slug::new(slug).unwrap(),
+            image: format!("art/{slug}.png"),
+            tile_size: [16, 16],
+            spacing: 0,
+            padding: 0,
+        };
+        let all = [
+            ts("castle_main"),
+            ts("props"),
+            ts("cave_fg"),
+            ts("castle_decor"),
+        ];
+        let slugs = |v: Vec<&worlds_core::TilesetDef>| {
+            v.iter().map(|t| t.slug.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            slugs(rank_tilesets(&all, "")),
+            ["castle_main", "props", "cave_fg", "castle_decor"]
+        );
+        // A prefix beats a scattered match; ties fall back to the slug.
+        let r = slugs(rank_tilesets(&all, "cas"));
+        assert_eq!(r.len(), 2);
+        assert!(r.contains(&"castle_main".to_string()) && r.contains(&"castle_decor".to_string()));
+        assert_eq!(slugs(rank_tilesets(&all, "pr")), ["props"]);
+        // Whitespace and case don't matter; no match is an empty list.
+        assert_eq!(slugs(rank_tilesets(&all, " Cave FG ")), ["cave_fg"]);
+        assert!(rank_tilesets(&all, "zzz").is_empty());
+    }
+
+    /// Layer folders: the tree, the command a drop makes, and a folder's
+    /// eye, lock and opacity applied to the layers inside.
+    #[test]
+    fn layer_folders() {
+        use super::super::testkit::{Driver, batches, state};
+        let (_tmp, mut st) = state();
+        let doc = st.doc.as_mut().unwrap();
+        for (slug, folder) in [("decor_back", "Decor/Back"), ("main_tiling", "Decor")] {
+            let i = doc
+                .project
+                .layers
+                .iter()
+                .position(|l| l.slug == slug)
+                .unwrap();
+            let cmd = folder_command(doc, i, Some(folder.into())).unwrap();
+            doc.project.apply(cmd).unwrap();
+        }
+        let doc = st.doc.as_ref().unwrap();
+        st.view.sync_layers(doc, None);
+        // Top first: objects, then Decor holding Back (decor_back) and
+        // main_tiling, then collision.
+        let tree = layer_tree(doc);
+        let ix = |s: &str| doc.project.layers.iter().position(|l| l.slug == s).unwrap();
+        assert_eq!(
+            tree,
+            [
+                LayerNode::Layer(ix("objects")),
+                LayerNode::Folder {
+                    path: "Decor".into(),
+                    children: vec![
+                        LayerNode::Folder {
+                            path: "Decor/Back".into(),
+                            children: vec![LayerNode::Layer(ix("decor_back"))],
+                        },
+                        LayerNode::Layer(ix("main_tiling")),
+                    ],
+                },
+                LayerNode::Layer(ix("collision")),
+            ]
+        );
+        // A folder's state reaches every layer inside, nested too.
+        let deco = ix("decor_back");
+        st.view.folders.insert(
+            "Decor".into(),
+            crate::view::FolderView {
+                visible: true,
+                locked: true,
+                opacity: 0.5,
+                collapsed: false,
+            },
+        );
+        assert!(st.view.layer_locked(deco) && st.view.layer_locked(ix("main_tiling")));
+        assert!(!st.view.layer_locked(ix("objects")));
+        assert!((st.view.layer_opacity(doc, deco) - 0.8 * 0.5).abs() < 1e-6);
+        st.view.folders.get_mut("Decor").unwrap().visible = false;
+        assert!(!st.view.layer_visible(deco));
+        assert_eq!(st.view.layer_opacity(doc, deco), 0.0);
+        // The pane draws the folders; folding hides what is inside.
+        st.view.folders.clear();
+        let mut d = Driver::new(layers);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        d.rect("layers:folder:Decor/Back");
+        d.rect("layers:decor_back");
+        let fold = d.rect("layers:folder:Decor:fold");
+        d.click(&mut st, fold.center());
+        assert!(st.view.folders["Decor"].collapsed);
+        // Out of its folder, as one entry.
+        let doc = st.doc.as_ref().unwrap();
+        let c = folder_command(doc, deco, None).unwrap();
+        assert_eq!(c.label(), "Take layer decor_back out of its folder");
+        assert_eq!(folder_command(doc, deco, Some("Decor/Back/".into())), None);
+        assert!(batches(&mut st).is_empty());
+    }
+
+    /// Layer folders, the References pseudo-layer under them and the
+    /// Palette's Library switch, drawn in one frame: each keeps its own
+    /// state, a hidden folder hides its layers but not the references.
+    #[test]
+    fn folders_references_and_the_library_together() {
+        use super::super::testkit::{Driver, state};
+        fn both(ui: &mut egui::Ui, st: &mut EditorState) {
+            layers(ui, st);
+            ui.separator();
+            palette(ui, st);
+        }
+        let (_tmp, mut st) = state();
+        let doc = st.doc.as_mut().unwrap();
+        let i = doc
+            .project
+            .layers
+            .iter()
+            .position(|l| l.slug == "decor_back")
+            .unwrap();
+        let cmd = folder_command(doc, i, Some("Decor".into())).unwrap();
+        doc.project.apply(cmd).unwrap();
+        let doc = st.doc.as_ref().unwrap();
+        st.view.sync_layers(doc, None);
+        // The active layer inside a hidden, collapsed folder; the Library
+        // in the Palette.
+        st.view.active_layer = Some(i);
+        st.view.folders.insert(
+            "Decor".into(),
+            crate::view::FolderView {
+                visible: false,
+                locked: false,
+                opacity: 1.0,
+                collapsed: true,
+            },
+        );
+        st.view.library.open = true;
+        let mut d = Driver::new(both);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        let folder = d.rect("layers:folder:Decor");
+        let refs = d.rect("references");
+        assert!(refs.top() >= folder.bottom(), "{refs:?} under {folder:?}");
+        assert!(!st.view.layer_visible(i));
+        assert!(st.view.references.ui.visible, "references stay shown");
+        // Making References active leaves the folder and the Library be.
+        d.click(&mut st, refs.center());
+        assert!(st.view.references.active);
+        assert!(st.view.folders["Decor"].collapsed);
+        assert!(st.view.library.open);
+        d.frame(&mut st, vec![]);
+        d.rect("layers:folder:Decor");
+    }
+
+    /// The palette's random brush: an atlas drag replaces, Ctrl adds tiles,
+    /// Shift adds a stamp; the weights, Save preset and a preset's click.
+    #[test]
+    fn random_brush_in_the_palette() {
+        use super::super::testkit::{Driver, state};
+        use worlds_core::{Slug, TileAlt};
+        let ts = Slug::new("castle_main").unwrap();
+        let none = egui::Modifiers::default();
+        let ctrl = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let alts = |b: &Brush| match b {
+            Brush::Random { alternatives, .. } => alternatives.clone(),
+            _ => panic!("{b:?}"),
+        };
+        let a = random_pick(None, ts.clone(), [0, 0, 2, 1], none);
+        assert_eq!(alts(&a), [TileAlt::single(0, 0), TileAlt::single(1, 0)]);
+        let b = random_pick(Some(&a), ts.clone(), [1, 0, 2, 1], ctrl);
+        assert_eq!(
+            alts(&b),
+            [
+                TileAlt::single(0, 0),
+                TileAlt::single(1, 0),
+                TileAlt::single(2, 0)
+            ]
+        );
+        let c = random_pick(Some(&b), ts.clone(), [4, 4, 2, 2], shift);
+        assert_eq!(alts(&c).last(), Some(&TileAlt::rect(4, 4, 2, 2)));
+        assert_eq!(
+            alts(&random_pick(Some(&c), ts.clone(), [9, 9, 1, 1], none)).len(),
+            1
+        );
+
+        let (_tmp, mut st) = state();
+        let li = st
+            .doc
+            .as_ref()
+            .unwrap()
+            .project
+            .layers
+            .iter()
+            .position(|l| l.slug == "decor_back")
+            .unwrap();
+        st.view.active_layer = Some(li);
+        st.view
+            .palette
+            .brushes
+            .insert("decor_back".into(), c.clone());
+        let mut d = Driver::new(palette);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        // Name it and save it.
+        d.click(&mut st, d.rect("random:preset_name").center());
+        d.frame(&mut st, vec![egui::Event::Text("ledges".into())]);
+        d.click(&mut st, d.rect("random:save").center());
+        assert_eq!(st.view.palette.presets.len(), 1);
+        assert_eq!(st.view.palette.presets[0].name, "ledges");
+        assert_eq!(st.view.palette.presets[0].alternatives, alts(&c));
+        // Another brush, then the preset brings it back.
+        st.view.palette.brushes.insert(
+            "decor_back".into(),
+            Brush::Tiles {
+                tileset: ts.clone(),
+                rect: [0, 0, 1, 1],
+            },
+        );
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("random:preset:ledges").center());
+        assert_eq!(st.view.palette.brush("decor_back"), Some(&c));
+        // The presets go to ui.json and come back.
+        let json = serde_json::to_string(&st.view.palette).unwrap();
+        let back: crate::tools::PaletteSelection = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.presets, st.view.palette.presets);
+        // A ui.json palette from before presets: density 100, no presets.
+        let old: crate::tools::PaletteSelection =
+            serde_json::from_str(r#"{ "brushes": {} }"#).unwrap();
+        assert_eq!((old.density, old.presets.len()), (100, 0));
+    }
+
+    /// The Inspector's level Resize section: the anchor picker and the size
+    /// make one `resize_level`; Crop to content queues the crop batch; a
+    /// size that would strand the door is refused in the status bar.
+    #[test]
+    fn level_resize_with_an_anchor_and_crop() {
+        use super::super::testkit::{Driver, batches, state};
+        let (_tmp, mut st) = state();
+        let ix = st.doc.as_ref().unwrap().level_ix("shaft").unwrap();
+        st.view.active_level = Some(ix);
+        let id = st.doc.as_ref().unwrap().level(ix).id.clone();
+        let mut d = Driver::new(super::super::inspector::inspector);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        // Bottom-right anchor, then a bigger size.
+        d.click(&mut st, d.rect("level:anchor:1,1").center());
+        st.edit_bufs.insert(format!("{id}:resize"), "8,9".into());
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("level:resize").center());
+        let b = batches(&mut st);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(
+            b[0].1,
+            [Command::ResizeLevel {
+                world: worlds_core::Slug::new("main").unwrap(),
+                level: worlds_core::Slug::new("shaft").unwrap(),
+                size: [8, 9],
+                anchor: [1, 1],
+            }]
+        );
+        // The size field goes back to the level's own size.
+        assert!(!st.edit_bufs.contains_key(&format!("{id}:resize")));
+        // Too small from the top-left: the door would be outside.
+        d.click(&mut st, d.rect("level:anchor:-1,-1").center());
+        st.edit_bufs.insert(format!("{id}:resize"), "2,2".into());
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("level:resize").center());
+        assert!(batches(&mut st).is_empty());
+        let status = st.view.status.as_ref().unwrap().text.clone();
+        assert!(status.contains("doorshaft2"), "{status}");
+        d.click(&mut st, d.rect("level:crop").center());
+        let b = batches(&mut st);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0].0, "Crop level shaft");
+    }
 
     /// One egui frame with a color field at the top left; `events` are this
     /// frame's input. Returns what the field committed and the button rect.

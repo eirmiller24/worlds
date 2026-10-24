@@ -7,9 +7,11 @@
 //! the handler makes, it calls [`Host::applied`] with the changes, so the
 //! editor can invalidate chunks and rebake before the next frame.
 //!
-//! The `view.*` methods go through [`Host::focus`], [`Host::select`] and
-//! [`Host::snapshot`]; their defaults refuse with `unsupported`, which is
-//! what headless mode answers.
+//! The `view.*` methods go through [`Host::focus`], [`Host::select`],
+//! [`Host::snapshot`], [`Host::viewports`] and [`Host::open_viewport`];
+//! their defaults refuse with `unsupported`, which is what headless mode
+//! answers. `focus` and `select` take the map tab (`viewport` id) to act
+//! in, `None` for the focused one.
 
 use std::path::Path;
 
@@ -45,6 +47,8 @@ pub enum ViewTarget {
     WorldRect { world: Option<Slug>, rect: [i64; 4] },
     /// An annotation, by id: framed as built
     Note(Id),
+    /// A whole world, by slug: it becomes the active world, fitted.
+    World(Slug),
 }
 
 /// What `view.select` asks for: `level` alone (make it active, clear the selection),
@@ -67,6 +71,22 @@ pub struct SnapshotRequest {
     pub layers: Option<Vec<Slug>>,
     /// Entity boxes and open notes (default true).
     pub overlays: bool,
+}
+
+/// One of the editor's map tabs (`view.list_viewports`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewportInfo {
+    pub id: u32,
+    /// The world it shows.
+    pub world: Slug,
+    /// Its active level.
+    pub level: Option<Slug>,
+    /// It is the focused tab.
+    pub focused: bool,
+    /// What it shows, in world pixels `[x, y, w, h]` (rounded out).
+    pub world_rect: [i64; 4],
+    /// Screen pixels per world pixel.
+    pub zoom: f64,
 }
 
 /// A rendered snapshot.
@@ -114,15 +134,28 @@ pub trait Host {
     /// `project.validate` recomputed the problems (refresh the panel).
     fn problems(&mut self, _problems: &[worlds_core::Problem]) {}
 
-    /// `view.focus`.
-    fn focus(&mut self, _target: &ViewTarget) -> Result<(), RpcError> {
+    /// `view.focus`, in map tab `viewport` (`None`: the focused one).
+    fn focus(&mut self, _target: &ViewTarget, _viewport: Option<u32>) -> Result<(), RpcError> {
         Err(needs_editor("view.focus"))
     }
 
-    /// `view.select`. The editor sends the `selection` event itself
-    /// (through `ServerHandle::notify_selection`) when its selection changes.
-    fn select(&mut self, _selection: &Selection) -> Result<(), RpcError> {
+    /// `view.select`; `viewport` is the tab whose active level follows
+    /// (`None`: the focused one). The editor sends the `selection` event
+    /// itself (through `ServerHandle::notify_selection`) when its selection
+    /// changes.
+    fn select(&mut self, _selection: &Selection, _viewport: Option<u32>) -> Result<(), RpcError> {
         Err(needs_editor("view.select"))
+    }
+
+    /// `view.list_viewports`: every map tab, in the order opened.
+    fn viewports(&mut self) -> Result<Vec<ViewportInfo>, RpcError> {
+        Err(needs_editor("view.list_viewports"))
+    }
+
+    /// `view.open_viewport`: a new map tab on `world` (it exists), focused
+    /// with `focus`. Returns its id.
+    fn open_viewport(&mut self, _world: &Slug, _focus: bool) -> Result<u32, RpcError> {
+        Err(needs_editor("view.open_viewport"))
     }
 
     /// `view.snapshot`.
@@ -141,5 +174,12 @@ pub trait Host {
 pub fn needs_editor(method: &str) -> RpcError {
     RpcError::unsupported(format!(
         "{method} needs the editor; open the project with `worlds <dir>`"
+    ))
+}
+
+/// The `invalid params` error of a `viewport` id no map tab has.
+pub fn unknown_viewport(id: u32) -> RpcError {
+    RpcError::invalid_params(format!(
+        "there is no viewport {id} (view.list_viewports lists them)"
     ))
 }

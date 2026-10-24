@@ -6,6 +6,11 @@
 //! list) happens on the UI thread before the frame is rendered, through
 //! [`Gpu::renderer`]. The paint callback ([`ViewportCallback`]) only binds
 //! and draws, so it allocates nothing.
+//!
+//! The chunk buffers and textures are camera-independent and shared by
+//! every map tab. What is per tab (its camera uniforms, its draw list and
+//! where it sits on screen) is a [`Slot`]: the n-th map drawn in a frame
+//! fills slot n, and its paint callback draws slot n.
 
 use std::sync::Arc;
 
@@ -46,6 +51,10 @@ impl Gpu {
 /// Number of project layers the opacity table holds.
 pub const MAX_LAYERS: usize = 64;
 
+/// Texture slots of reference images start here (tilesets take the slots
+/// from 2 up; see `scene::tileset_tex`).
+pub const REF_TEX_BASE: u32 = 4096;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Uniforms {
@@ -84,22 +93,37 @@ struct GpuChunk {
     version: u64,
 }
 
-pub struct ViewportGpu {
-    pipeline: wgpu::RenderPipeline,
+/// One map tab's part of a frame: its uniforms, draws and screen rect.
+pub struct Slot {
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    /// This frame's draws, rebuilt in place every frame.
+    pub draws: Vec<DrawCmd>,
+    /// Viewport in physical px: left, top, width, height.
+    pub viewport_px: [f32; 4],
+    /// Reference images' quads for this tab's world and view, drawn before
+    /// every chunk (under the layers): one buffer rewritten each frame
+    /// ([`ViewportGpu::set_refs`]).
+    refs: Option<GpuChunk>,
+    /// This frame's reference image draws (`chunk` unused).
+    pub ref_draws: Vec<DrawCmd>,
+}
+
+pub struct ViewportGpu {
+    pipeline: wgpu::RenderPipeline,
+    uniform_layout: wgpu::BindGroupLayout,
+    /// Per map tab drawn this frame, in drawing order (see the module docs).
+    slots: Vec<Slot>,
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     /// By texture slot (see `scene::tileset_tex`); `None` draws the missing texture.
     textures: Vec<Option<GpuTex>>,
     /// By chunk id.
     chunks: Vec<Option<GpuChunk>>,
-    /// This frame's draws, rebuilt in place every frame.
-    pub draws: Vec<DrawCmd>,
-    /// Viewport in physical px: left, top, width, height.
-    pub viewport_px: [f32; 4],
     /// Instances uploaded since the last [`Self::take_upload_count`].
     uploaded: usize,
+    /// Reference image textures by image path ([`super::references`]).
+    pub ref_images: super::references::RefImages,
 }
 
 impl ViewportGpu {
@@ -107,12 +131,6 @@ impl ViewportGpu {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("worlds tiles"),
             source: wgpu::ShaderSource::Wgsl(include_str!("tiles.wgsl").into()),
-        });
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("worlds viewport uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
         });
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("worlds viewport uniforms"),
@@ -125,14 +143,6 @@ impl ViewportGpu {
                     min_binding_size: None,
                 },
                 count: None,
-            }],
-        });
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("worlds viewport uniforms"),
-            layout: &uniform_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
             }],
         });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -207,16 +217,16 @@ impl ViewportGpu {
         });
         let mut vg = ViewportGpu {
             pipeline,
-            uniform_buffer,
-            uniform_bind_group,
+            uniform_layout,
+            slots: Vec::new(),
             texture_layout,
             sampler,
             textures: Vec::new(),
             chunks: Vec::new(),
-            draws: Vec::with_capacity(1024),
-            viewport_px: [0.0; 4],
             uploaded: 0,
+            ref_images: Default::default(),
         };
+        vg.slot(device, 0);
         vg.set_texture(device, queue, TEX_WHITE, 1, 1, &[255, 255, 255, 255]);
         #[rustfmt::skip]
         let missing = [
@@ -307,10 +317,41 @@ impl ViewportGpu {
             .map(|t| t.size)
     }
 
+    /// Slot `i` (made on first use), for one map tab's frame.
+    pub fn slot(&mut self, device: &wgpu::Device, i: usize) -> &mut Slot {
+        while self.slots.len() <= i {
+            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("worlds viewport uniforms"),
+                size: std::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("worlds viewport uniforms"),
+                layout: &self.uniform_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+            });
+            self.slots.push(Slot {
+                uniform_buffer,
+                uniform_bind_group,
+                draws: Vec::with_capacity(1024),
+                viewport_px: [0.0; 4],
+                refs: None,
+                ref_draws: Vec::new(),
+            });
+        }
+        &mut self.slots[i]
+    }
+
     /// Drop every chunk buffer (the scene was rebuilt with new ids).
     pub fn clear_chunks(&mut self) {
         self.chunks.clear();
-        self.draws.clear();
+        for s in &mut self.slots {
+            s.draws.clear();
+        }
     }
 
     /// Drop one chunk's buffer (its id was retired).
@@ -357,32 +398,84 @@ impl ViewportGpu {
         self.uploaded += c.instances.len();
     }
 
+    /// Upload this frame's reference image quads for slot `slot` (drawn
+    /// with its [`Slot::ref_draws`]).
+    pub fn set_refs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slot: usize,
+        inst: &[Instance],
+    ) {
+        let n = inst.len() as u32;
+        if n == 0 {
+            return;
+        }
+        let s = self.slot(device, slot);
+        if s.refs.as_ref().is_none_or(|g| g.capacity < n) {
+            let capacity = n.next_power_of_two().max(16);
+            s.refs = Some(GpuChunk {
+                buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("worlds references"),
+                    size: capacity as u64 * std::mem::size_of::<Instance>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                capacity,
+                version: 0,
+            });
+        }
+        let g = s.refs.as_ref().expect("just made");
+        queue.write_buffer(&g.buffer, 0, bytemuck::cast_slice(inst));
+    }
+
     pub fn take_upload_count(&mut self) -> usize {
         std::mem::take(&mut self.uploaded)
     }
 
-    pub fn write_uniforms(&self, queue: &wgpu::Queue, u: &Uniforms) {
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(u));
+    /// Write slot `slot`'s uniforms (the slot exists: see [`Self::slot`]).
+    pub fn write_uniforms(&self, queue: &wgpu::Queue, slot: usize, u: &Uniforms) {
+        if let Some(s) = self.slots.get(slot) {
+            queue.write_buffer(&s.uniform_buffer, 0, bytemuck::bytes_of(u));
+        }
     }
 
-    fn paint(&self, pass: &mut wgpu::RenderPass<'static>) {
-        if self.draws.is_empty() {
+    fn paint(&self, slot: usize, pass: &mut wgpu::RenderPass<'static>) {
+        let Some(s) = self.slots.get(slot) else {
+            return;
+        };
+        if s.draws.is_empty() && s.ref_draws.is_empty() {
             return;
         }
-        let [x, y, w, h] = self.viewport_px;
+        let [x, y, w, h] = s.viewport_px;
         if w <= 0.0 || h <= 0.0 {
             return;
         }
         pass.set_viewport(x, y, w, h, 0.0, 1.0);
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, &s.uniform_bind_group, &[]);
         let missing = &self.textures[TEX_MISSING as usize]
             .as_ref()
             .expect("missing texture")
             .bind_group;
         let mut bound_tex = u32::MAX;
         let mut bound_chunk = u32::MAX;
-        for d in &self.draws {
+        if let Some(refs) = s.refs.as_ref().filter(|_| !s.ref_draws.is_empty()) {
+            pass.set_vertex_buffer(0, refs.buffer.slice(..));
+            for d in &s.ref_draws {
+                if d.tex != bound_tex {
+                    let bg = self
+                        .textures
+                        .get(d.tex as usize)
+                        .and_then(|t| t.as_ref())
+                        .map_or(missing, |t| &t.bind_group);
+                    pass.set_bind_group(1, bg, &[]);
+                    bound_tex = d.tex;
+                }
+                pass.draw(0..4, d.start..d.end);
+            }
+        }
+        for d in &s.draws {
             let Some(Some(chunk)) = self.chunks.get(d.chunk as usize) else {
                 continue;
             };
@@ -404,9 +497,9 @@ impl ViewportGpu {
     }
 }
 
-/// The paint callback egui runs inside its render pass. Carries nothing:
-/// the draw list and uniforms were prepared on the UI thread.
-pub struct ViewportCallback;
+/// The paint callback egui runs inside its render pass. Carries only its
+/// [`Slot`]: the draw list and uniforms were prepared on the UI thread.
+pub struct ViewportCallback(pub usize);
 
 impl egui_wgpu::CallbackTrait for ViewportCallback {
     fn paint(
@@ -416,7 +509,7 @@ impl egui_wgpu::CallbackTrait for ViewportCallback {
         resources: &egui_wgpu::CallbackResources,
     ) {
         if let Some(vg) = resources.get::<ViewportGpu>() {
-            vg.paint(pass);
+            vg.paint(self.0, pass);
         }
     }
 }

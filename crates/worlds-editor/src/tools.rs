@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use worlds_core::{Command, Slug};
+use worlds_core::{Command, Slug, TileAlt};
 
 use crate::doc::{Document, LevelIx};
 use crate::view::ViewState;
@@ -39,6 +39,11 @@ pub enum Tool {
     Note,
     /// Measure distances, in tiles and pixels; never a command (M).
     Measure,
+    /// Shape the active level (non-rectangular levels): a drag cuts a
+    /// rectangle of project cells out of it, Shift-drag fills one back in,
+    /// each one `set_level_void`. Entered from a level's context menu; no
+    /// key, no toolbar button, not in [`Tool::ALL`].
+    Shape,
 }
 
 impl Tool {
@@ -67,39 +72,12 @@ impl Tool {
             Tool::Entity => "Entity",
             Tool::Note => "Note",
             Tool::Measure => "Measure",
+            Tool::Shape => "Shape",
         }
     }
 
-    /// The single-key shortcut (holding Space also pans with any tool).
-    pub fn shortcut(self) -> &'static str {
-        match self {
-            Tool::Select => "V",
-            Tool::Brush => "B",
-            Tool::Rect => "R",
-            Tool::Line => "L",
-            Tool::Fill => "G",
-            Tool::Eraser => "E",
-            Tool::Hand => "H",
-            Tool::Entity => "T",
-            Tool::Note => "N",
-            Tool::Measure => "M",
-        }
-    }
-
-    pub fn key(self) -> egui::Key {
-        match self {
-            Tool::Select => egui::Key::V,
-            Tool::Brush => egui::Key::B,
-            Tool::Rect => egui::Key::R,
-            Tool::Line => egui::Key::L,
-            Tool::Fill => egui::Key::G,
-            Tool::Eraser => egui::Key::E,
-            Tool::Hand => egui::Key::H,
-            Tool::Entity => egui::Key::T,
-            Tool::Note => egui::Key::N,
-            Tool::Measure => egui::Key::M,
-        }
-    }
+    // A tool's key lives in the keymap (`Cmd::Tool`), so a remap shows
+    // everywhere it is printed.
 
     /// The Paint group's modes, in the mode strip's order. The toolbar shows
     /// them as one button, Paint; each is still its own tool everywhere else
@@ -196,6 +174,13 @@ pub enum Grab {
     /// selection (Ctrl adds). The gesture's `CellHit`s carry some level
     /// (the active one, else the first); only their `world_px` counts.
     WorldMarquee,
+    /// A geometry handle of the one selected annotation: dragging moves
+    /// that vertex (or a rect region's edges), one `update_note` on release
+    /// ([`crate::annot::plan_vertex_move`]).
+    Vertex(crate::annot::Handle),
+    /// Alt on a segment of the one selected annotation: the release adds a
+    /// point there ([`crate::annot::plan_vertex_insert`]).
+    InsertVertex,
 }
 
 /// What the active tool sees this frame. Read by previews and from
@@ -256,6 +241,113 @@ pub enum Brush {
     /// Derived layers only: override cells to empty (`"!"`, suppress what
     /// the rules would put there).
     Suppress,
+    /// Tiles layers: a random brush. Each painted cell (each cell of the
+    /// tiles' lattice when tiles are bigger than cells) picks one of
+    /// `alternatives` by weight, in the forms of a rule's `out.tiles`
+    /// ([`TileAlt`]): tiles that form a rectangle listed row by row
+    /// (`[c, r]`, `[c, r, w, h]`, `{ rect }`, or a `stack` that happens to
+    /// be one) keep their atlas layout with the top-left tile on the cell,
+    /// any other `stack` is drawn on the cell in list order. Painting
+    /// skips a pick whose tiles would land on cells this stroke already
+    /// filled.
+    Random {
+        tileset: Slug,
+        alternatives: Vec<TileAlt>,
+    },
+}
+
+impl Brush {
+    /// What the Paint strip's Random toggle makes of this brush: a stamp
+    /// becomes the random brush of its tiles, a random brush the stamp of
+    /// its first alternative (its first tile, for a stack); `None` for
+    /// anything else (or a random brush with no tiles).
+    pub fn toggled_random(&self) -> Option<Brush> {
+        match self {
+            Brush::Tiles { tileset, rect } => Some(Brush::random_of_rect(tileset.clone(), *rect)),
+            Brush::Random {
+                tileset,
+                alternatives,
+            } => alternatives
+                .iter()
+                .find_map(|a| {
+                    a.as_rect()
+                        .or_else(|| a.tiles.first().map(|t| [t[0], t[1], 1, 1]))
+                })
+                .map(|rect| Brush::Tiles {
+                    tileset: tileset.clone(),
+                    rect,
+                }),
+            _ => None,
+        }
+    }
+
+    /// The random brush of every tile of an atlas rect, one alternative
+    /// each, weight 1 (the Paint strip's Random toggle on a stamp).
+    pub fn random_of_rect(tileset: Slug, rect: [u32; 4]) -> Brush {
+        let alternatives = (rect[1]..rect[1] + rect[3].max(1))
+            .flat_map(|r| (rect[0]..rect[0] + rect[2].max(1)).map(move |c| TileAlt::single(c, r)))
+            .collect();
+        Brush::Random {
+            tileset,
+            alternatives,
+        }
+    }
+}
+
+/// A named random brush the palette lists (`ui.json` `palette.presets`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrushPreset {
+    pub name: String,
+    pub tileset: Slug,
+    pub alternatives: Vec<TileAlt>,
+}
+
+/// A fresh random seed for a stroke: the random brush and the density
+/// need no determinism (what lands is what is saved).
+pub fn fresh_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    h.finish()
+}
+
+/// A well-mixed 64-bit hash of a stroke's seed, a cell and a salt
+/// (splitmix64): the same cell of the same stroke always rolls the same.
+pub fn cell_roll(seed: u64, cell: [i32; 2], salt: u64) -> u64 {
+    let mut z = seed
+        ^ (cell[0] as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (cell[1] as i64 as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ salt.wrapping_mul(0x1656_67B1_9E37_79F9);
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Whether `cell` is painted at `density` percent (100: always).
+pub fn density_keeps(seed: u64, cell: [i32; 2], density: u8) -> bool {
+    density >= 100 || cell_roll(seed, cell, 1) % 100 < density as u64
+}
+
+/// The index of the alternative `cell` picks, by weight (`None` when every
+/// weight is 0).
+pub fn pick_weighted(weights: &[u32], seed: u64, cell: [i32; 2]) -> Option<usize> {
+    let total: u64 = weights.iter().map(|&w| w as u64).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut r = cell_roll(seed, cell, 2) % total;
+    for (i, &w) in weights.iter().enumerate() {
+        if r < w as u64 {
+            return Some(i);
+        }
+        r -= w as u64;
+    }
+    None
 }
 
 /// What the entity tool places: a type and the field values every new
@@ -407,10 +499,37 @@ impl EntityPalette {
     }
 }
 
-/// The current brush of each layer, by layer slug.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The current brush of each layer, by layer slug, and the tiles
+/// brushes' density and saved random brushes (`ui.json` `palette`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaletteSelection {
     pub brushes: HashMap<String, Brush>,
+    /// The Paint strip's density on tiles layers, 1 to 100 %: a stroke
+    /// (and a rectangle or fill) paints each cell with this chance.
+    #[serde(default = "full_density")]
+    pub density: u8,
+    /// Named random brushes, listed in the palette.
+    #[serde(default)]
+    pub presets: Vec<BrushPreset>,
+    /// A fixed seed for the strokes' randomness (`--script` brushes with
+    /// `seed`); `None`: a fresh one per stroke. Not saved.
+    #[serde(skip)]
+    pub seed: Option<u64>,
+}
+
+fn full_density() -> u8 {
+    100
+}
+
+impl Default for PaletteSelection {
+    fn default() -> Self {
+        PaletteSelection {
+            brushes: HashMap::new(),
+            density: 100,
+            presets: Vec::new(),
+            seed: None,
+        }
+    }
 }
 
 impl PaletteSelection {
@@ -583,6 +702,72 @@ pub fn in_layer(c: [i32; 2], size: [u32; 2]) -> bool {
     c[0] >= 0 && c[1] >= 0 && (c[0] as u32) < size[0] && (c[1] as u32) < size[1]
 }
 
+/// Whether cell `c` of project layer `layer` (or the project grid, for
+/// [`NO_LAYER`]) is part of level `ix`: inside it and, in a non-rectangular
+/// level, not in its void.
+pub fn cell_in_level(doc: &Document, layer: usize, ix: LevelIx, c: [i32; 2]) -> bool {
+    let (g, size) = hit_grid(doc, layer, ix);
+    let level = doc.level(ix);
+    in_layer(c, size)
+        && !doc
+            .project
+            .cell_void_of(g, level.size, &level.void, c[0] as i64, c[1] as i64)
+}
+
+/// A non-rectangular level's void after a Shape gesture over the project
+/// cells `r` (`[x0, y0, x1, y1)`, clipped to the level): cut that rect out,
+/// or with `fill` put it back in. A cut drops the rects it covers; a fill
+/// splits each rect it overlaps into the parts outside it. `None` when the
+/// void doesn't change.
+pub fn shape_void(
+    void: &[worlds_core::command::Rect],
+    size: [u32; 2],
+    r: [i32; 4],
+    fill: bool,
+) -> Option<Vec<worlds_core::command::Rect>> {
+    use worlds_core::command::Rect;
+    let r = clip_rect(r, size);
+    if r[0] >= r[2] || r[1] >= r[3] {
+        return None;
+    }
+    let [x0, y0, x1, y1] = r.map(|v| v as u32);
+    let covers = |v: &Rect| v.x >= x0 && v.y >= y0 && v.x + v.w <= x1 && v.y + v.h <= y1;
+    let mask = worlds_core::cell_mask_of(size, void);
+    let cell = |x: u32, y: u32| mask[(y * size[0] + x) as usize];
+    let out: Vec<Rect> = if fill {
+        let mut out = Vec::new();
+        for v in void {
+            let (vx1, vy1) = (v.x + v.w, v.y + v.h);
+            if v.x >= x1 || vx1 <= x0 || v.y >= y1 || vy1 <= y0 {
+                out.push(*v);
+                continue;
+            }
+            // The parts of `v` above, below, left and right of the fill.
+            let (iy0, iy1) = (v.y.max(y0), vy1.min(y1));
+            for p in [
+                Rect::new(v.x, v.y, v.w, iy0 - v.y),
+                Rect::new(v.x, iy1, v.w, vy1 - iy1),
+                Rect::new(v.x, iy0, x0.saturating_sub(v.x).min(v.w), iy1 - iy0),
+                Rect::new(x1.max(v.x), iy0, vx1.saturating_sub(x1.max(v.x)), iy1 - iy0),
+            ] {
+                if !p.is_empty() {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    } else {
+        // Already all void: nothing to cut.
+        if (y0..y1).all(|y| (x0..x1).all(|x| !cell(x, y))) {
+            return None;
+        }
+        let mut out: Vec<Rect> = void.iter().filter(|v| !covers(v)).copied().collect();
+        out.push(Rect::new(x0, y0, x1 - x0, y1 - y0));
+        out
+    };
+    (out != void).then_some(out)
+}
+
 /// A tile stamp: a `[col, row, w, h]` block of atlas tiles, laid out on a
 /// layer whose cells may be smaller than the tiles. Each tile covers
 /// `stride` cells per axis, the whole stamp `footprint()` cells.
@@ -590,6 +775,10 @@ pub fn in_layer(c: [i32; 2], size: [u32; 2]) -> bool {
 pub struct Stamp {
     pub rect: [u32; 4],
     pub stride: [u32; 2],
+    /// The brush transform (X, Y, R in the Paint strip): the block laid out
+    /// turned, every tile turned with it (`t` first, then `x`, `y`, as a
+    /// tile's flip).
+    pub flip: Option<worlds_core::Flip>,
 }
 
 impl Stamp {
@@ -599,15 +788,49 @@ impl Stamp {
         Stamp {
             rect: [rect[0], rect[1], rect[2].max(1), rect[3].max(1)],
             stride: [(tile_size[0] / g).max(1), (tile_size[1] / g).max(1)],
+            flip: None,
         }
+    }
+
+    /// The same stamp turned by `flip` (see [`Stamp::flip`]).
+    pub fn turned(self, flip: Option<worlds_core::Flip>) -> Self {
+        Stamp { flip, ..self }
+    }
+
+    fn bits(&self) -> u8 {
+        worlds_core::Flip::bits_of(self.flip)
+    }
+
+    /// Tiles across and down, as laid out (turned).
+    fn dims(&self) -> [u32; 2] {
+        if self.bits() & 4 != 0 {
+            [self.rect[3], self.rect[2]]
+        } else {
+            [self.rect[2], self.rect[3]]
+        }
+    }
+
+    /// The atlas tile at position `(i, j)` of the turned layout.
+    fn source(&self, i: u32, j: u32) -> [u32; 2] {
+        let [w, h] = self.dims();
+        let b = self.bits();
+        let (mut a, mut c) = (i, j);
+        if b & 1 != 0 {
+            a = w - 1 - a;
+        }
+        if b & 2 != 0 {
+            c = h - 1 - c;
+        }
+        if b & 4 != 0 {
+            std::mem::swap(&mut a, &mut c);
+        }
+        [self.rect[0] + a, self.rect[1] + c]
     }
 
     /// Cells the whole stamp covers.
     pub fn footprint(&self) -> [i32; 2] {
-        [
-            (self.rect[2] * self.stride[0]) as i32,
-            (self.rect[3] * self.stride[1]) as i32,
-        ]
+        let [w, h] = self.dims();
+        [(w * self.stride[0]) as i32, (h * self.stride[1]) as i32]
     }
 
     /// The stamp origin (top-left cell) that `cell` falls in, when stamps
@@ -630,21 +853,23 @@ impl Stamp {
         if d[0].rem_euclid(s[0]) != 0 || d[1].rem_euclid(s[1]) != 0 {
             return None;
         }
-        let i = (d[0].div_euclid(s[0])).rem_euclid(self.rect[2] as i32) as u32;
-        let j = (d[1].div_euclid(s[1])).rem_euclid(self.rect[3] as i32) as u32;
-        Some([self.rect[0] + i, self.rect[1] + j])
+        let [w, h] = self.dims();
+        let i = (d[0].div_euclid(s[0])).rem_euclid(w as i32) as u32;
+        let j = (d[1].div_euclid(s[1])).rem_euclid(h as i32) as u32;
+        Some(self.source(i, j))
     }
 
     /// `(cell, tile)` for every tile of one stamp placed at `anchor`.
     pub fn tiles(&self, anchor: [i32; 2], out: &mut Vec<([i32; 2], [u32; 2])>) {
-        for j in 0..self.rect[3] {
-            for i in 0..self.rect[2] {
+        let [w, h] = self.dims();
+        for j in 0..h {
+            for i in 0..w {
                 out.push((
                     [
                         anchor[0] + (i * self.stride[0]) as i32,
                         anchor[1] + (j * self.stride[1]) as i32,
                     ],
-                    [self.rect[0] + i, self.rect[1] + j],
+                    self.source(i, j),
                 ));
             }
         }
@@ -873,9 +1098,117 @@ pub fn resize_level(
     (px, sz)
 }
 
+/// The `resize_level` the editor sends (a drag, the Inspector), or why it
+/// refuses: like moving an entity out of its level, a resize that would
+/// leave an entity outside is refused (entities already outside don't
+/// count).
+pub fn resize_command(
+    project: &worlds_core::Project,
+    world: &Slug,
+    level: &Slug,
+    size: [u32; 2],
+    anchor: [i8; 2],
+) -> Result<Command, String> {
+    let l = project
+        .level(level.as_str())
+        .ok_or_else(|| format!("no level {level}"))?;
+    let before = project
+        .resize_leaves_outside(world, level, l.size, [-1, -1])
+        .map_err(|e| e.to_string())?;
+    let after = project
+        .resize_leaves_outside(world, level, size, anchor)
+        .map_err(|e| e.to_string())?;
+    let stranded: Vec<String> = after
+        .iter()
+        .filter(|id| !before.contains(id))
+        .map(|id| id.to_string())
+        .collect();
+    if !stranded.is_empty() {
+        let n = stranded.len();
+        let mut names = stranded.into_iter().take(3).collect::<Vec<_>>().join(", ");
+        if n > 3 {
+            names += &format!(" and {} more", n - 3);
+        }
+        return Err(format!(
+            "Not resized: {} would be outside level {level} (move {} first, or pick another anchor)",
+            if n == 1 {
+                format!("entity {names}")
+            } else {
+                format!("entities {names}")
+            },
+            if n == 1 { "it" } else { "them" },
+        ));
+    }
+    Ok(Command::ResizeLevel {
+        world: world.clone(),
+        level: level.clone(),
+        size,
+        anchor,
+    })
+}
+
+/// Crop to content for the editor (command palette, the level's right
+/// click menu, the Inspector): the `Crop level <slug>` batch, or the
+/// status message saying why there is nothing to do.
+pub fn crop_command(
+    project: &worlds_core::Project,
+    world: &Slug,
+    level: &Slug,
+) -> Result<Command, String> {
+    match project.crop_level(world, level) {
+        Ok(Some(cmd)) => Ok(cmd),
+        Ok(None) => Err(format!("Level {level} already fits its content")),
+        Err(e) => Err(format!("Not cropped: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn random_toggle_and_rolls() {
+        let ts = Slug::new("t").unwrap();
+        let stamp = Brush::Tiles {
+            tileset: ts.clone(),
+            rect: [2, 1, 2, 2],
+        };
+        let random = stamp.toggled_random().unwrap();
+        let Brush::Random { alternatives, .. } = &random else {
+            panic!("{random:?}")
+        };
+        let tiles: Vec<_> = alternatives.iter().map(|a| a.tiles.clone()).collect();
+        assert_eq!(tiles, [[[2, 1]], [[3, 1]], [[2, 2]], [[3, 2]]]);
+        assert!(alternatives.iter().all(|a| a.weight == 1));
+        assert_eq!(
+            random.toggled_random(),
+            Some(Brush::Tiles {
+                tileset: ts.clone(),
+                rect: [2, 1, 1, 1]
+            })
+        );
+        assert_eq!(Brush::Erase.toggled_random(), None);
+        let empty = Brush::Random {
+            tileset: ts,
+            alternatives: Vec::new(),
+        };
+        assert_eq!(empty.toggled_random(), None);
+        // Rolls: the same cell and seed always agree; weights steer picks.
+        assert_eq!(cell_roll(5, [3, -4], 1), cell_roll(5, [3, -4], 1));
+        assert_ne!(cell_roll(5, [3, -4], 1), cell_roll(6, [3, -4], 1));
+        let mut hits = [0u32; 3];
+        for x in 0..3000 {
+            hits[pick_weighted(&[1, 0, 3], 11, [x, 0]).unwrap()] += 1;
+        }
+        assert_eq!(hits[1], 0);
+        assert!((600..900).contains(&hits[0]), "{hits:?}");
+        assert_eq!(pick_weighted(&[0, 0], 1, [0, 0]), None);
+        let kept = (0..10_000)
+            .filter(|&x| density_keeps(9, [x, 1], 25))
+            .count();
+        assert!((2_200..2_800).contains(&kept), "{kept}");
+        assert!((0..100).all(|x| density_keeps(9, [x, 1], 100)));
+    }
 
     #[test]
     fn line_endpoints_and_continuity() {

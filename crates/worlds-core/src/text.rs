@@ -9,7 +9,8 @@ use std::fmt::Write as _;
 use crate::command::CommandError;
 use crate::id::Slug;
 use crate::model::{
-    Annotation, IntGridLayer, LayerDef, LayerKind, Level, NoteStatus, Project, Shape, bbox_of,
+    Annotation, IntGridLayer, LayerDef, LayerKind, Level, NoteStatus, Project, Shape, VOID_GLYPH,
+    bbox_of,
 };
 
 /// Which notes the text view lists.
@@ -140,6 +141,16 @@ fn render(
         let mut guides = 0;
         for n in w.notes.iter().filter(shown) {
             let mut points = n.shape.points();
+            if matches!(n.shape, Shape::Connector { .. }) {
+                // A connector's ends are where its rooms and entities are.
+                points = project
+                    .connector_points(crate::model::NoteAt {
+                        world: w,
+                        level: None,
+                        note: n,
+                    })
+                    .unwrap_or(points);
+            }
             if let Shape::Guide {
                 group: Some(gr), ..
             } = &n.shape
@@ -203,6 +214,10 @@ fn header(out: &mut String, project: &Project, world: &Slug, l: &Level) {
     if let Some(bg) = &l.bg_color {
         let _ = write!(out, ", bg {bg}");
     }
+    if l.has_void() {
+        let rects: Vec<[u32; 4]> = l.void.iter().map(|&r| r.into()).collect();
+        let _ = write!(out, ", void {}", compact(&serde_json::json!(rects)));
+    }
     out.push('\n');
     if !l.fields.is_empty() {
         let parts: Vec<String> = l
@@ -232,22 +247,59 @@ fn grid(out: &mut String, project: &Project, l: &Level, def: &LayerDef) {
     let [w, h] = project.layer_cells(def, l);
     let g = project.layer_grid(def);
     let _ = writeln!(out, "\nint_grid {} ({w}x{h} cells of {g} px)", def.slug);
-    legend(out, def);
-    grid_rows(out, def, l.int_grid(def.slug.as_str()), [w, h]);
+    let void = project.layer_void(def, l);
+    legend(out, def, void.is_some());
+    grid_rows(
+        out,
+        def,
+        l.int_grid(def.slug.as_str()),
+        [w, h],
+        void.as_deref(),
+    );
 }
 
-fn legend(out: &mut String, def: &LayerDef) {
+fn legend(out: &mut String, def: &LayerDef, void: bool) {
     let mut legend = vec![". empty".to_string()];
     legend.extend(
         def.values()
             .iter()
             .map(|v| format!("{} {}", v.glyph, v.slug)),
     );
+    if void {
+        legend.push(format!("{VOID_GLYPH} void"));
+    }
     let _ = writeln!(out, "legend: {}", legend.join(", "));
 }
 
+/// `rows` with every cell `void` marks drawn as [`VOID_GLYPH`].
+fn mask_rows(rows: Vec<String>, void: Option<&[bool]>) -> Vec<String> {
+    let Some(m) = void else {
+        return rows;
+    };
+    let w = rows.first().map_or(0, |r| r.chars().count());
+    rows.into_iter()
+        .enumerate()
+        .map(|(y, r)| {
+            r.chars()
+                .enumerate()
+                .map(|(x, c)| match m.get(y * w + x) {
+                    Some(true) => VOID_GLYPH,
+                    _ => c,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// A grid's picture (all `.` without data), or why it can't be drawn.
-fn grid_rows(out: &mut String, def: &LayerDef, data: Option<&IntGridLayer>, [w, h]: [u32; 2]) {
+/// Cells `void` marks show as [`VOID_GLYPH`].
+fn grid_rows(
+    out: &mut String,
+    def: &LayerDef,
+    data: Option<&IntGridLayer>,
+    [w, h]: [u32; 2],
+    void: Option<&[bool]>,
+) {
     let rows: Vec<String> = match data {
         Some(d) => match d.to_rows(def) {
             Ok(rows) => rows,
@@ -263,8 +315,10 @@ fn grid_rows(out: &mut String, def: &LayerDef, data: Option<&IntGridLayer>, [w, 
     {
         let [dw, dh] = d.size();
         let _ = writeln!(out, "(stored grid is {dw}x{dh}, the level needs {w}x{h})");
+        picture(out, &rows);
+        return;
     }
-    picture(out, &rows);
+    picture(out, &mask_rows(rows, void));
 }
 
 /// A derived layer: the effective grid when baked, else the stored
@@ -291,7 +345,9 @@ fn derived_grid(
         out.push_str(" (not baked: overrides only)");
     }
     out.push('\n');
-    legend(out, def);
+    let void = project.layer_void(def, l);
+    let void = void.as_deref();
+    legend(out, def, void.is_some());
     let stored = l.overrides(def.slug.as_str());
     let stored_rows = |out: &mut String| -> Option<Vec<String>> {
         let o = stored?;
@@ -303,12 +359,14 @@ fn derived_grid(
             }
         }
     };
+    let fits = stored.is_none_or(|o| o.size() == [w, h]);
+    let shape = |rows: Vec<String>| if fits { mask_rows(rows, void) } else { rows };
     match effective {
-        Some(e) => grid_rows(out, def, Some(e), [w, h]),
+        Some(e) => grid_rows(out, def, Some(e), [w, h], void),
         None => match stored_rows(out) {
-            Some(rows) => picture(out, &rows),
+            Some(rows) => picture(out, &shape(rows)),
             None if stored.is_some() => {}
-            None => picture(out, &vec![".".repeat(w as usize); h as usize]),
+            None => picture(out, &shape(vec![".".repeat(w as usize); h as usize])),
         },
     }
     if let Some(o) = stored.filter(|o| !o.is_empty()) {
@@ -326,7 +384,7 @@ fn derived_grid(
         if effective.is_some()
             && let Some(rows) = stored_rows(out)
         {
-            picture(out, &rows);
+            picture(out, &shape(rows));
         }
     }
 }
@@ -455,6 +513,25 @@ fn note_line(out: &mut String, n: &Annotation) {
             } else {
                 let p: Vec<String> = points.iter().map(|p| point(*p)).collect();
                 let _ = write!(out, " points [{}]", p.join(", "));
+            }
+        }
+        Shape::Connector {
+            from,
+            to,
+            waypoints,
+            label,
+            style,
+        } => {
+            let _ = write!(out, " from {} to {}", from.link(), to.link());
+            if !waypoints.is_empty() {
+                let p: Vec<String> = waypoints.iter().map(|p| point(*p)).collect();
+                let _ = write!(out, " waypoints [{}]", p.join(", "));
+            }
+            if let Some(l) = label {
+                let _ = write!(out, " label {}", json(l));
+            }
+            if *style != crate::model::ConnectorStyle::Arrow {
+                let _ = write!(out, " style {}", style.name());
             }
         }
     }

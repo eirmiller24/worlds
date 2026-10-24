@@ -168,6 +168,20 @@ Regions of any grid (`rules.regions`, MCP `find_regions`):
 `sweep` takes a cell range, which is what the incremental bake below
 re-sweeps.
 
+**Non-rectangular levels.** A level with `void` ([format.md](../../docs/format.md#non-rectangular-levels-void))
+bakes as if its void cells were past its edge, in cells of the layer's
+grid (a cell is void when every project cell it covers is,
+`Project::layer_void`): a pattern cell over the void reads the rule's
+`out_of_bounds` value, or the variant doesn't match without one (the
+matcher's slow path, which a level with void always takes); a void cell
+is never an anchor, so nothing is drawn or written there and derived grids
+compute nothing in it; no region holds a void cell, and an edge run stops
+at one (the void is the border, not a wall: a cell next to the void is no
+more on an edge than one next to the box). `regions_in` is `regions` with
+a void mask. A level without void takes exactly the old paths, so its
+bake is unchanged, which `tests/fixture_bakes.rs` holds it to; a
+`level_meta` change of part `void` rebakes the level in full.
+
 ## Passes
 
 A pass is every group with the same `pass` (default 0). Groups run sorted by

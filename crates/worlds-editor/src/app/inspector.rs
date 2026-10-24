@@ -49,6 +49,17 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                 let k = part(ui, st);
                 n += k;
             }
+            // The selection's object group.
+            if n > 0 {
+                let k = super::groups::inspector_section(ui, st);
+                n += k;
+            }
+            // The selected reference image, if any.
+            let k = super::references::inspector_section(ui, st);
+            if k > 0 {
+                ui.add_space(8.0);
+                n += k;
+            }
             if let Some(ts) = tile_count(st)
                 && ts > 0
             {
@@ -88,6 +99,7 @@ fn selection_section(ui: &mut egui::Ui, st: &mut EditorState) -> usize {
         edit_bufs,
         atlas,
         actions,
+        keymap,
         ..
     } = st;
     let Some(doc) = doc.as_ref() else {
@@ -112,7 +124,10 @@ fn selection_section(ui: &mut egui::Ui, st: &mut EditorState) -> usize {
     ui.horizontal(|ui| {
         if ui
             .small_button("Duplicate")
-            .on_hover_text("Ctrl+D: copies one cell to the right, fields kept")
+            .on_hover_text(keymap.hint(
+                "Copies one cell to the right, fields kept",
+                crate::keymap::Cmd::Duplicate,
+            ))
             .clicked()
         {
             actions.push(Action::DuplicateSelection);

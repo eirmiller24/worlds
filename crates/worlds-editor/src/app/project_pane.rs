@@ -18,6 +18,9 @@
 //!   tile size, spacing, padding, and a preview of the atlas with the
 //!   tiles as the editor cuts them. × is `remove_tileset_def`, refused
 //!   (with the uses listed) while anything draws from it.
+//! - **Worlds** (`worlds/<slug>/`, see [`super::worlds`]): the worlds in
+//!   display order with their level counts; click to show one, ⏶ ⏷
+//!   (`reorder_worlds`), Rename…, × (asks first), + World.
 //! - **Settings** (`project.json`): name, grid size (only while there are
 //!   no levels), background, collision layer and its blocking values,
 //!   seed, new level size, export on save, each one `set_project_setting`.
@@ -50,16 +53,23 @@ pub enum Section {
     Layers,
     Tilesets,
     Settings,
+    Worlds,
 }
 
 impl Section {
-    pub const ALL: [Section; 3] = [Section::Layers, Section::Tilesets, Section::Settings];
+    pub const ALL: [Section; 4] = [
+        Section::Layers,
+        Section::Tilesets,
+        Section::Settings,
+        Section::Worlds,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Section::Layers => "layers",
             Section::Tilesets => "tilesets",
             Section::Settings => "settings",
+            Section::Worlds => "worlds",
         }
     }
 
@@ -118,6 +128,9 @@ pub struct ProjectState {
     pub follow: Option<Follow>,
     confirm: Option<Confirm>,
     picker: Option<(Receiver<Option<PathBuf>>, PickFor)>,
+    /// The Worlds part's Layout being edited: the world and the gap and
+    /// cell as typed, sent when a field is left.
+    pub layout: Option<(Slug, worlds_core::WorldLayout)>,
     /// Where parts of the pane were drawn last frame (tests), by key.
     #[doc(hidden)]
     pub rects: HashMap<String, egui::Rect>,
@@ -134,6 +147,23 @@ impl ProjectState {
     pub fn show_layer(&mut self, slug: Slug) {
         self.layer = Some(slug);
         self.show(Section::Layers);
+    }
+
+    /// Show a tileset's form.
+    pub fn show_tileset(&mut self, slug: Slug) {
+        self.tileset = Some(slug);
+        self.show(Section::Tilesets);
+    }
+
+    /// What + Tileset… does: the native PNG picker, then a new tileset for
+    /// the picked file (its form open). The Tilesets part comes to the
+    /// front so the result is seen. Nothing happens while a picker is
+    /// already open.
+    pub fn pick_new_tileset(&mut self, ctx: &egui::Context, dir: &Path) {
+        if self.picker.is_none() {
+            self.picker = Some((start_picker(ctx, dir), PickFor::New));
+        }
+        self.show(Section::Tilesets);
     }
 
     /// The frame's pending commands were applied: `ok` if none was refused.
@@ -443,6 +473,8 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
         project: ps,
         rules,
         types,
+        view,
+        actions,
         ..
     } = st;
     let Some(doc) = doc.as_ref() else {
@@ -472,6 +504,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
                 Section::Layers => format!("Layers ({})", doc.project.layers.len()),
                 Section::Tilesets => format!("Tilesets ({})", doc.project.tilesets.len()),
                 Section::Settings => "Settings".into(),
+                Section::Worlds => format!("Worlds ({})", doc.project.worlds.len()),
             };
             let r = ui.selectable_label(ps.section == s, RichText::new(label).strong());
             ps.rects.insert(format!("section:{}", s.name()), r.rect);
@@ -504,6 +537,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
             Section::Layers => layers_section(ui, doc, bufs, ps, rules, types),
             Section::Tilesets => tilesets_section(ui, doc, bufs, atlas, ps),
             Section::Settings => settings_section(ui, doc, bufs, ps),
+            Section::Worlds => super::worlds::section(ui, doc, view, ps, actions),
         });
 }
 

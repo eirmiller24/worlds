@@ -472,8 +472,19 @@ pub(crate) fn regions(
     };
     let def = layer_of_kind(project, grid.as_str(), "int_grid")?.clone();
     let values = super::baked::effective_values(&mut doc, p.level.as_str(), &def)?;
-    let found = worlds_rules::regions(doc.project, grid.as_str(), &values, &p.cells)
-        .map_err(|e| RpcError::invalid(format!("{method}: {e}")))?;
+    // A non-rectangular level's void is its border, as for the region rules.
+    let void = doc
+        .project
+        .level(p.level.as_str())
+        .and_then(|l| doc.project.layer_void(&def, l));
+    let found = worlds_rules::regions_in(
+        doc.project,
+        grid.as_str(),
+        &values,
+        &p.cells,
+        void.as_deref(),
+    )
+    .map_err(|e| RpcError::invalid(format!("{method}: {e}")))?;
     let regions: Vec<Value> = found
         .regions
         .iter()

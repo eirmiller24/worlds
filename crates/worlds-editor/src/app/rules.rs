@@ -400,6 +400,115 @@ pub fn glyph_cycle(p: &Pattern, grid: Option<&LayerDef>) -> Vec<char> {
     out
 }
 
+/// A value's or group's display name on `grid`: its name, else its slug
+/// (also when the grid doesn't know it).
+fn slug_name(s: &Slug, grid: Option<&LayerDef>) -> String {
+    let named = |n: &str| (!n.trim().is_empty()).then(|| n.trim().to_string());
+    grid.and_then(|g| {
+        g.value(s.as_str())
+            .and_then(|v| named(&v.name))
+            .or_else(|| g.group(s.as_str()).and_then(|x| named(&x.name)))
+    })
+    .unwrap_or_else(|| s.to_string())
+}
+
+/// Whether `s` is a group (not a value) of `grid`.
+fn is_group(s: &Slug, grid: Option<&LayerDef>) -> bool {
+    grid.is_some_and(|g| g.value(s.as_str()).is_none() && g.group(s.as_str()).is_some())
+}
+
+/// One member of `[a|b]` in words: "empty", "any value", a name.
+fn member_words(t: &worlds_core::CellTest, grid: Option<&LayerDef>) -> String {
+    match t {
+        worlds_core::CellTest::Empty => "empty".into(),
+        worlds_core::CellTest::NonEmpty => "any value".into(),
+        worlds_core::CellTest::Is(s) if is_group(s, grid) => {
+            format!("any {}", slug_name(s, grid))
+        }
+        worlds_core::CellTest::Is(s) => slug_name(s, grid),
+    }
+}
+
+/// A cell test in words: a short label ("Not Solid") and what it asks of
+/// the cell ("anything but Solid, empty included"). Names come from the
+/// grid's values and groups, so renaming a value renames the words.
+pub fn test_words(m: &CellMatch, grid: Option<&LayerDef>) -> (String, String) {
+    let list = |v: &[worlds_core::CellTest]| {
+        v.iter()
+            .map(|t| member_words(t, grid))
+            .collect::<Vec<_>>()
+            .join(" or ")
+    };
+    match m {
+        CellMatch::Any => ("Anything".into(), "the cell doesn't matter".into()),
+        CellMatch::NonEmpty => (
+            "Any value".into(),
+            "the cell must hold some value, whichever".into(),
+        ),
+        CellMatch::Empty => ("Empty cell".into(), "the cell must hold no value".into()),
+        CellMatch::Is(s) if is_group(s, grid) => {
+            let n = slug_name(s, grid);
+            (n.clone(), format!("any value in the {n} group"))
+        }
+        CellMatch::Is(s) => {
+            let n = slug_name(s, grid);
+            (n.clone(), format!("the cell must hold {n}"))
+        }
+        CellMatch::Not(s) => {
+            let n = slug_name(s, grid);
+            (
+                format!("Not {n}"),
+                format!("anything but {n}, empty included"),
+            )
+        }
+        CellMatch::OneOf(v) => {
+            let l = list(v);
+            let mut c = l.chars();
+            let first = c.next().map(|f| f.to_uppercase().collect::<String>());
+            (
+                first.unwrap_or_default() + c.as_str(),
+                "any of these".into(),
+            )
+        }
+        CellMatch::NotOneOf(v) => (format!("Not {}", list(v)), "anything except these".into()),
+    }
+}
+
+/// What `glyph` means in pattern `p` on `grid`, meaning first and the glyph
+/// in parentheses: "Empty cell (`.`): the cell must hold no value",
+/// "Solid (`#`): the cell must hold Solid", "Rule output goes here (`@`)".
+/// Reads the pattern's legend first, then the built-ins and the grid's
+/// value and group glyphs ([`Pattern::resolve`]); the names come from the
+/// layer's values, so renaming a value renames the words.
+pub fn glyph_words(p: &Pattern, grid: Option<&LayerDef>, glyph: char) -> String {
+    let m = p.resolve(glyph, grid);
+    if glyph == worlds_core::ANCHOR_GLYPH {
+        return match m {
+            Some(CellMatch::Any) | None => {
+                "Rule output goes here (`@`): the cell the rule decides; it can hold anything"
+                    .into()
+            }
+            Some(m) => {
+                let (label, what) = test_words(&m, grid);
+                format!(
+                    "Rule output goes here (`@`): the cell the rule decides. It's also tested: \
+                     {label}, {what}"
+                )
+            }
+        };
+    }
+    match m {
+        Some(m) => {
+            let (label, what) = test_words(&m, grid);
+            format!("{label} (`{glyph}`): {what}")
+        }
+        None => format!(
+            "Unknown glyph (`{glyph}`): no value, group or legend entry on {} uses it",
+            grid.map_or("this grid", |g| g.slug.as_str())
+        ),
+    }
+}
+
 /// The rows with cell `(x, y)` set to `glyph`. Setting `@` moves the
 /// anchor: any other `@` becomes `*` (a pattern has at most one).
 pub fn set_cell(rows: &[String], x: usize, y: usize, glyph: char) -> Vec<String> {
@@ -1226,8 +1335,8 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
         }
         ui.checkbox(&mut cx.r.show_occupancy, "Show occupancy")
             .on_hover_text(
-                "Hatch the cells the layer's stamps occupy (occupies) in the active level; \
-                 avoid_overlap placements skip them",
+                "Hatch the cells this layer's stamps take up in the active level. Outputs \
+                 with \"avoid overlap\" place nothing there (stamps' occupies)",
             );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let set = doc.project.rules_for(layer.as_str());
@@ -1245,7 +1354,11 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
             {
                 cx.r.save = Some(save_dialog(&chosen));
             }
-            if ui.button("+ Group").clicked() {
+            if ui
+                .button("+ Group")
+                .on_hover_text("Add an empty rule group at the end of the list")
+                .clicked()
+            {
                 let taken = |s: &str| set.is_some_and(|set| set.groups.iter().any(|g| g.slug == s));
                 let slug = fresh_slug("group", &taken);
                 push(
@@ -1383,8 +1496,9 @@ fn pass_header(ui: &mut egui::Ui, cx: &mut Cx<'_>, set: &RuleSet, pass: u32, emp
         })
         .response
         .on_hover_text(
-            "Passes run in order: a pass sees the derived grids earlier passes wrote, its tiles \
-             draw above theirs, and break locks end with the pass",
+            "Passes run one after another. A pass can match on what earlier passes wrote into \
+             derived layers, its tiles draw on top of theirs, and a rule's \"break\" only holds \
+             back later rules of its own pass. Drop a group here to move it into this pass",
         );
     cx.r.pass_rects.insert(pass, resp.rect);
     let line = |ui: &egui::Ui| {
@@ -1468,7 +1582,10 @@ fn group_header(ui: &mut egui::Ui, cx: &mut Cx<'_>, set: &RuleSet, gi: usize, g:
                 }
                 let h = ui
                     .add(egui::Label::new(RichText::new("☰").weak()).sense(Sense::drag()))
-                    .on_hover_text("Drag to reorder groups");
+                    .on_hover_text(
+                        "Drag to reorder groups, or onto a Pass header to move the group into \
+                         that pass",
+                    );
                 if h.dragged() {
                     h.dnd_set_drag_payload(Drag::Group(g.slug.clone()));
                 }
@@ -1485,7 +1602,7 @@ fn group_header(ui: &mut egui::Ui, cx: &mut Cx<'_>, set: &RuleSet, gi: usize, g:
                             egui::Label::new(RichText::new(g.slug.as_str()).strong())
                                 .sense(Sense::click()),
                         )
-                        .on_hover_text("Double-click to rename");
+                        .on_hover_text("Double-click to rename the group");
                     cx.r.slug_rects.insert((true, g.slug.clone()), l.rect);
                     if l.double_clicked() {
                         cx.r.renaming = Some(Rename::new(true, g.slug.clone()));
@@ -1520,7 +1637,9 @@ fn group_header(ui: &mut egui::Ui, cx: &mut Cx<'_>, set: &RuleSet, gi: usize, g:
                     if ui
                         .small_button("+ Region")
                         .on_hover_text(
-                            "Add a region rule (fires at places in regions of cells) at the end of the group",
+                            "Add a region rule at the end of the group: instead of a small pattern, it \
+                             finds whole areas of matching cells (a floor, a room) and places along or \
+                             across them",
                         )
                         .clicked()
                     {
@@ -1534,7 +1653,8 @@ fn group_header(ui: &mut egui::Ui, cx: &mut Cx<'_>, set: &RuleSet, gi: usize, g:
                         new_rule(cx, set, g);
                     }
                     ui.weak(text).on_hover_text(
-                        "Cells where the group's rules fired · where their patterns match, in the active level",
+                        "In the active level: cells where the group's rules drew · cells where \
+                         their patterns match (more when chance, break or overlap held some back)",
                     );
                 });
             });
@@ -1703,9 +1823,10 @@ fn requirement_button(ui: &mut egui::Ui, cx: &mut Cx<'_>, g: &RuleGroup) {
         ),
         None => "any level".into(),
     };
-    let resp = ui
-        .small_button(label)
-        .on_hover_text("requires_level_field: run only in levels whose field holds these values");
+    let resp = ui.small_button(label).on_hover_text(
+        "Only run this group in levels whose chosen level field holds these values, any or all \
+             of them (requires_level_field). Click to edit",
+    );
     egui::Popup::from_toggle_button_response(&resp)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
@@ -1774,9 +1895,10 @@ fn tag_button(ui: &mut egui::Ui, cx: &mut Cx<'_>, g: &RuleGroup) {
         ),
         None => "any tags".into(),
     };
-    let resp = ui
-        .small_button(label)
-        .on_hover_text("requires_level_tag: run only in levels with these tags");
+    let resp = ui.small_button(label).on_hover_text(
+        "Only run this group in levels tagged with these tags, any or all of them \
+             (requires_level_tag). Click to edit",
+    );
     egui::Popup::from_toggle_button_response(&resp)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
@@ -1916,7 +2038,9 @@ fn entry_row(
     let row = ui.horizontal(|ui| {
         let h = ui
             .add(egui::Label::new(RichText::new("☰").weak()).sense(Sense::drag()))
-            .on_hover_text("Drag to reorder, also into another group");
+            .on_hover_text(
+                "Drag to move the rule up or down, or into another group; higher rules run first",
+            );
         if h.dragged() {
             h.dnd_set_drag_payload(Drag::Entry(slug.clone()));
         }
@@ -1924,7 +2048,7 @@ fn entry_row(
         let mut active = e.active();
         if ui
             .checkbox(&mut active, "")
-            .on_hover_text("Active")
+            .on_hover_text("On: the rule runs. Untick to switch it off without deleting it")
             .changed()
         {
             let mut ne = e.clone();
@@ -1948,9 +2072,10 @@ fn entry_row(
             ui.weak(counts_text(cx.r, &slug));
             return handle;
         }
-        let r = ui
-            .selectable_label(selected, text)
-            .on_hover_text("Double-click to rename");
+        let r = ui.selectable_label(selected, text).on_hover_text(
+            "Click to edit it on the right · Double-click to rename · Ctrl+click to select \
+             several (for Save as template)",
+        );
         cx.r.slug_rects.insert((false, slug.clone()), r.rect);
         if r.double_clicked() {
             cx.r.renaming = Some(Rename::new(false, slug.clone()));
@@ -2001,7 +2126,10 @@ fn entry_row(
                 let open = cx.r.expanded.contains(&slug);
                 if ui
                     .small_button(format!("{} {n} rules", if open { "⏷" } else { "⏵" }))
-                    .on_hover_text("Show the rules it expands to")
+                    .on_hover_text(
+                        "Show or hide the rules this template reference stands for; untick one \
+                         there to leave it out",
+                    )
                     .clicked()
                 {
                     if open {
@@ -2013,7 +2141,9 @@ fn entry_row(
                 if ui
                     .small_button("Detach")
                     .on_hover_text(
-                        "Replace the reference by its rules, keeping their slugs (no re-roll)",
+                        "Turn this template reference into plain rules you can edit one by one. \
+                         They keep their slugs, so their random picks stay the same (undo brings \
+                         the reference back)",
                     )
                     .clicked()
                 {
@@ -2067,7 +2197,10 @@ fn entry_row(
                     let mut on = !u.skip.contains(&tr.slug);
                     if ui
                         .checkbox(&mut on, "")
-                        .on_hover_text("Unticked: in the reference's skip list")
+                        .on_hover_text(
+                            "Untick to leave this rule out of the reference (it goes in the \
+                             reference's skip list)",
+                        )
                         .changed()
                     {
                         let mut nu = u.clone();
@@ -2247,14 +2380,30 @@ fn mini_pattern(ui: &mut egui::Ui, doc: &Document, layer: &Slug, p: &Pattern) {
             }
         }
     }
-    resp.on_hover_text(rows.join("\n"));
+    // The rows, then what each glyph in them means.
+    let mut seen: Vec<char> = Vec::new();
+    for g in rows.iter().flat_map(|r| r.chars()) {
+        if !seen.contains(&g) {
+            seen.push(g);
+        }
+    }
+    let mut tip = vec![
+        "The pattern this rule looks for around each cell:".to_string(),
+        rows.join("\n"),
+        String::new(),
+    ];
+    tip.extend(seen.into_iter().map(|g| glyph_words(&p, grid, g)));
+    resp.on_hover_text(tip.join("\n"));
 }
 
 /// One atlas tile, drawn `size` points wide.
 fn tile_thumb(ui: &mut egui::Ui, cx: &mut Cx<'_>, tileset: &Slug, tile: [u32; 2], size: f32) {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     paint_tile(ui, cx, tileset, tile, rect);
-    resp.on_hover_text(format!("{tileset} [{}, {}]", tile[0], tile[1]));
+    resp.on_hover_text(format!(
+        "Tile at column {}, row {} of {tileset}",
+        tile[0], tile[1]
+    ));
 }
 
 fn paint_tile(ui: &egui::Ui, cx: &mut Cx<'_>, tileset: &Slug, tile: [u32; 2], rect: egui::Rect) {
@@ -2313,7 +2462,10 @@ fn templates(ui: &mut egui::Ui, cx: &mut Cx<'_>) {
                     if is_builtin
                         && ui
                             .small_button("Copy into macros.json")
-                            .on_hover_text("A copy you can change (built-ins are frozen)")
+                            .on_hover_text(
+                                "Built-in templates can't be edited: this copies it into \
+                                 rules/macros.json under a new name, where you can change it",
+                            )
                             .clicked()
                     {
                         let taken = |s: &str| {
@@ -2426,7 +2578,10 @@ fn apply_dialog(ctx: &egui::Context, cx: &mut Cx<'_>) {
                     .map_or(0, |g| g.rules.len());
                 let mut i = d.index.unwrap_or(len).min(len);
                 ui.add(egui::DragValue::new(&mut i).range(0..=len))
-                    .on_hover_text("Position in the group (0 = first, evaluated first)");
+                    .on_hover_text(
+                        "Where in the group the reference goes: 0 puts it first, so it runs \
+                         before the group's other rules",
+                    );
                 d.index = Some(i);
                 ui.end_row();
             });
@@ -2859,7 +3014,7 @@ fn output_section(
         ui.strong("Output");
         if ui
             .selectable_label(!writes, "Draw")
-            .on_hover_text("Draw tiles or a stamp")
+            .on_hover_text("Where it matches, the rule draws tiles or a stamp")
             .clicked()
             && writes
         {
@@ -2879,7 +3034,10 @@ fn output_section(
         }
         if ui
             .selectable_label(writes, "Write")
-            .on_hover_text("Write a value into a derived int_grid layer (marks other rules read)")
+            .on_hover_text(
+                "Instead of drawing, the rule writes a value into a derived layer: an unseen grid \
+                 of marks that later passes and other layers can match on",
+            )
             .clicked()
             && !writes
         {
@@ -2967,6 +3125,11 @@ fn derived_targets(doc: &Document, layer: &Slug) -> Vec<(Slug, Slug)> {
         .collect()
 }
 
+/// The cell test forms, for the tooltips of the fields you type one into.
+const CELL_TEST_HELP: &str = "Type a cell test: `.` empty, `+` any value, `solid` that value (or \
+     any value of that group), `!solid` anything but solid, `[.|oneway]` any of these, \
+     `![.|oneway]` none of these. Enter commits";
+
 /// A region rule's own options: break and salt.
 fn region_options(ui: &mut egui::Ui, rule: &Rule) -> Option<(String, Rule)> {
     let mut out = None;
@@ -2989,7 +3152,10 @@ fn region_options(ui: &mut egui::Ui, rule: &Rule) -> Option<(String, Rule)> {
         ui.monospace(rule.salt.to_string());
         if ui
             .small_button("Re-roll")
-            .on_hover_text("A new salt: `random` spacing changes, the slug stays")
+            .on_hover_text(
+                "Reshuffle the rule's random picks: random spacing lands elsewhere, the slug stays \
+                 (a new salt)",
+            )
             .clicked()
         {
             let mut r = rule.clone();
@@ -3021,6 +3187,12 @@ fn region_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(Str
         out = Some((label.to_string(), r));
     };
     let nz = |v: f64| std::num::NonZeroU32::new(v.max(0.0) as u32);
+    let region_grid = rs
+        .region
+        .grid
+        .as_ref()
+        .or(source.as_ref())
+        .and_then(|g| doc.project.layer(g.as_str()));
     ui.strong("Region");
     egui::Grid::new(("region", slug))
         .num_columns(2)
@@ -3063,7 +3235,13 @@ fn region_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(Str
                 }
             })
             .response
-            .on_hover_text("A cell test: `.`, `solid`, `!solid`, `[.|oneway]`; Enter commits");
+            .on_hover_text(format!(
+                "Which cells make up the regions. Now: {}.\n{CELL_TEST_HELP}",
+                {
+                    let (label, what) = test_words(&rs.region.cells, region_grid);
+                    format!("{label}: {what}")
+                }
+            ));
             ui.end_row();
             type Bound = fn(&mut Region) -> &mut Option<std::num::NonZeroU32>;
             let rows: [(&str, Bound, Bound); 3] = [
@@ -3087,9 +3265,9 @@ fn region_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(Str
                 })
                 .response
                 .on_hover_text(
-                    "Bounding box size or cell count, inclusive. An unset bound shows \
-                     \"none\"; dragging to 0, typing 0 or clearing it unsets it (a bound is \
-                     at least 1)",
+                    "Only use regions this big: width and height of the region's bounding \
+                     box, area in cells, limits included. \"none\" is no limit; drag to 0, \
+                     type 0 or clear it to remove one",
                 );
                 ui.end_row();
             }
@@ -3136,7 +3314,11 @@ fn region_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(Str
                 });
             }
             ui.end_row();
-            ui.label("spacing");
+            ui.label("spacing").on_hover_text(
+                "How placements spread along a run: even (a fixed step of `every`, lined up by \
+                 align), spread (as many as fit at least `every` apart, end to end) or random \
+                 (steps of `every` plus up to `jitter` more)",
+            );
             let mut sp = p.spacing;
             egui::ComboBox::from_id_salt(("spacing", slug))
                 .selected_text(format!("{sp:?}").to_lowercase())
@@ -3210,9 +3392,11 @@ fn region_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(Str
                 })
                 .response
                 .on_hover_text(if is_every {
-                    "Pitch (even) or least distance (spread, random), in cells"
+                    "Cells from one placement to the next: exactly this (even) or at least this \
+                     (spread, random)"
                 } else {
-                    "Cells kept clear at each end of a run (of the bbox, across)"
+                    "Cells left free at each end of a run (across: at the sides of the region's \
+                     bounding box)"
                 });
                 ui.end_row();
             }
@@ -3248,7 +3432,8 @@ fn region_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(Str
                 }
             });
             ui.end_row();
-            ui.label("min length");
+            ui.label("min length")
+                .on_hover_text("Along only: skip runs shorter than this many cells");
             ui.add_enabled_ui(along, |ui| {
                 let key = format!("{slug}:min_length");
                 if let Some(v) = num(
@@ -3268,7 +3453,10 @@ fn region_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(Str
                 }
             });
             ui.end_row();
-            ui.label("against");
+            ui.label("against").on_hover_text(format!(
+                "Along only: the cell across the edge (the one under a floor, say) must also \
+                 pass this test. Empty: any cell outside the region counts.\n{CELL_TEST_HELP}"
+            ));
             ui.add_enabled_ui(along, |ui| {
                 let key = format!("{slug}:against");
                 let shown = p.against.as_ref().map_or(String::new(), |c| c.to_string());
@@ -3481,7 +3669,10 @@ fn pattern_editor(
             if editable
                 && ui
                     .small_button("Make inline")
-                    .on_hover_text("Copy the named rows into this rule")
+                    .on_hover_text(
+                        "Copy the shared pattern from rules/macros.json into this rule, so you \
+                         can edit it here",
+                    )
                     .clicked()
             {
                 let mut np = p.clone();
@@ -3534,15 +3725,19 @@ fn pattern_editor(
                 egui::FontId::monospace(13.0),
                 text_col,
             );
-            let resp = resp.on_hover_text(format!(
-                "{g}: {}{}",
-                m.map_or("means nothing here".to_string(), |m| m.to_string()),
-                if (x as u32, y as u32) == (ax, ay) {
-                    " (anchor)"
-                } else {
-                    ""
-                }
-            ));
+            let mut tip = glyph_words(&shown, grid, g);
+            if (x as u32, y as u32) == (ax, ay) && g != worlds_core::ANCHOR_GLYPH {
+                tip.push_str(
+                    "\nThe rule's output goes here: with no `@`, the center cell is the anchor",
+                );
+            }
+            if editable && !named {
+                tip.push_str(
+                    "\nClick: next glyph · Right-click: Anything · Alt+click: put the output \
+                     here · Shift+click: paint the chip picked below",
+                );
+            }
+            let resp = resp.on_hover_text(tip);
             if !editable || named {
                 continue;
             }
@@ -3572,14 +3767,15 @@ fn pattern_editor(
         ui.horizontal_wrapped(|ui| {
             ui.weak("glyphs:");
             for g in cycle.iter().chain(['@'].iter()) {
-                let m = shown.resolve(*g, grid);
                 let sel = cx.r.brush == Some(*g);
+                let how = if sel {
+                    "Shift+click a pattern cell to paint it; click this chip again to let go"
+                } else {
+                    "Click to pick it, then Shift+click pattern cells to paint it"
+                };
                 if ui
                     .selectable_label(sel, RichText::new(g.to_string()).monospace())
-                    .on_hover_text(format!(
-                        "{}; click to paint it with Shift+click",
-                        m.map_or("?".into(), |m| m.to_string())
-                    ))
+                    .on_hover_text(format!("{}\n{how}", glyph_words(&shown, grid, *g)))
                     .clicked()
                 {
                     cx.r.brush = (!sel).then_some(*g);
@@ -3595,7 +3791,10 @@ fn pattern_editor(
             let wide = |n: u32| "*".repeat(n as usize);
             if ui
                 .small_button("+ ring")
-                .on_hover_text("Grow by a ring of * (keeps the center)")
+                .on_hover_text(
+                    "Put a ring of Anything (`*`) cells around the pattern; the center stays the \
+                     center",
+                )
                 .clicked()
             {
                 let mut r = vec![wide(w + 2)];
@@ -3605,6 +3804,8 @@ fn pattern_editor(
             }
             if ui
                 .add_enabled(w > 2 && h > 2, egui::Button::new("− ring").small())
+                .on_hover_text("Drop the outer ring of cells; the center stays the center")
+                .on_disabled_hover_text("Needs a pattern at least 3 × 3")
                 .clicked()
             {
                 resize(
@@ -3616,7 +3817,7 @@ fn pattern_editor(
             }
             if ui
                 .small_button("+ row")
-                .on_hover_text("Add a row of * at the bottom")
+                .on_hover_text("Add a row of Anything (`*`) cells below the pattern")
                 .clicked()
             {
                 let mut r = rows.clone();
@@ -3625,19 +3826,23 @@ fn pattern_editor(
             }
             if ui
                 .add_enabled(h > 1, egui::Button::new("− row").small())
+                .on_hover_text("Drop the pattern's bottom row")
+                .on_disabled_hover_text("The pattern is one row tall")
                 .clicked()
             {
                 resize(rows[..rows.len() - 1].to_vec());
             }
             if ui
                 .small_button("+ col")
-                .on_hover_text("Add a column of * on the right")
+                .on_hover_text("Add a column of Anything (`*`) cells right of the pattern")
                 .clicked()
             {
                 resize(rows.iter().map(|x| format!("{x}*")).collect());
             }
             if ui
                 .add_enabled(w > 1, egui::Button::new("− col").small())
+                .on_hover_text("Drop the pattern's rightmost column")
+                .on_disabled_hover_text("The pattern is one column wide")
                 .clicked()
             {
                 resize(
@@ -3794,12 +3999,17 @@ fn options(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(String, R
                 });
             }
             ui.end_row();
-            ui.label("chance");
+            ui.label("chance").on_hover_text(
+                "How often the rule fires where it matches: 1 always, 0.5 about half the cells",
+            );
             if let Some(v) = slider01(ui, &mut cx.r.nums, &format!("{slug}:chance"), m.chance) {
                 set("chance", &|r| sel(r).chance = v);
             }
             ui.end_row();
-            ui.label("modulo");
+            ui.label("modulo").on_hover_text(
+                "Only fire on every x-th column and y-th row, counted from the level's top-left \
+                 (+x and +y shift the start)",
+            );
             ui.horizontal(|ui| {
                 let mut on = m.modulo.is_some();
                 if ui.checkbox(&mut on, "").changed() {
@@ -3834,7 +4044,10 @@ fn options(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(String, R
                 }
             });
             ui.end_row();
-            ui.label("checker");
+            ui.label("checker").on_hover_text(
+                "Shift every other band of the modulo grid by one cell, sideways (horizontal) or \
+                 down (vertical), like a checkerboard",
+            );
             let mut c = m.checker;
             egui::ComboBox::from_id_salt(("checker", slug))
                 .selected_text(format!("{c:?}").to_lowercase())
@@ -3847,7 +4060,10 @@ fn options(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(String, R
                 set("checker", &|r| sel(r).checker = c);
             }
             ui.end_row();
-            ui.label("perlin");
+            ui.label("perlin").on_hover_text(
+                "Fire only where smooth noise says yes (about half the level, in blobs), so the \
+                 rule draws in patches. Scale sets the blob size",
+            );
             ui.horizontal(|ui| {
                 let mut on = m.perlin.is_some();
                 if ui.checkbox(&mut on, "").changed() {
@@ -3884,20 +4100,23 @@ fn options(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(String, R
                 }
             });
             ui.end_row();
-            ui.label("out of bounds");
+            ui.label("out of bounds").on_hover_text(
+                "What pattern cells past the level's edge count as. Default: the rule doesn't fire \
+                 there at all",
+            );
             let grid = pattern_grid(cx.doc, &cx.layer, &m.pattern);
             let cur = m.out_of_bounds.clone();
             let mut pick = cur.clone();
             let name = |o: &Option<OutOfBounds>| match o {
                 None => "no match (default)".to_string(),
-                Some(OutOfBounds::Empty) => ". (empty)".to_string(),
+                Some(OutOfBounds::Empty) => "empty (.)".to_string(),
                 Some(OutOfBounds::Value(v)) => v.to_string(),
             };
             egui::ComboBox::from_id_salt(("oob", slug))
                 .selected_text(name(&cur))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut pick, None, name(&None));
-                    ui.selectable_value(&mut pick, Some(OutOfBounds::Empty), ". (empty)");
+                    ui.selectable_value(&mut pick, Some(OutOfBounds::Empty), "empty (.)");
                     for v in grid.map_or(&[][..], |g| g.values()) {
                         let o = Some(OutOfBounds::Value(v.slug.clone()));
                         ui.selectable_value(&mut pick, o, v.slug.as_str());
@@ -3912,7 +4131,10 @@ fn options(ui: &mut egui::Ui, cx: &mut Cx<'_>, rule: &Rule) -> Option<(String, R
                 ui.monospace(rule.salt.to_string());
                 if ui
                     .small_button("Re-roll")
-                    .on_hover_text("A new salt: the rule's random choices change, its slug stays")
+                    .on_hover_text(
+                        "Reshuffle the rule's random picks (chance, alternatives, random \
+                         offsets); the slug stays (a new salt)",
+                    )
                     .clicked()
                 {
                     let next = reroll(rule.salt);
@@ -3932,6 +4154,10 @@ fn reroll(old: i64) -> i64 {
     let v = (worlds_rules::hash::mix(t ^ old as u64) % 100_000) as i64;
     if v == old { v + 1 } else { v }
 }
+
+/// The "avoid overlap" checkbox's tooltip (tiles and stamp outputs).
+const AVOID_OVERLAP_HELP: &str = "Don't place anything where a stamp marked occupies already sits \
+     (avoid_overlap)";
 
 fn tileset_combo(ui: &mut egui::Ui, doc: &Document, id: &str, pick: &mut Option<Slug>) {
     egui::ComboBox::from_id_salt(id)
@@ -3965,7 +4191,10 @@ fn output_editor(
                     o.tileset = p;
                     res = Some(("tileset".into(), RuleOutput::Tiles(o)));
                 }
-                ui.label("mode");
+                ui.label("mode").on_hover_text(
+                    "stack: draw the picked tiles on the matching cell, one over the other. \
+                     stamp: keep their layout from the atlas, so a 2 × 2 pick draws a 2 × 2 block",
+                );
                 let mut m = t.tile_mode;
                 egui::ComboBox::from_id_salt((slug, "mode"))
                     .selected_text(if m == TileMode::Stack {
@@ -3985,9 +4214,7 @@ fn output_editor(
                 let mut av = t.avoid_overlap;
                 if ui
                     .checkbox(&mut av, "avoid overlap")
-                    .on_hover_text(
-                        "Skip a placement whose footprint is occupied (by stamps with occupies)",
-                    )
+                    .on_hover_text(AVOID_OVERLAP_HELP)
                     .changed()
                 {
                     let mut o = t.clone();
@@ -3995,7 +4222,11 @@ fn output_editor(
                     res = Some(("avoid overlap".into(), RuleOutput::Tiles(o)));
                 }
                 if t.tile_mode == TileMode::Stamp {
-                    ui.label("pivot");
+                    ui.label("pivot").on_hover_text(
+                        "Which point of the block lines up with the same point of the matching \
+                         cell, 0 to 1 across and down: 0, 0 top-left corners, 0.5, 1 bottom \
+                         middles (pivot)",
+                    );
                     for a in 0..2 {
                         let k = format!("{slug}:pivot{a}");
                         if let Some(v) =
@@ -4040,7 +4271,10 @@ fn output_editor(
                                 }
                                 if ui
                                     .small_button("✕")
-                                    .on_hover_text("Remove this alternative")
+                                    .on_hover_text(
+                                        "Remove this alternative: the rule stops picking these \
+                                         tiles",
+                                    )
                                     .clicked()
                                 {
                                     let mut o = t.clone();
@@ -4106,9 +4340,7 @@ fn output_editor(
                 let mut av = s.avoid_overlap;
                 if ui
                     .checkbox(&mut av, "avoid overlap")
-                    .on_hover_text(
-                        "Skip a placement whose footprint is occupied (by stamps with occupies)",
-                    )
+                    .on_hover_text(AVOID_OVERLAP_HELP)
                     .changed()
                 {
                     let mut o = s.clone();
@@ -4282,7 +4514,7 @@ fn atlas_pick(
             }
             if let Some(h) = resp.hover_pos() {
                 let t = to_tile(h);
-                resp.on_hover_text(format!("[{}, {}]", t[0], t[1]));
+                resp.on_hover_text(format!("Tile at column {}, row {}", t[0], t[1]));
             }
         });
     res
@@ -4303,7 +4535,11 @@ fn reference_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, g: &RuleGroup, u: &Templ
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(counts_text(cx.r, &slug)).color(cx.accent));
         {
-            if ui.button("Delete").clicked() {
+            if ui
+                .button("Delete")
+                .on_hover_text("Remove the template reference and its rules (undo brings it back)")
+                .clicked()
+            {
                 push(
                     cx.pending,
                     format!("Remove reference {slug}"),
@@ -4316,7 +4552,11 @@ fn reference_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, g: &RuleGroup, u: &Templ
             }
             if ui
                 .button("Detach")
-                .on_hover_text("Replace the reference by its rules, keeping their slugs")
+                .on_hover_text(
+                    "Turn this template reference into plain rules you can edit one by one. They \
+                     keep their slugs, so their random picks stay the same (undo brings the \
+                     reference back)",
+                )
                 .clicked()
             {
                 match detach_commands(&doc.project, &layer, &slug) {
@@ -4396,7 +4636,28 @@ fn reference_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, g: &RuleGroup, u: &Templ
                 }
             });
             ui.end_row();
-            ui.label("legend");
+            let source = doc
+                .project
+                .layer(cx.layer.as_str())
+                .and_then(|d| d.auto())
+                .and_then(|a| doc.project.layer(a.source.as_str()));
+            let now: Vec<String> = u
+                .legend
+                .iter()
+                .map(|(g, t)| {
+                    let (label, what) = test_words(t, source);
+                    format!("{label} (`{g}`): {what}")
+                })
+                .collect();
+            ui.label("legend").on_hover_text(format!(
+                "Change what glyphs mean in the template's patterns, as `glyph = cell test`, comma \
+                 separated, so one template fits your values.{}\n{CELL_TEST_HELP}",
+                if now.is_empty() {
+                    String::new()
+                } else {
+                    format!("\nNow:\n{}", now.join("\n"))
+                }
+            ));
             let written: String = u
                 .legend
                 .iter()
@@ -4428,7 +4689,14 @@ fn reference_editor(ui: &mut egui::Ui, cx: &mut Cx<'_>, g: &RuleGroup, u: &Templ
                     for (rule, alts) in &u.tiles {
                         ui.horizontal(|ui| {
                             ui.label(format!("{rule}: {} alternative(s)", alts.len()));
-                            if ui.small_button("clear").clicked() {
+                            if ui
+                                .small_button("clear")
+                                .on_hover_text(
+                                    "Drop this override: the rule draws the template's own tiles \
+                                     again",
+                                )
+                                .clicked()
+                            {
                                 let mut nu = u.clone();
                                 nu.tiles.remove(rule);
                                 commit(cx, &format!("clear {rule} tiles"), nu);
@@ -4835,6 +5103,103 @@ mod tests {
         let mut p = Pattern::new(&["*"]);
         p.legend = Legend::Inline(BTreeMap::from([('S', CellMatch::Empty)]));
         assert_eq!(glyph_cycle(&p, None), vec!['*', '.', '+', 'S']);
+    }
+
+    /// A collision-like layer: Solid `#`, a value with no name (`f`), and
+    /// the group Walls `w`.
+    fn words_layer() -> LayerDef {
+        serde_json::from_value(serde_json::json!({
+            "slug": "collision", "name": "Collision", "kind": "int_grid",
+            "values": [
+                { "slug": "solid", "name": "Solid", "color": "#404040", "glyph": "#", "group": "walls" },
+                { "slug": "fortified", "name": "", "color": "#606060", "glyph": "f", "group": "walls" }
+            ],
+            "groups": [ { "slug": "walls", "name": "Walls", "glyph": "w" } ]
+        }))
+        .expect("layer")
+    }
+
+    #[test]
+    fn glyph_words_say_the_meaning_first() {
+        let def = words_layer();
+        let grid = Some(&def);
+        let p = Pattern::new(&["*"]);
+        // The fixed glyphs of the pattern language.
+        assert_eq!(
+            glyph_words(&p, grid, '.'),
+            "Empty cell (`.`): the cell must hold no value"
+        );
+        assert_eq!(
+            glyph_words(&p, grid, '*'),
+            "Anything (`*`): the cell doesn't matter"
+        );
+        assert_eq!(
+            glyph_words(&p, grid, '+'),
+            "Any value (`+`): the cell must hold some value, whichever"
+        );
+        assert!(glyph_words(&p, grid, '@').starts_with("Rule output goes here (`@`)"));
+        // A value by its name, a nameless one by its slug, a group.
+        assert_eq!(
+            glyph_words(&p, grid, '#'),
+            "Solid (`#`): the cell must hold Solid"
+        );
+        assert_eq!(
+            glyph_words(&p, grid, 'f'),
+            "fortified (`f`): the cell must hold fortified"
+        );
+        assert_eq!(
+            glyph_words(&p, grid, 'w'),
+            "Walls (`w`): any value in the Walls group"
+        );
+        // A glyph nothing defines.
+        assert_eq!(
+            glyph_words(&p, grid, 'q'),
+            "Unknown glyph (`q`): no value, group or legend entry on collision uses it"
+        );
+        assert!(glyph_words(&p, None, '#').starts_with("Unknown glyph (`#`)"));
+        // The legend wins, and its tests read in words too.
+        let mut p = Pattern::new(&["*"]);
+        p.legend = Legend::Inline(BTreeMap::from([
+            ('S', CellMatch::Not(slug("solid"))),
+            ('.', CellMatch::Not(slug("solid"))),
+            (
+                'o',
+                CellMatch::OneOf(vec![
+                    worlds_core::CellTest::Empty,
+                    worlds_core::CellTest::Is(slug("walls")),
+                ]),
+            ),
+            ('@', CellMatch::Empty),
+        ]));
+        assert_eq!(
+            glyph_words(&p, grid, 'S'),
+            "Not Solid (`S`): anything but Solid, empty included"
+        );
+        assert_eq!(
+            glyph_words(&p, grid, '.'),
+            "Not Solid (`.`): anything but Solid, empty included"
+        );
+        assert_eq!(
+            glyph_words(&p, grid, 'o'),
+            "Empty or any Walls (`o`): any of these"
+        );
+        assert!(
+            glyph_words(&p, grid, '@')
+                .ends_with("also tested: Empty cell, the cell must hold no value")
+        );
+    }
+
+    #[test]
+    fn glyph_words_follow_a_renamed_value() {
+        let mut def = words_layer();
+        let p = Pattern::new(&["*"]);
+        if let worlds_core::LayerKind::IntGrid(g) = &mut def.kind {
+            g.values[0].name = "Rock".into();
+        }
+        assert_eq!(
+            glyph_words(&p, Some(&def), '#'),
+            "Rock (`#`): the cell must hold Rock"
+        );
     }
 
     /// WCAG contrast ratio of two opaque colours.

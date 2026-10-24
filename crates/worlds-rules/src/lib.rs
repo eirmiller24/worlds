@@ -38,7 +38,7 @@ pub use derived::effective_grid;
 pub use hash::layer_seed;
 pub use images::{TileOpacity, TilesetImages};
 pub use preview::{RegionPreview, RulePreview, preview_rules, preview_rules_for, region_preview};
-pub use region::{EdgeRun, Edges, RegionInfo, Regions, regions};
+pub use region::{EdgeRun, Edges, RegionInfo, Regions, regions, regions_in};
 pub use warnings::export_warnings;
 
 /// One baked tile.

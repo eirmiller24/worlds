@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use worlds_core::command::LevelContent;
+use worlds_core::find::{self, FindKind};
 use worlds_core::format::IntGridFile;
 use worlds_core::text::{NoteFilter, render_level_baked_with};
 use worlds_core::{
@@ -35,9 +36,56 @@ pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, R
         .filter(|w| p.world.as_ref().is_none_or(|x| *x == w.slug))
         .flat_map(|w| {
             w.levels.iter().map(move |l| {
-                json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": w.slug,
-                    "world_px": l.world_px, "size": l.size, "depth": l.depth })
+                let mut v = json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": w.slug,
+                    "world_px": l.world_px, "size": l.size, "depth": l.depth });
+                if l.has_void() {
+                    v["void"] = json!(l.void);
+                }
+                v
             })
+        })
+        .collect();
+    Ok(json!({ "levels": levels }))
+}
+
+/// `level.find { query?, tag?, fields?, world?, text? }`: the levels every
+/// filter holds for ([`worlds_core::find`]), in `level.list` order, each
+/// as `level.list` gives it plus its `tags` and stored `fields`.
+pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        query: Option<String>,
+        tag: Option<String>,
+        #[serde(default)]
+        fields: BTreeMap<String, Value>,
+        world: Option<Slug>,
+        text: Option<String>,
+    }
+    let p: P = params::parse(method, p)?;
+    if let Some(w) = &p.world
+        && project.world(w.as_str()).is_none()
+    {
+        return Err(RpcError::command(&CommandError::UnknownWorld(w.clone())));
+    }
+    let mut q = params::query(method, p.query.as_deref(), FindKind::Levels)?;
+    q.tags.extend(p.tag);
+    q.fields.extend(params::field_tests(p.fields));
+    q.worlds.extend(p.world.map(|w| w.to_string()));
+    q.text.extend(p.text.map(|t| t.to_lowercase()));
+    let levels: Vec<Value> = find::levels(project, &q)
+        .map_err(|e| RpcError::invalid_params(format!("{method}: {e}")))?
+        .into_iter()
+        .map(|h| {
+            let l = h.level;
+            let mut v = json!({ "slug": l.slug, "name": l.name, "id": l.id, "world": h.world.slug,
+                "world_px": l.world_px, "size": l.size, "depth": l.depth,
+                "tags": l.tags, "fields": l.fields });
+            // As in `level.list`: a non-rectangular level's void.
+            if l.has_void() {
+                v["void"] = json!(l.void);
+            }
+            v
         })
         .collect();
     Ok(json!({ "levels": levels }))
@@ -240,6 +288,49 @@ pub(crate) fn resize(project: &Project, method: &str, p: Value) -> Result<Write,
         "resize_level",
         p,
     )?))
+}
+
+/// `level.crop { level, world? }` → the `batch` of `resize_level`s that
+/// shrinks the level to the bounding box of its content
+/// (`Project::crop_level`); nothing when it already fits.
+pub(crate) fn crop(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        level: Slug,
+        world: Option<Slug>,
+    }
+    let p: P = params::parse(method, p)?;
+    let (world, _) = find_level(project, p.level.as_str())?;
+    if let Some(w) = p.world
+        && w != world.slug
+    {
+        return Err(RpcError::command(&CommandError::LevelNotInWorld {
+            world: w,
+            level: p.level,
+        }));
+    }
+    let cmd = project
+        .crop_level(&world.slug, &p.level)
+        .map_err(|e| RpcError::command(&e))?;
+    Ok(Write::one(cmd.unwrap_or_else(Command::noop)))
+}
+
+/// `level.set_void { level, void }` → `set_level_void`: the rects of
+/// project-grid cells cut out of the level's box (`[]`: a rectangle).
+pub(crate) fn set_void(_: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        level: Slug,
+        void: Vec<worlds_core::command::Rect>,
+    }
+    let p: P = params::parse(method, p)?;
+    Ok(Write::one(Command::SetLevelVoid {
+        level: p.level,
+        void: p.void,
+        restore: false,
+    }))
 }
 
 /// `level.update { level, slug?, name?, depth?, bg_color?, tags? }`.
@@ -540,4 +631,27 @@ fn dropped(level: &Level, content: &LevelContent) -> Option<String> {
             Some(format!("{} and {last}", layers.join(", ")))
         }
     }
+}
+
+/// `level.duplicate { level, slug, name?, world?, world_px? }` →
+/// `duplicate_level`; the result adds the copy's `id` and `world_px`.
+pub(crate) fn duplicate(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    let cmd = params::command(method, "duplicate_level", p)?;
+    let Command::DuplicateLevel { slug, .. } = &cmd else {
+        return Err(RpcError::internal("level.duplicate built another command"));
+    };
+    // The copy's id and position, worked out on a scratch copy (the ids
+    // are derived, so applying it for real makes the same ones).
+    let mut scratch = project.clone();
+    scratch
+        .apply(cmd.clone())
+        .map_err(|e| RpcError::command(&e))?;
+    let made = scratch
+        .level(slug.as_str())
+        .map(|l| json!({ "id": l.id, "world_px": l.world_px }));
+    Ok(Write::Commands {
+        cmds: vec![cmd],
+        id: made,
+        confirm: None,
+    })
 }

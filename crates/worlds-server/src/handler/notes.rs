@@ -8,8 +8,9 @@
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use worlds_core::command::NoteScope;
+use worlds_core::find::{FindKind, Query};
 use worlds_core::{
-    Annotation, Command, CommandError, GuideGroup, Id, NoteStatus, Project, Shape, Slug,
+    Annotation, Command, CommandError, Endpoint, GuideGroup, Id, NoteStatus, Project, Shape, Slug,
 };
 
 use super::params::{self, default_world, ensure_id, find_level};
@@ -17,7 +18,7 @@ use super::{Confirm, Write};
 use crate::rpc::RpcError;
 
 /// The annotation kinds, as `kind` names them.
-const KINDS: [&str; 5] = ["note", "pin", "path", "region", "guide"];
+const KINDS: [&str; 6] = ["note", "pin", "path", "region", "guide", "connector"];
 
 /// Every note with its scope: world notes first, then levels in
 /// `level.list` order.
@@ -64,15 +65,28 @@ fn check_kind(method: &str, k: &str) -> Result<(), RpcError> {
     }
 }
 
-/// What a move changes: the kind, every point, `closed` and the guide
-/// group. Text, tags, status, color, links, export, `locked` and a pin's
-/// icon and label are not geometry.
-fn placement(n: &Annotation) -> (&'static str, Vec<[i64; 2]>, bool, Option<&Slug>) {
+/// What a move changes: the kind, every point, `closed`, the guide group
+/// and a connector's ends. Text, tags, status, color, links, export,
+/// `locked`, a pin's icon and label and a connector's label and style are
+/// not geometry.
+type Placement<'a> = (
+    &'static str,
+    Vec<[i64; 2]>,
+    bool,
+    Option<&'a Slug>,
+    Option<(&'a Endpoint, &'a Endpoint)>,
+);
+
+fn placement(n: &Annotation) -> Placement<'_> {
     let (closed, group) = match &n.shape {
         Shape::Guide { closed, group, .. } => (*closed, group.as_ref()),
         _ => (false, None),
     };
-    (n.shape.name(), n.shape.points(), closed, group)
+    let ends = match &n.shape {
+        Shape::Connector { from, to, .. } => Some((from, to)),
+        _ => None,
+    };
+    (n.shape.name(), n.shape.points(), closed, group, ends)
 }
 
 /// `needs_confirm` for touching locked notes: "note x is locked; moving it
@@ -105,7 +119,8 @@ enum StatusFilter {
     All,
 }
 
-/// `notes.list { scope?, tag?, status?, kind?, kinds?, group?, export? }`.
+/// `notes.list { scope?, tag?, status?, kind?, kinds?, group?, export?,
+/// text?, query? }`.
 pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -118,8 +133,12 @@ pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, R
         kinds: Option<Vec<String>>,
         group: Option<Slug>,
         export: Option<bool>,
+        text: Option<String>,
+        query: Option<String>,
     }
     let p: P = params::parse(method, p)?;
+    let mut q = params::query(method, p.query.as_deref(), FindKind::Notes)?;
+    q.text.extend(p.text.map(|t| t.to_lowercase()));
     match &p.scope {
         Some(NoteScope::World(w)) if project.world(w.as_str()).is_none() => {
             return Err(RpcError::command(&CommandError::UnknownWorld(w.clone())));
@@ -153,9 +172,22 @@ pub(crate) fn list(project: &Project, method: &str, p: Value) -> Result<Value, R
                 .is_none_or(|g| matches!(&n.shape, Shape::Guide { group: Some(x), .. } if x == g))
         })
         .filter(|(_, n)| p.export.is_none_or(|e| n.export == e))
+        .filter(|(s, n)| q.is_empty() || note_matches(project, &q, s, n))
         .map(|(s, n)| json!({ "scope": s, "note": n }))
         .collect();
     Ok(json!({ "notes": notes }))
+}
+
+/// `q` on a note listed at `scope`.
+fn note_matches(project: &Project, q: &Query, scope: &NoteScope, n: &Annotation) -> bool {
+    let at = match scope {
+        NoteScope::World(w) => project.world(w.as_str()).map(|w| (w, None)),
+        NoteScope::Level(l) => project
+            .worlds
+            .iter()
+            .find_map(|w| w.level(l.as_str()).map(|l| (w, Some(l)))),
+    };
+    at.is_some_and(|(w, l)| q.note_matches(w, l, n))
 }
 
 /// `notes.add { scope, note, index? }` → `add_note`.
@@ -299,7 +331,8 @@ pub(crate) fn resolve(project: &Project, method: &str, p: Value) -> Result<Write
     Ok(Write::one(Command::UpdateNote { id: p.id, note }))
 }
 
-/// `notes.remove { ids }` → `remove_note`s. Locked notes need `confirm`.
+/// `notes.remove { ids }` → `remove_note`s (and the `set_group`s that drop
+/// them from their object groups). Locked notes need `confirm`.
 pub(crate) fn remove(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -319,12 +352,15 @@ pub(crate) fn remove(project: &Project, method: &str, p: Value) -> Result<Write,
         .filter(|id| index.get(id).is_some_and(|n| n.note.locked))
         .collect();
     let confirm = locked_confirm(&locked, "removing");
+    let mut cmds: Vec<Command> = p
+        .ids
+        .iter()
+        .map(|id| Command::RemoveNote { id: id.clone() })
+        .collect();
+    // Members leave their object groups in the same write.
+    cmds.extend(worlds_core::command::groups::drop_members(project, &p.ids));
     Ok(Write::Commands {
-        cmds: p
-            .ids
-            .iter()
-            .map(|id| Command::RemoveNote { id: id.clone() })
-            .collect(),
+        cmds,
         id: None,
         confirm,
     })

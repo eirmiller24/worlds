@@ -119,7 +119,7 @@
               "const": "pin"
             },
             "label": {
-              "description": "pin: short label drawn next to the icon.",
+              "description": "pin: short label drawn next to the icon. connector: text drawn\nalong the line (\"needs double jump\").",
               "type": [
                 "string",
                 "null"
@@ -433,6 +433,125 @@
           ],
           "title": "guide",
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "description": "Markdown.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Color"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "export": {
+              "description": "Included in `export/` for the game.",
+              "type": "boolean"
+            },
+            "from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Endpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "connector (required): where it starts, `{ \"level\": slug }` or\n`{ \"entity\": id }`."
+            },
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "kind": {
+              "const": "connector"
+            },
+            "label": {
+              "description": "pin: short label drawn next to the icon. connector: text drawn\nalong the line (\"needs double jump\").",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "links": {
+              "description": "`level:<slug>`, `entity:<id>`, `note:<id>`, or a URL.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "locked": {
+              "description": "Not movable in the editor.",
+              "type": "boolean"
+            },
+            "status": {
+              "$ref": "#/$defs/NoteStatus"
+            },
+            "style": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ConnectorStyle"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "connector: `arrow` (the default: an arrowhead at `to`), `line` or\n`double` (arrowheads at both ends)."
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Endpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "connector (required): where it ends, as `from`."
+            },
+            "waypoints": {
+              "description": "connector: points the line passes through between its ends,\n`[[x, y], ...]` in pixels.",
+              "items": {
+                "items": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "from",
+            "to"
+          ],
+          "title": "connector",
+          "type": "object"
         }
       ]
     },
@@ -440,6 +559,46 @@
       "description": "Hex color, #rrggbb or #rrggbbaa.",
       "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
       "type": "string"
+    },
+    "ConnectorStyle": {
+      "description": "How a connector is drawn: an arrow at `to` (the default), a plain line,\nor arrows at both ends.",
+      "enum": [
+        "arrow",
+        "line",
+        "double"
+      ],
+      "type": "string"
+    },
+    "Endpoint": {
+      "description": "What a connector end is anchored to: `{ \"level\": slug }` or\n`{ \"entity\": id }`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A level (room): the end sits on its edge.",
+          "properties": {
+            "level": {
+              "$ref": "#/$defs/Slug"
+            }
+          },
+          "required": [
+            "level"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An entity instance: the end sits on its pivot.",
+          "properties": {
+            "entity": {
+              "$ref": "#/$defs/Id"
+            }
+          },
+          "required": [
+            "entity"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "GuideGroup": {
       "additionalProperties": false,
@@ -492,9 +651,35 @@
         "pin",
         "path",
         "region",
-        "guide"
+        "guide",
+        "connector"
       ],
       "type": "string"
+    },
+    "LayoutMode": {
+      "description": "How a world places its levels.",
+      "oneOf": [
+        {
+          "const": "free",
+          "description": "Levels go where they are put.",
+          "type": "string"
+        },
+        {
+          "const": "horizontal",
+          "description": "Left to right in level order.",
+          "type": "string"
+        },
+        {
+          "const": "vertical",
+          "description": "Top to bottom in level order.",
+          "type": "string"
+        },
+        {
+          "const": "grid_vania",
+          "description": "Levels snap to a lattice and are whole lattice cells.",
+          "type": "string"
+        }
+      ]
     },
     "NoteStatus": {
       "enum": [
@@ -503,10 +688,93 @@
       ],
       "type": "string"
     },
+    "Reference": {
+      "additionalProperties": false,
+      "description": "One entry of `references` in `level.json` or `world.json`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "image": {
+          "description": "Path to the PNG, relative to the project directory,\n`/`-separated, like a tileset's `image`.",
+          "type": "string"
+        },
+        "locked": {
+          "description": "The editor's tools don't move or scale it. Default false.",
+          "type": "boolean"
+        },
+        "opacity": {
+          "description": "0 (invisible) to 1 (opaque). Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "px": {
+          "description": "Top-left corner in pixels: level pixels in `level.json`, world\npixels in `world.json`.",
+          "items": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "scale": {
+          "description": "Drawn size over the image's own size in pixels. Default 1.",
+          "format": "double",
+          "type": "number"
+        },
+        "visible": {
+          "description": "Drawn at all. Default true.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "image",
+        "px"
+      ],
+      "type": "object"
+    },
     "Slug": {
       "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
       "pattern": "^[a-z][a-z0-9_]*$",
       "type": "string"
+    },
+    "WorldLayout": {
+      "additionalProperties": false,
+      "description": "`world.json` `layout`. Left out of the file at its default (free, no\ngap, no cell).",
+      "properties": {
+        "cell": {
+          "description": "Grid vania: the lattice cell `[w, h]` in pixels, a multiple of the\nproject grid. Default 16 project cells each way.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "gap": {
+          "description": "Strip layouts: pixels between two neighbouring levels. Default 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/LayoutMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -528,6 +796,17 @@
       },
       "type": "array"
     },
+    "layout": {
+      "$ref": "#/$defs/WorldLayout",
+      "description": "How the tools place the levels (free, a strip, a lattice). Left out\nat its default (free)."
+    },
+    "levels": {
+      "description": "`levels`: the level order, by slug (the Levels pane, PgUp/PgDn, the\nexport and strip layouts follow it). Optional: left out, levels are\nin slug order. A level it doesn't list comes after the listed ones\n(in slug order), and validation reports it; so does a listed slug\nwith no level. `reorder_levels` writes it.",
+      "items": {
+        "$ref": "#/$defs/Slug"
+      },
+      "type": "array"
+    },
     "name": {
       "type": [
         "string",
@@ -538,6 +817,13 @@
       "description": "World-scope annotations (world pixel coordinates), in insertion order.",
       "items": {
         "$ref": "#/$defs/Annotation"
+      },
+      "type": "array"
+    },
+    "references": {
+      "description": "World-scope reference images (world pixels), bottom first. Never\nexported.",
+      "items": {
+        "$ref": "#/$defs/Reference"
       },
       "type": "array"
     },

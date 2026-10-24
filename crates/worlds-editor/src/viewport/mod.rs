@@ -4,8 +4,10 @@
 //! Drawing, back to front, within the viewport's egui painter:
 //!
 //! 1. Background, then one filled rect per visible level (its bg color).
-//! 2. Zoomed out (a cell smaller than [`DETAIL_CELL_PX`] screen px): level
-//!    names. Zoomed in: one paint callback that draws the visible chunks
+//! 2. Zoomed out (a cell smaller than [`DETAIL_CELL_PX`] screen px): each
+//!    level's thumbnail ([`crate::thumbs`], drawn with its fill in step 1,
+//!    its void transparent), then the level names on top. Zoomed in: one
+//!    paint callback that draws the visible chunks
 //!    of every int_grid, tiles and auto layer with instanced quads
 //!    ([`gpu`]), then entity boxes.
 //! 3. Overlays through egui: grid of the active level, level outlines,
@@ -27,6 +29,7 @@
 pub mod camera;
 pub mod gpu;
 pub mod notes;
+pub mod references;
 pub mod scene;
 
 use std::time::Duration;
@@ -45,8 +48,13 @@ use camera::{Camera, WRect};
 use gpu::{DrawCmd, Gpu, Uniforms, ViewportCallback, ViewportGpu};
 use scene::{ChunkRef, Scene, parse_color, tileset_tex};
 
-/// Below this many screen px per cell, levels draw as flat rects.
+/// Below this many screen px per cell, levels draw as their thumbnails
+/// (flat rects until a thumbnail is made) instead of tiles.
 pub const DETAIL_CELL_PX: f64 = 4.0;
+/// Below this many screen px per cell (but still drawing tiles), the
+/// visible levels' thumbnails are made ahead, unseen, so zooming out past
+/// [`DETAIL_CELL_PX`] finds them ready instead of flashing flat fills.
+pub const THUMB_AHEAD_CELL_PX: f64 = 2.0 * DETAIL_CELL_PX;
 /// Grid lines show when a cell is at least this many screen px.
 pub const GRID_CELL_PX: f64 = 8.0;
 
@@ -57,6 +65,11 @@ pub enum Fit {
     Level(LevelIx),
     /// A rect of world pixels (`view.focus { world_rect }`).
     Rect(WRect),
+    /// This world pixel in the middle at this zoom (a camera bookmark).
+    Center {
+        center: [f64; 2],
+        zoom: f64,
+    },
 }
 
 /// Status bar readout for the pointer.
@@ -79,6 +92,8 @@ pub struct ViewStats {
     pub rebuild_ms: f64,
     pub pending: usize,
     pub uploaded: usize,
+    /// Levels drawn as their thumbnail (zoomed out).
+    pub thumbs: usize,
 }
 
 pub struct ViewportCx<'a> {
@@ -98,6 +113,15 @@ pub struct ViewportCx<'a> {
     /// Tileset atlas textures by slug (the palette's cache), for entity
     /// icons; `None` (snapshots): boxes get no icon.
     pub atlas: Option<&'a Atlas>,
+    /// This is the focused map tab: it takes the keys and draws the tool
+    /// strips (snapshots: true).
+    pub focused: bool,
+    /// The editor's thumbnail cache: zoomed out, each level draws as its
+    /// thumbnail ([`crate::thumbs`]); `None` (snapshots, which always draw
+    /// the tiles): flat fills.
+    pub thumbs: Option<&'a mut crate::thumbs::Thumbs>,
+    /// The shortcuts, for the tooltips and hints that name a key.
+    pub keymap: &'a crate::keymap::Keymap,
 }
 
 /// Tileset atlas textures by slug (`None`: the image failed to load).
@@ -143,6 +167,93 @@ pub struct Viewport {
     pub map_only: bool,
     /// Draw entity boxes (`view.snapshot`'s `overlays`).
     pub draw_entities: bool,
+    /// The egui pass [`Self::next_slot`] counts in.
+    slot_pass: u64,
+    /// The GPU slot the next map drawn this pass takes ([`gpu::Slot`]).
+    next_slot: usize,
+}
+
+/// One map tab's part of the [`Viewport`]: its camera and what its input
+/// and drawing keep between frames. The scene (the chunk cache) and the
+/// GPU buffers are shared by every tab; the app swaps a tab's `TabCam`
+/// into the viewport to draw it ([`Viewport::swap_tab`]).
+#[derive(Debug, Clone)]
+pub struct TabCam {
+    pub camera: Camera,
+    wheel_acc: f32,
+    pinch_acc: f32,
+    gesture: Option<(CellHit, CellHit, Grab)>,
+    note_press: Option<([f64; 2], Pos2, Option<LevelIx>)>,
+    pub readout: Option<String>,
+    pub paint_strip: Option<Rect>,
+    pub level_labels: Vec<(LevelIx, Rect)>,
+    pub level_tab: Option<Rect>,
+    context_at: Option<([f64; 2], Option<LevelIx>)>,
+    pending_fit: Option<Fit>,
+    pub size_px: [f64; 2],
+    pub hover: Option<HoverInfo>,
+    pub tool_input: Option<ToolInput>,
+    pub stats: ViewStats,
+}
+
+impl Default for TabCam {
+    fn default() -> Self {
+        TabCam {
+            camera: Camera::default(),
+            wheel_acc: 0.0,
+            pinch_acc: 0.0,
+            gesture: None,
+            note_press: None,
+            readout: None,
+            paint_strip: None,
+            level_labels: Vec::new(),
+            level_tab: None,
+            context_at: None,
+            pending_fit: None,
+            size_px: [0.0, 0.0],
+            hover: None,
+            tool_input: None,
+            stats: ViewStats::default(),
+        }
+    }
+}
+
+impl TabCam {
+    /// A parked tab with this camera, framing `fit` when it is next drawn.
+    pub fn new(camera: Camera, fit: Option<Fit>) -> Self {
+        TabCam {
+            camera,
+            pending_fit: fit,
+            ..Default::default()
+        }
+    }
+
+    pub fn request_fit(&mut self, fit: Fit) {
+        self.pending_fit = Some(fit);
+    }
+
+    /// Level indices changed (`map[old]` is the new index): follow them in
+    /// a pending fit, drop what a parked tab held of the old levels.
+    pub fn remap_levels(&mut self, map: &[Option<usize>]) {
+        if let Some(Fit::Level(ix)) = self.pending_fit {
+            self.pending_fit = map.get(ix).copied().flatten().map(Fit::Level);
+        }
+        self.gesture = None;
+        self.note_press = None;
+        self.context_at = None;
+        self.level_labels.clear();
+        self.hover = None;
+    }
+
+    /// The fit waiting for the tab's next frame.
+    pub fn pending_fit(&self) -> Option<Fit> {
+        self.pending_fit
+    }
+
+    /// The world rect the tab shows (its last frame's size).
+    pub fn visible(&self) -> WRect {
+        self.camera.visible(self.size_px)
+    }
 }
 
 impl Default for Viewport {
@@ -176,7 +287,35 @@ impl Viewport {
             rebuild_budget: Some(Duration::from_millis(6)),
             map_only: false,
             draw_entities: true,
+            slot_pass: u64::MAX,
+            next_slot: 0,
         }
+    }
+
+    /// Swap the per-tab state with `t`: park the tab drawn so far in `t`
+    /// and take `t`'s ([`TabCam`]).
+    pub fn swap_tab(&mut self, t: &mut TabCam) {
+        use std::mem::swap;
+        swap(&mut self.camera, &mut t.camera);
+        swap(&mut self.wheel_acc, &mut t.wheel_acc);
+        swap(&mut self.pinch_acc, &mut t.pinch_acc);
+        swap(&mut self.gesture, &mut t.gesture);
+        swap(&mut self.note_press, &mut t.note_press);
+        swap(&mut self.readout, &mut t.readout);
+        swap(&mut self.paint_strip, &mut t.paint_strip);
+        swap(&mut self.level_labels, &mut t.level_labels);
+        swap(&mut self.level_tab, &mut t.level_tab);
+        swap(&mut self.context_at, &mut t.context_at);
+        swap(&mut self.pending_fit, &mut t.pending_fit);
+        swap(&mut self.size_px, &mut t.size_px);
+        swap(&mut self.hover, &mut t.hover);
+        swap(&mut self.tool_input, &mut t.tool_input);
+        swap(&mut self.stats, &mut t.stats);
+    }
+
+    /// The fit waiting for the next frame, if any.
+    pub fn pending_fit(&self) -> Option<Fit> {
+        self.pending_fit
     }
 
     pub fn scene(&self) -> Option<&Scene> {
@@ -190,6 +329,7 @@ impl Viewport {
         let mut r = gpu.renderer.write();
         if let Some(vg) = r.callback_resources.get_mut::<ViewportGpu>() {
             vg.clear_chunks();
+            vg.ref_images.clear();
             for i in 0..doc.project.tilesets.len() {
                 upload_tileset(vg, gpu, doc, i);
             }
@@ -259,14 +399,19 @@ impl Viewport {
         self.camera.zoom_at(c, zoom);
     }
 
-    fn apply_fit(&mut self, doc: &Document, fit: Fit) {
+    /// Fit the camera; [`Fit::World`] fits world `world` (index into
+    /// `project.worlds`): its levels, or its world-scope annotations when
+    /// it has no level.
+    fn apply_fit(&mut self, doc: &Document, fit: Fit, world: usize) {
         let rect = match fit {
-            Fit::World => (0..doc.levels.len())
-                .map(|i| level_wrect(doc, i))
-                .fold(WRect::EMPTY, |a, b| a.union(&b)),
+            Fit::World => world_wrect(doc, world),
             Fit::Level(i) if i < doc.levels.len() => level_wrect(doc, i),
             Fit::Level(_) => return,
             Fit::Rect(r) => r,
+            Fit::Center { center, zoom } => {
+                self.camera = Camera::centered(center, zoom, self.size_px);
+                return;
+            }
         };
         self.camera.fit(rect, self.size_px, 24.0);
     }
@@ -286,10 +431,15 @@ impl Viewport {
         painter.rect_filled(rect, 0.0, Color32::from_gray(24));
 
         let Some(doc) = cx.doc else {
+            let open = cx.keymap.label(crate::keymap::Cmd::Open);
             painter.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "No project open. Ctrl-O to open one.",
+                if open.is_empty() {
+                    "No project open: Open… in the toolbar opens one.".to_string()
+                } else {
+                    format!("No project open. {open} to open one.")
+                },
                 FontId::proportional(16.0),
                 Color32::from_gray(140),
             );
@@ -298,17 +448,32 @@ impl Viewport {
         if self.scene.is_none() {
             self.set_document(doc, cx.gpu);
         }
+        let world = cx.view.world_ix(doc);
+        if let Some(scene) = &mut self.scene {
+            scene.set_world(doc, world);
+        }
         if let Some(fit) = self.pending_fit.take() {
-            self.apply_fit(doc, fit);
+            self.apply_fit(doc, fit, world);
         }
 
+        // The n-th map drawn this pass draws with GPU slot n (several tabs).
+        let pass = ui.ctx().cumulative_pass_nr();
+        if pass != self.slot_pass {
+            self.slot_pass = pass;
+            self.next_slot = 0;
+        }
+        let slot = self.next_slot;
+        self.next_slot += 1;
+
         if self.map_only {
-            self.map(ui, cx, rect, [left, top, w, h]);
+            self.map(ui, cx, rect, [left, top, w, h], slot);
             return;
         }
 
         // ---- input: pan and zoom ----
-        let kb_free = !ui.ctx().egui_wants_keyboard_input();
+        // Keys belong to the focused tab (another tab only takes the
+        // pointer: a press there focuses it first).
+        let kb_free = cx.focused && !ui.ctx().egui_wants_keyboard_input();
         let space = kb_free && ui.input(|i| i.key_down(egui::Key::Space));
         let hand = space || cx.view.tool == Tool::Hand;
         let ppp32 = ppp as f32;
@@ -388,6 +553,14 @@ impl Viewport {
             .bg_color
             .as_ref()
             .map_or([0x40, 0x40, 0x48, 255], |c| parse_color(c.as_str()));
+        // Zoomed out, a level is its thumbnail over the flat fill (the fill
+        // shows until the thumbnail is made, a few a frame); a little above
+        // that zoom the thumbnails are made ahead, unseen. Levels under
+        // MIN_LEVEL_PT stay specks (below) and ask for none.
+        let ahead = !detail || cam.zoom * grid < THUMB_AHEAD_CELL_PX;
+        let look =
+            (ahead && cx.thumbs.is_some()).then(|| crate::thumbs::LayerLook::of(doc, cx.view));
+        let mut thumbs_drawn = 0;
         for &ix in &scene.draw_order {
             let lr = scene.levels[ix].rect;
             if !lr.intersects(&view) {
@@ -403,12 +576,37 @@ impl Viewport {
                 // Flat mode: a bit lighter so small levels read on the dark bg.
                 fill = fill.lerp_to_gamma(Color32::from_gray(120), 0.25);
             }
-            painter.rect_filled(to_srect(&lr), 0.0, fill);
+            if level.has_void() {
+                // A non-rectangular level fills only its cells: the void
+                // is transparent (a neighbour may sit in the notch).
+                for r in level_cell_rects(doc, ix) {
+                    painter.rect_filled(to_srect(&r), 0.0, fill);
+                }
+            } else {
+                painter.rect_filled(to_srect(&lr), 0.0, fill);
+            }
+            let sr = to_srect(&lr);
+            if let (Some(look), Some(thumbs)) = (&look, cx.thumbs.as_deref_mut())
+                && sr.width() >= MIN_LEVEL_PT
+                && sr.height() >= MIN_LEVEL_PT
+            {
+                let src = crate::thumbs::LevelThumb { doc, ix, look };
+                if let Some(tex) = thumbs.get(ui.ctx(), &src)
+                    && !detail
+                {
+                    // Its void is transparent: the map (or a level in the
+                    // notch) shows through.
+                    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                    painter.image(tex.id(), sr, uv, Color32::WHITE);
+                    thumbs_drawn += 1;
+                }
+            }
         }
 
         // ---- tiles via the GPU ----
         let mut stats = ViewStats {
             detail,
+            thumbs: thumbs_drawn,
             ..Default::default()
         };
         if detail {
@@ -436,13 +634,14 @@ impl Viewport {
                 for id in scene.retired.drain(..) {
                     vg.free_chunk(id);
                 }
-                vg.draws.clear();
+                vg.slot(&cx.gpu.device, slot).draws.clear();
                 for &cr in &self.visible {
                     let c = scene.chunk(cr);
                     vg.sync_chunk(&cx.gpu.device, &cx.gpu.queue, c);
                     stats.instances += c.instances.len();
+                    let draws = &mut vg.slot(&cx.gpu.device, slot).draws;
                     for run in &c.runs {
-                        vg.draws.push(DrawCmd {
+                        draws.push(DrawCmd {
                             chunk: c.id,
                             tex: run.tex,
                             start: run.start,
@@ -450,9 +649,21 @@ impl Viewport {
                         });
                     }
                 }
-                stats.draws = vg.draws.len();
                 stats.uploaded = vg.take_upload_count();
-                vg.viewport_px = [left as f32, top as f32, w as f32, h as f32];
+                // This tab's world (the tab is live while it draws).
+                references::sync(
+                    vg,
+                    cx.gpu,
+                    doc,
+                    cx.view.world_ix(doc),
+                    &mut cx.view.references,
+                    &scene.draw_order,
+                    &view,
+                    slot,
+                );
+                let s = vg.slot(&cx.gpu.device, slot);
+                stats.draws = s.draws.len();
+                s.viewport_px = [left as f32, top as f32, w as f32, h as f32];
                 let off = cam.snapped_offset();
                 let mut u = Uniforms {
                     view: [off[0] as f32, off[1] as f32, cam.zoom as f32, 0.0],
@@ -462,12 +673,12 @@ impl Viewport {
                 for i in 0..doc.project.layers.len() {
                     u.set_opacity(i, cx.view.layer_opacity(doc, i));
                 }
-                vg.write_uniforms(&cx.gpu.queue, &u);
+                vg.write_uniforms(&cx.gpu.queue, slot, &u);
             }
             drop(r);
             painter.add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                ViewportCallback,
+                ViewportCallback(slot),
             ));
             if self.draw_entities {
                 draw_entities(
@@ -475,6 +686,41 @@ impl Viewport {
                 );
             }
         } else {
+            // Flat: no tiles, but reference images still draw (one quad
+            // each) over the level fills.
+            if references::drawn(doc, &cx.view.references, cx.view.world_ix(doc)) {
+                let mut r = cx.gpu.renderer.write();
+                if let Some(vg) = r.callback_resources.get_mut::<ViewportGpu>() {
+                    vg.slot(&cx.gpu.device, slot).draws.clear();
+                    references::sync(
+                        vg,
+                        cx.gpu,
+                        doc,
+                        cx.view.world_ix(doc),
+                        &mut cx.view.references,
+                        &scene.draw_order,
+                        &view,
+                        slot,
+                    );
+                    vg.slot(&cx.gpu.device, slot).viewport_px =
+                        [left as f32, top as f32, w as f32, h as f32];
+                    let off = cam.snapped_offset();
+                    vg.write_uniforms(
+                        &cx.gpu.queue,
+                        slot,
+                        &Uniforms {
+                            view: [off[0] as f32, off[1] as f32, cam.zoom as f32, 0.0],
+                            size: [w as f32, h as f32, 0.0, 0.0],
+                            opacity: [[1.0; 4]; gpu::MAX_LAYERS / 4],
+                        },
+                    );
+                }
+                drop(r);
+                painter.add(egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    ViewportCallback(slot),
+                ));
+            }
             if self.draw_entities {
                 draw_world_labels(&painter, doc, scene, cx.view, &view, &to_screen);
             }
@@ -484,6 +730,17 @@ impl Viewport {
                     continue;
                 }
                 let sr = to_srect(&lr);
+                // Below the zoom steps (a fit of a huge world) a level can be
+                // under a pixel: keep a speck of at least MIN_LEVEL_PT so
+                // every level stays findable.
+                if sr.width() < MIN_LEVEL_PT || sr.height() < MIN_LEVEL_PT {
+                    let speck = Rect::from_center_size(
+                        sr.center(),
+                        egui::vec2(sr.width().max(MIN_LEVEL_PT), sr.height().max(MIN_LEVEL_PT)),
+                    );
+                    painter.rect_filled(speck, 0.0, Color32::from_gray(150));
+                    continue;
+                }
                 let level = doc.level(ix);
                 let name = if level.name.is_empty() {
                     level.slug.as_str()
@@ -514,6 +771,14 @@ impl Viewport {
                 snapshot: false,
             },
         );
+        references::draw_overlay(
+            &painter,
+            doc,
+            &cx.view.references,
+            cx.view.world_ix(doc),
+            &to_screen,
+            cx.accent,
+        );
 
         // ---- overlays ----
         let active = cx.view.active_level.filter(|&i| i < doc.levels.len());
@@ -529,32 +794,55 @@ impl Viewport {
                 draw_grid(&painter, &level_wrect(doc, ix), &view, g, &to_screen);
             }
         }
-        let outline = Stroke::new(1.0, Color32::from_black_alpha(160));
-        for &ix in &scene.draw_order {
-            let lr = scene.levels[ix].rect;
-            if lr.intersects(&view) && Some(ix) != active {
-                painter.rect_stroke(to_srect(&lr), 0.0, outline, StrokeKind::Outside);
-            }
-        }
-        if let Some(ix) = active {
-            let lr = scene.levels[ix].rect;
-            painter.rect_stroke(
-                to_srect(&lr),
-                0.0,
-                Stroke::new(2.0, cx.accent),
-                StrokeKind::Outside,
+        // A grid-vania world: its lattice, from the world origin.
+        if let Some(cell) = doc
+            .project
+            .worlds
+            .get(cx.view.world_ix(doc))
+            .and_then(|w| w.layout.lattice(doc.project.grid_size))
+        {
+            draw_lattice(
+                &painter,
+                &view,
+                [cell[0] as f64, cell[1] as f64],
+                cam.zoom,
+                &to_screen,
             );
         }
-        // Selected levels: a thick accent rect; selected tile stacks: their
-        // cell outlined.
-        for id in cx.view.selection.levels() {
-            if let Some(ix) = doc.level_ix_by_id(id) {
+        let outline = Stroke::new(1.0, Color32::from_black_alpha(160));
+        // A level's outline: its box, or the polygon of a non-rectangular
+        // level's cells.
+        let stroke_level = |ix: LevelIx, stroke: Stroke| {
+            if doc.level(ix).has_void() {
+                let pts: Vec<Pos2> = level_outline(doc, ix).into_iter().map(to_screen).collect();
+                painter.add(egui::Shape::closed_line(pts, stroke));
+            } else {
                 painter.rect_stroke(
                     to_srect(&level_wrect(doc, ix)),
                     0.0,
-                    Stroke::new(4.0, cx.accent),
+                    stroke,
                     StrokeKind::Outside,
                 );
+            }
+        };
+        for &ix in &scene.draw_order {
+            let lr = scene.levels[ix].rect;
+            if lr.intersects(&view) && Some(ix) != active {
+                stroke_level(ix, outline);
+            }
+        }
+        if let Some(ix) = active {
+            // The active level's void is hatched, so its shape reads.
+            if doc.level(ix).has_void() && scene.levels[ix].rect.intersects(&view) {
+                hatch_void(&painter, doc, ix, &to_srect, cx.accent);
+            }
+            stroke_level(ix, Stroke::new(2.0, cx.accent));
+        }
+        // Selected levels: a thick accent outline; selected tile stacks:
+        // their cell outlined.
+        for id in cx.view.selection.levels() {
+            if let Some(ix) = doc.level_ix_by_id(id) {
+                stroke_level(ix, Stroke::new(4.0, cx.accent));
             }
         }
         for (lid, layer, cell) in cx.view.selection.tiles() {
@@ -598,8 +886,14 @@ impl Viewport {
         for g in cx.ghosts {
             g.draw(&painter, &to_screen, cx.accent);
         }
-        if doc.levels.is_empty() && cx.view.drawing.is_none() {
-            empty_map_hint(&painter, rect, doc.project.layers.is_empty(), cx.accent);
+        if scene.draw_order.is_empty() && cx.view.drawing.is_none() {
+            empty_map_hint(
+                &painter,
+                rect,
+                doc.project.layers.is_empty(),
+                cx.accent,
+                &cx.keymap.label(crate::keymap::Cmd::CommandPalette),
+            );
         }
         self.readout = None;
         if let Some(d) = &cx.view.drawing {
@@ -611,13 +905,15 @@ impl Viewport {
         }
 
         // ---- hover and tool gestures ----
+        // A non-rectangular level is under the pointer only on its cells:
+        // in its notch, the level sitting there (or nothing) is.
         let level_under = pointer_world.and_then(|wp| {
             scene
                 .draw_order
                 .iter()
                 .rev()
                 .copied()
-                .find(|&i| scene.levels[i].rect.contains(wp))
+                .find(|&i| scene.levels[i].rect.contains(wp) && in_level_px(doc, i, wp))
         });
         let hit_in = |ix: LevelIx, layer: usize, wp: [f64; 2]| -> CellHit {
             if ix >= doc.levels.len() {
@@ -630,7 +926,7 @@ impl Viewport {
                     world_px: wp,
                 };
             }
-            let (g, cells) = crate::tools::hit_grid(doc, layer, ix);
+            let (g, _) = crate::tools::hit_grid(doc, layer, ix);
             let g = g as f64;
             let lr = level_wrect(doc, ix);
             let cell = [
@@ -641,10 +937,7 @@ impl Viewport {
                 level: ix,
                 layer,
                 cell,
-                inside: cell[0] >= 0
-                    && cell[1] >= 0
-                    && (cell[0] as u32) < cells[0]
-                    && (cell[1] as u32) < cells[1],
+                inside: crate::tools::cell_in_level(doc, layer, ix, cell),
                 world_px: wp,
             }
         };
@@ -701,7 +994,7 @@ impl Viewport {
         // the marquee).
         // The tool's strip at the top left of the map (Note options, Paint
         // modes) floats above the map: the tab steps aside from it.
-        let strip = tool_strip_rect(ui.ctx(), rect, tool);
+        let strip = tool_strip_rect(ui.ctx(), rect, tool).filter(|_| cx.focused);
         let tab = active.map(|ix| {
             let l = doc.level(ix);
             let name = if l.name.is_empty() {
@@ -735,7 +1028,43 @@ impl Viewport {
             )
         });
         let escape = kb_free && ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if cx.view.pick.is_some() && self.gesture.is_none() {
+        // The Select tool on reference images (the References pseudo-layer
+        // active): a press it takes doesn't start the Select gesture. Only
+        // the focused tab handles them (a press in another tab focuses it
+        // first), so a drag never reads another tab's camera.
+        let mut ref_cmds = Vec::new();
+        let ref_busy = cx.focused
+            && references::interact(
+                doc,
+                cx.view.world_ix(doc),
+                &mut cx.view.references,
+                &scene.draw_order,
+                &references::Input {
+                    tool,
+                    hand,
+                    hovered: resp.hovered(),
+                    pressed,
+                    down,
+                    released,
+                    escape,
+                    free: self.gesture.is_none()
+                        && cx.view.pick.is_none()
+                        && cx.view.drawing.is_none()
+                        && cx.view.paste.is_none()
+                        && !on_tab
+                        && handle.is_none()
+                        && !strip.zip(pointer_pts).is_some_and(|(r, p)| r.contains(p)),
+                    pointer_world,
+                    pointer: pointer_pts,
+                    to_screen: &to_screen,
+                },
+                &mut ref_cmds,
+            );
+        cx.actions
+            .extend(ref_cmds.into_iter().map(|c| Action::Apply(Box::new(c))));
+        if ref_busy {
+            // Taken by the reference drag.
+        } else if cx.view.pick.is_some() && self.gesture.is_none() {
             // A canvas pick armed by an editor takes the next click, whatever
             // the tool; Escape cancels it.
             if escape {
@@ -743,6 +1072,36 @@ impl Viewport {
                 cx.view.set_status("Pick cancelled", false);
             } else if resp.hovered() && pressed && !hand {
                 pick_at(doc, cx.view, level_under, pointer_world, cam.zoom);
+            }
+        } else if cx.view.paste.is_some() && self.gesture.is_none() {
+            // An armed paste: the ghost follows the pointer (centred on
+            // the project cell under it, in the level there) and a click
+            // lands it, whatever the tool; Escape cancels it.
+            if escape {
+                cx.view.paste = None;
+                cx.view.set_status("Paste cancelled", false);
+            } else if let Some(p) = cx.view.paste.as_mut() {
+                if !p.pinned
+                    && resp.hovered()
+                    && let Some(wp) = pointer_world
+                    && let Some(ix) = active
+                        .filter(|&a| a < doc.levels.len() && level_wrect(doc, a).contains(wp))
+                        .or(level_under)
+                {
+                    p.at = Some((ix, p.origin_under(doc, ix, wp)));
+                }
+                if resp.hovered()
+                    && pressed
+                    && !hand
+                    && let Some((ix, origin)) = p.at
+                {
+                    // Shift keeps the ghost armed for the next click.
+                    cx.actions.push(Action::PasteAt {
+                        level: ix,
+                        origin,
+                        keep: modifiers.shift,
+                    });
+                }
             }
         } else if escape && self.gesture.is_none() && cx.view.drawing.is_some() {
             // Escape cancels the drawing (or measurement) first.
@@ -769,7 +1128,7 @@ impl Viewport {
                 let cmd = if moved > crate::annot::DRAG_PX {
                     crate::annot::tool_drag(doc, cx.view, from, to, under, ctrl)
                 } else {
-                    crate::annot::tool_click(doc, cx.view, from, under, ctrl)
+                    crate::annot::tool_click_shift(doc, cx.view, from, under, ctrl, modifiers.shift)
                 };
                 if let Some(c) = cmd {
                     cx.actions.push(Action::Apply(Box::new(c)));
@@ -789,10 +1148,22 @@ impl Viewport {
                 (at, at, grab)
             };
             let add = crate::tools::pixel_mod(modifiers);
-            if tool == Tool::Select {
+            if tool == Tool::Shape {
+                // The active level when the press is in its box, void
+                // included (that is where a fill starts), else the level
+                // under the pointer; cells of the project grid.
+                let target = active
+                    .filter(|&a| pointer_world.is_some_and(|wp| level_wrect(doc, a).contains(wp)))
+                    .or(level_under);
+                if let (Some(ix), Some(wp)) = (target, pointer_world) {
+                    cx.view.active_level = Some(ix);
+                    let at = hit_in(ix, crate::tools::NO_LAYER, wp);
+                    self.gesture = Some(begin(at, Grab::None, cx.events));
+                }
+            } else if tool == Tool::Select {
                 if let Some(wp) = pointer_world {
                     let layer = hit_layer;
-                    self.gesture = select_press(
+                    self.gesture = select_press_alt(
                         doc,
                         cx.view,
                         SelectPress {
@@ -804,6 +1175,7 @@ impl Viewport {
                             add,
                             zoom: cam.zoom,
                         },
+                        modifiers.alt,
                     )
                     .map(|(ix, grab)| begin(hit_in(ix, layer, wp), grab, cx.events));
                 }
@@ -862,13 +1234,52 @@ impl Viewport {
         if tool == Tool::Select
             && !hand
             && resp.double_clicked()
+            && cx.view.paste.is_none()
             && let Some(ix) = level_under
         {
-            self.pending_fit = Some(Fit::Level(ix));
+            // On a group member, a double click enters the group (the
+            // member alone selected); elsewhere it frames the level.
+            let member = pointer_world
+                .and_then(|wp| select_item_at(doc, cx.view, level_under, wp, cam.zoom))
+                .filter(|item| crate::app::groups::enter(doc, cx.view, item));
+            if member.is_none() {
+                self.pending_fit = Some(Fit::Level(ix));
+            }
+        }
+        // The paste ghost where a click would land it.
+        if let Some(p) = cx.view.paste.as_mut() {
+            p.refresh(doc);
+            if let Some((_, g)) = &p.ghost {
+                g.draw(&painter, &to_screen, cx.accent);
+                // Why it can't land there (another project's grid, ...).
+                if let (Some(e), Some(r)) = (&g.error, g.outlines.last()) {
+                    painter.text(
+                        to_screen(r.min) + egui::vec2(0.0, -4.0),
+                        Align2::LEFT_BOTTOM,
+                        e,
+                        FontId::proportional(13.0),
+                        Color32::from_rgb(230, 80, 80),
+                    );
+                }
+                // How it is turned (X, Y, R), at its bottom-left corner.
+                if let (Some(_), Some(r)) = (p.transform.flip, g.outlines.last()) {
+                    crate::arrange::ghost_badge(
+                        &painter,
+                        to_screen([r.min[0], r.max[1]]),
+                        p.transform.flip,
+                        cx.accent,
+                    );
+                }
+            }
         }
 
         let hover_ix = active
-            .filter(|&a| pointer_world.is_some_and(|wp| level_wrect(doc, a).contains(wp)))
+            .filter(|&a| {
+                pointer_world.is_some_and(|wp| {
+                    level_wrect(doc, a).contains(wp)
+                        && (tool == Tool::Shape || in_level_px(doc, a, wp))
+                })
+            })
             .or(level_under);
         let hover_hit = match (hover_ix, tool_layer, pointer_world) {
             (Some(ix), Some(l), Some(wp)) if resp.hovered() || self.gesture.is_some() => {
@@ -993,6 +1404,61 @@ impl Viewport {
             }
         }
 
+        // Shape: the rect a release cuts out (red) or fills back in (green,
+        // Shift), and the hovered cell.
+        if tool == Tool::Shape {
+            let cut = Color32::from_rgb(230, 80, 80);
+            let fill = Color32::from_rgb(90, 200, 120);
+            let col = if modifiers.shift { fill } else { cut };
+            let cells_rect = |ix: LevelIx, a: [i32; 2], b: [i32; 2]| -> Option<Rect> {
+                let l = doc.level(ix);
+                let r = crate::tools::clip_rect(cell_rect(a, b), l.size);
+                (r[0] < r[2] && r[1] < r[3]).then(|| {
+                    let o = [l.world_px[0] as f64, l.world_px[1] as f64];
+                    to_srect(&WRect::new(
+                        [o[0] + r[0] as f64 * grid, o[1] + r[1] as f64 * grid],
+                        [o[0] + r[2] as f64 * grid, o[1] + r[3] as f64 * grid],
+                    ))
+                })
+            };
+            match (self.gesture, hover_ix, pointer_world) {
+                (Some((start, at, _)), _, _) if start.level < doc.levels.len() => {
+                    if let Some(r) = cells_rect(start.level, start.cell, at.cell) {
+                        painter.rect_filled(r, 0.0, col.gamma_multiply(0.3));
+                        painter.rect_stroke(r, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
+                        let l = doc.level(start.level);
+                        let c = crate::tools::clip_rect(cell_rect(start.cell, at.cell), l.size);
+                        painter.text(
+                            r.center_bottom() + egui::vec2(0.0, 4.0),
+                            Align2::CENTER_TOP,
+                            format!(
+                                "{} {} x {}",
+                                if modifiers.shift {
+                                    "fill in"
+                                } else {
+                                    "cut out"
+                                },
+                                c[2] - c[0],
+                                c[3] - c[1]
+                            ),
+                            FontId::proportional(12.0),
+                            Color32::WHITE,
+                        );
+                    }
+                }
+                (None, Some(ix), Some(wp)) if resp.hovered() => {
+                    let c = hit_in(ix, crate::tools::NO_LAYER, wp).cell;
+                    if let Some(r) = cells_rect(ix, c, c) {
+                        painter.rect_stroke(r, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
+                    }
+                }
+                _ => {}
+            }
+            if escape && self.gesture.is_none() {
+                cx.actions.push(Action::SetTool(Tool::Select));
+            }
+        }
+
         // Cursor.
         if resp.hovered() || self.gesture.is_some() {
             let icon = if resp.dragged_by(egui::PointerButton::Middle)
@@ -1006,12 +1472,24 @@ impl Viewport {
             {
                 CursorIcon::NotAllowed
             } else if tool.paints()
-                || matches!(tool, Tool::Entity | Tool::Note | Tool::Measure)
+                || matches!(
+                    tool,
+                    Tool::Entity | Tool::Note | Tool::Measure | Tool::Shape
+                )
                 || cx.view.pick.is_some()
             {
                 CursorIcon::Crosshair
             } else if let Some(Grab::Handle(e)) = self.gesture.map(|g| g.2) {
                 handle_cursor(e)
+            } else if matches!(self.gesture, Some((_, _, Grab::Vertex(_)))) {
+                CursorIcon::Grabbing
+            } else if tool == Tool::Select
+                && !hand
+                && pointer_world
+                    .and_then(|wp| crate::annot::handle_at(doc, cx.view, wp, cam.zoom))
+                    .is_some()
+            {
+                CursorIcon::Grab
             } else if let Some(e) = handle {
                 handle_cursor(e)
             } else if matches!(
@@ -1051,6 +1529,47 @@ impl Viewport {
                 painter.rect_stroke(r, 0.0, Stroke::new(1.0, cx.accent), StrokeKind::Inside);
             }
             _ => {}
+        }
+        // Select: the geometry handles of the one selected annotation, and
+        // a handle drag where its release puts it.
+        if tool == Tool::Select && !hand {
+            let drag = match self.gesture {
+                Some((start, at, Grab::Vertex(h))) => Some((
+                    h,
+                    [
+                        at.world_px[0] - start.world_px[0],
+                        at.world_px[1] - start.world_px[1],
+                    ],
+                    crate::tools::pixel_mod(modifiers),
+                )),
+                _ => None,
+            };
+            let hover = pointer_world.filter(|_| resp.hovered() && self.gesture.is_none());
+            draw_note_handles(
+                &painter, doc, cx.view, drag, hover, cam.zoom, &to_screen, cx.accent,
+            );
+        }
+
+        // The cells Copy takes from the active int_grid layer (the last
+        // marquee on it), dashed.
+        if let Some(m) = &cx.view.grid_marquee
+            && cx
+                .view
+                .active_layer
+                .and_then(|l| doc.project.layers.get(l))
+                .is_some_and(|d| d.slug == m.layer)
+            && let Some(ix) = doc.level_ix_by_id(&m.level)
+        {
+            let lr = level_wrect(doc, ix);
+            let g = doc.project.grid_size as f64;
+            let r = WRect::from_pos_size(
+                [
+                    lr.min[0] + m.rect.x as f64 * g,
+                    lr.min[1] + m.rect.y as f64 * g,
+                ],
+                [m.rect.w as f64 * g, m.rect.h as f64 * g],
+            );
+            crate::ghost::dashed_rect(&painter, to_srect(&r), Stroke::new(1.5, cx.accent));
         }
 
         // The other levels' names (with tiles drawn; the flat view centres
@@ -1203,12 +1722,15 @@ impl Viewport {
 
         // The Note tool's options strip, top left of the map; in its place
         // with a Paint mode, the Paint group's mode strip.
-        if tool == Tool::Note {
+        // (The focused tab's only: the strips are one egui area each.)
+        if tool == Tool::Note && cx.focused {
             note_strip(ui.ctx(), rect, cx.view);
         }
-        self.paint_strip = tool
-            .is_paint_mode()
-            .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions));
+        if tool == Tool::Shape {
+            shape_strip(ui.ctx(), rect, doc, active, cx.actions);
+        }
+        self.paint_strip = (tool.is_paint_mode() && cx.focused)
+            .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions, doc, cx.view, cx.keymap));
 
         // Context menu (a right click; right drag pans).
         if resp.secondary_clicked() {
@@ -1232,12 +1754,55 @@ impl Viewport {
                     cx.actions.push(Action::FitLevel);
                     ui.close();
                 }
+                if ui.button(format!("Duplicate {slug}")).clicked() {
+                    cx.actions.push(Action::DuplicateLevel(ix));
+                    ui.close();
+                }
+                if ui
+                    .button(format!("Shape {slug}…"))
+                    .on_hover_text("Cut rectangles out of the level (or fill them back in)")
+                    .clicked()
+                {
+                    cx.view.active_level = Some(ix);
+                    cx.actions.push(Action::SetTool(Tool::Shape));
+                    cx.view.set_status(
+                        format!(
+                            "Shape {slug}: drag to cut cells out, Shift-drag to fill them back \
+                             in; Escape when done"
+                        ),
+                        false,
+                    );
+                    ui.close();
+                }
                 if ui.button(format!("Delete {slug}…")).clicked() {
                     cx.view.active_level = Some(ix);
                     cx.actions.push(Action::DeleteLevel);
                     ui.close();
                 }
+                if ui.button(format!("Crop {slug} to content")).clicked() {
+                    cx.view.active_level = Some(ix);
+                    cx.actions.push(Action::CropLevel);
+                    ui.close();
+                }
+                let here = doc.levels[ix].world;
+                if doc.project.worlds.len() > 1 {
+                    ui.menu_button("Move to world", |ui| {
+                        for (w, world) in doc.project.worlds.iter().enumerate() {
+                            if w == here {
+                                continue;
+                            }
+                            if ui.button(crate::app::worlds::world_label(world)).clicked() {
+                                cx.actions.push(Action::MoveLevelToWorld {
+                                    level: doc.level(ix).slug.clone(),
+                                    world: world.slug.clone(),
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
+                }
             }
+            crate::arrange::context_menu(ui, doc, cx.view, cx.actions, cx.keymap);
         });
     }
 }
@@ -1247,7 +1812,14 @@ impl Viewport {
     /// visible layer's chunks at the camera's zoom, entity boxes if
     /// [`Viewport::draw_entities`]. `px` is the viewport in physical px
     /// (left, top, width, height).
-    fn map(&mut self, ui: &mut egui::Ui, cx: &mut ViewportCx<'_>, rect: Rect, px: [f64; 4]) {
+    fn map(
+        &mut self,
+        ui: &mut egui::Ui,
+        cx: &mut ViewportCx<'_>,
+        rect: Rect,
+        px: [f64; 4],
+        slot: usize,
+    ) {
         let Some(doc) = cx.doc else {
             return;
         };
@@ -1277,7 +1849,10 @@ impl Viewport {
                 .bg_color
                 .as_ref()
                 .map_or(project_bg, |c| parse_color(c.as_str()));
-            painter.rect_filled(to_srect(&lr), 0.0, Color32::from_rgb(bg[0], bg[1], bg[2]));
+            // Only a non-rectangular level's cells (the void is transparent).
+            for r in level_cell_rects(doc, ix) {
+                painter.rect_filled(to_srect(&r), 0.0, Color32::from_rgb(bg[0], bg[1], bg[2]));
+            }
         }
         let vs: &ViewState = cx.view;
         scene.collect_visible(
@@ -1296,12 +1871,15 @@ impl Viewport {
             for id in scene.retired.drain(..) {
                 vg.free_chunk(id);
             }
-            vg.draws.clear();
+            vg.slot(&cx.gpu.device, slot).draws.clear();
+            // Reference images aren't part of a snapshot.
+            vg.slot(&cx.gpu.device, slot).ref_draws.clear();
             for &cr in &self.visible {
                 let c = scene.chunk(cr);
                 vg.sync_chunk(&cx.gpu.device, &cx.gpu.queue, c);
+                let draws = &mut vg.slot(&cx.gpu.device, slot).draws;
                 for run in &c.runs {
-                    vg.draws.push(DrawCmd {
+                    draws.push(DrawCmd {
                         chunk: c.id,
                         tex: run.tex,
                         start: run.start,
@@ -1309,7 +1887,8 @@ impl Viewport {
                     });
                 }
             }
-            vg.viewport_px = [left as f32, top as f32, w as f32, h as f32];
+            vg.slot(&cx.gpu.device, slot).viewport_px =
+                [left as f32, top as f32, w as f32, h as f32];
             let off = cam.snapped_offset();
             let mut u = Uniforms {
                 view: [off[0] as f32, off[1] as f32, cam.zoom as f32, 0.0],
@@ -1319,12 +1898,12 @@ impl Viewport {
             for i in 0..doc.project.layers.len() {
                 u.set_opacity(i, cx.view.layer_opacity(doc, i));
             }
-            vg.write_uniforms(&cx.gpu.queue, &u);
+            vg.write_uniforms(&cx.gpu.queue, slot, &u);
         }
         drop(r);
         painter.add(egui_wgpu::Callback::new_paint_callback(
             rect,
-            ViewportCallback,
+            ViewportCallback(slot),
         ));
         if self.draw_entities {
             draw_entities(
@@ -1505,23 +2084,59 @@ fn draw_dragged_selection(
 /// The Paint group's modes as a segmented strip (Brush, Line, Rectangle,
 /// Fill), where the Note tool's options go. A click is `SetTool`, exactly
 /// as the mode's key. Returns where it was drawn.
-fn paint_strip(ctx: &egui::Context, map: Rect, tool: Tool, actions: &mut Vec<Action>) -> Rect {
+fn paint_strip(
+    ctx: &egui::Context,
+    map: Rect,
+    tool: Tool,
+    actions: &mut Vec<Action>,
+    doc: &Document,
+    view: &mut ViewState,
+    km: &crate::keymap::Keymap,
+) -> Rect {
     egui::Area::new(egui::Id::new("paint tool strip"))
         .fixed_pos(map.min + STRIP_OFFSET)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| {
+                // A narrow map wraps the strip (Density, Turn) onto a
+                // second row rather than past the map's right edge.
+                ui.set_max_width((map.width() - 2.0 * STRIP_OFFSET.x - 24.0).max(120.0));
+                ui.horizontal_wrapped(|ui| {
                     ui.weak("Paint");
                     for t in Tool::PAINT_MODES {
                         if ui
                             .add(egui::Button::selectable(tool == t, t.name()))
-                            .on_hover_text(format!("{} ({})", t.name(), t.shortcut()))
+                            .on_hover_text(km.hint(t.name(), crate::keymap::Cmd::Tool(t)))
                             .clicked()
                             && tool != t
                         {
                             actions.push(Action::SetTool(t));
                         }
+                    }
+                    let tiles_layer = view
+                        .active_layer
+                        .and_then(|l| doc.project.layers.get(l))
+                        .filter(|d| d.is_tiles());
+                    if let Some(def) = tiles_layer {
+                        ui.separator();
+                        random_toggle(ui, view, def.slug.as_str());
+                        let mut d = view.palette.density.clamp(1, 100);
+                        let tip = "Scatter: each cell of a stroke, rectangle or fill on a tiles \
+                                   layer is painted with this chance";
+                        // The slider and its value box are one piece that
+                        // does not wrap by itself: a new row when they
+                        // would not fit; the label apart, so it can wrap.
+                        let room = ui.max_rect().right() - ui.cursor().left();
+                        if room < ui.spacing().slider_width + 70.0 {
+                            ui.end_row();
+                        }
+                        let r = ui
+                            .add(egui::Slider::new(&mut d, 1..=100).suffix(" %"))
+                            .on_hover_text(tip);
+                        crate::app::fields::mark(ui, "paint:density", r.rect);
+                        ui.label("Density").on_hover_text(tip);
+                        view.palette.density = d;
+                        crate::arrange::turn_buttons(ui, view.brush_flip, actions, km);
                     }
                 });
             });
@@ -1529,6 +2144,34 @@ fn paint_strip(ctx: &egui::Context, map: Rect, tool: Tool, actions: &mut Vec<Act
         .response
         .rect
 }
+
+/// The Paint strip's Random toggle for tiles layer `layer`: on turns a
+/// stamp into a random brush of its tiles (one alternative each), off
+/// turns a random brush back into a stamp of its first alternative.
+fn random_toggle(ui: &mut egui::Ui, view: &mut ViewState, layer: &str) {
+    let brush = view.palette.brush(layer).cloned();
+    let on = matches!(brush, Some(Brush::Random { .. }));
+    let r = ui
+        .add(egui::Button::selectable(on, "Random"))
+        .on_hover_text(
+            "Paint one of the selected tiles per cell, by weight (select several in the \
+             palette; Ctrl adds tiles, Shift adds a stamp)",
+        );
+    crate::app::fields::mark(ui, "paint:random", r.rect);
+    if !r.clicked() {
+        return;
+    }
+    match brush.as_ref().and_then(Brush::toggled_random) {
+        Some(b) => {
+            view.palette.brushes.insert(layer.to_string(), b);
+        }
+        None => view.set_status("Pick tiles in the palette first", true),
+    }
+}
+
+/// The least size (screen points) a level is drawn at on the flat
+/// zoomed-out view, however far out the camera is.
+pub const MIN_LEVEL_PT: f32 = 6.0;
 
 /// The Note tool's options: kind, scope (Auto or World), the pin icon.
 fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
@@ -1545,6 +2188,7 @@ fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
                             NoteKind::Pin => "Pin",
                             NoteKind::Path => "Path",
                             NoteKind::Region => "Region",
+                            NoteKind::Connector => "Connector",
                         };
                         if ui
                             .add(egui::Button::selectable(view.note_tool.kind == k, label))
@@ -1589,6 +2233,9 @@ fn note_strip(ctx: &egui::Context, map: Rect, view: &mut ViewState) {
                             "click points, Enter or double click finishes, Backspace drops one",
                         );
                     }
+                    if view.note_tool.kind == NoteKind::Connector {
+                        ui.weak("click a room or entity, waypoints, the other end; Enter finishes");
+                    }
                 });
             });
         });
@@ -1624,6 +2271,86 @@ fn draw_snaps(
     }
 }
 
+/// The handles of the one selected annotation ([`crate::annot::handles`]):
+/// a square per vertex, waypoint or rect handle, the highlighted one
+/// ([`ViewState::vertex`]) and the one under the pointer filled; gray
+/// when it is locked (they show, but don't edit). With `drag` (a handle,
+/// the drag in world px, Ctrl), the annotation where the release puts it
+/// and the guides it snapped to.
+#[allow(clippy::too_many_arguments)]
+fn draw_note_handles(
+    painter: &egui::Painter,
+    doc: &Document,
+    view: &ViewState,
+    drag: Option<(crate::annot::Handle, [f64; 2], bool)>,
+    hover: Option<[f64; 2]>,
+    zoom: f64,
+    to_screen: &dyn Fn([f64; 2]) -> Pos2,
+    accent: Color32,
+) {
+    let Some(r) = crate::annot::edited_note(doc, view) else {
+        return;
+    };
+    let mut note = r.note.clone();
+    let mut moved = false;
+    if let Some((h, d, pixel)) = drag.filter(|d| d.1 != [0.0, 0.0]) {
+        match crate::annot::plan_vertex_move(doc, view, h, d, pixel) {
+            Ok(p) => {
+                note = p.note;
+                moved = true;
+                let all = WRect::new(
+                    [f64::NEG_INFINITY, f64::NEG_INFINITY],
+                    [f64::INFINITY, f64::INFINITY],
+                );
+                draw_snaps(painter, &p.snaps, &all, to_screen);
+            }
+            Err(e) => {
+                if let Some(p) = painter.ctx().pointer_latest_pos() {
+                    painter.text(
+                        p + egui::vec2(14.0, 14.0),
+                        Align2::LEFT_TOP,
+                        e,
+                        FontId::proportional(12.0),
+                        Color32::from_rgb(230, 120, 120),
+                    );
+                }
+            }
+        }
+    }
+    let at = crate::annot::NoteRef {
+        at: r.at,
+        note: &note,
+    };
+    let mut mesh = egui::Mesh::default();
+    if moved {
+        for (a, b) in crate::annot::segments(doc, at) {
+            notes::seg_quad(&mut mesh, to_screen(a), to_screen(b), 2.0, accent);
+        }
+    }
+    let hot = view
+        .vertex
+        .as_ref()
+        .filter(|(id, _)| *id == note.id)
+        .map(|v| v.1);
+    let under = hover
+        .and_then(|wp| crate::annot::handle_at(doc, view, wp, zoom))
+        .map(|v| v.1);
+    let edge = if note.locked {
+        Color32::from_gray(150)
+    } else {
+        accent
+    };
+    for (h, p) in crate::annot::handles(doc, at) {
+        let c = to_screen(p);
+        let filled = Some(h) == hot || Some(h) == under;
+        let s = if filled { 9.0 } else { 7.0 };
+        let r = Rect::from_center_size(c, egui::vec2(s, s));
+        mesh.add_colored_rect(r, if filled { edge } else { Color32::from_gray(20) });
+        outline(&mut mesh, r, 1.0, edge);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// The Note tool's drawing in progress (a polyline to the pointer) or a
 /// measurement, with its readout by the pointer.
 fn draw_drawing(
@@ -1634,6 +2361,28 @@ fn draw_drawing(
     to_screen: &dyn Fn([f64; 2]) -> Pos2,
     accent: Color32,
 ) -> Option<String> {
+    if d.connector.is_some() {
+        // A connector: from its start through the waypoints to its end (or
+        // the pointer), a dot on each waypoint.
+        let sp: Vec<Pos2> = crate::annot::draft_line(doc, d, pointer)
+            .iter()
+            .map(|p| to_screen([p[0] as f64, p[1] as f64]))
+            .collect();
+        let mut mesh = egui::Mesh::default();
+        for k in 1..sp.len() {
+            notes::seg_quad(&mut mesh, sp[k - 1], sp[k], 2.0, accent);
+        }
+        for p in &d.points {
+            notes::disk(
+                &mut mesh,
+                to_screen([p[0] as f64, p[1] as f64]),
+                3.0,
+                accent,
+            );
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        return None;
+    }
     let mut pts: Vec<[i64; 2]> = d.points.clone();
     let live = if d.done { None } else { pointer };
     if let Some(p) = live {
@@ -1707,15 +2456,207 @@ pub struct SelectPress {
     pub zoom: f64,
 }
 
+/// What Fit world frames for world `w`: its levels' rects, or with none
+/// its world-scope annotations' (empty when it has neither).
+pub fn world_wrect(doc: &Document, w: usize) -> WRect {
+    let levels = (0..doc.levels.len())
+        .filter(|&i| doc.levels[i].world == w)
+        .map(|i| level_wrect(doc, i))
+        .fold(WRect::EMPTY, |a, b| a.union(&b));
+    if !levels.is_empty() {
+        return levels;
+    }
+    let Some(world) = doc.project.worlds.get(w) else {
+        return WRect::EMPTY;
+    };
+    world
+        .notes
+        .iter()
+        .filter_map(|n| {
+            let r = crate::annot::NoteRef {
+                at: crate::annot::At::World(w),
+                note: n,
+            };
+            crate::annot::world_bbox(doc, r)
+        })
+        .fold(WRect::EMPTY, |a, b| a.union(&b))
+}
+
 /// The topmost level whose rect holds world pixel `wp` (draw order:
-/// depth, then index).
+/// depth, then index), in any world: for a project with one world. The
+/// map uses [`level_under_in`].
 pub fn level_under(doc: &Document, wp: [f64; 2]) -> Option<LevelIx> {
     let mut order: Vec<LevelIx> = (0..doc.levels.len()).collect();
     order.sort_by_key(|&i| (doc.level(i).depth, i));
     order
         .into_iter()
         .rev()
-        .find(|&i| level_wrect(doc, i).contains(wp))
+        .find(|&i| level_wrect(doc, i).contains(wp) && in_level_px(doc, i, wp))
+}
+
+/// Whether world pixel `wp` is on a cell of level `ix`: inside its box
+/// and, for a non-rectangular level, in none of its void rects.
+pub fn in_level_px(doc: &Document, ix: LevelIx, wp: [f64; 2]) -> bool {
+    let l = doc.level(ix);
+    let g = doc.project.grid_size.max(1) as f64;
+    let x = ((wp[0] - l.world_px[0] as f64) / g).floor() as i64;
+    let y = ((wp[1] - l.world_px[1] as f64) / g).floor() as i64;
+    l.in_level(x, y)
+}
+
+/// World rects covering exactly the cells of level `ix`: its box, or for a
+/// non-rectangular level its runs of cells, row runs merged downwards
+/// while they repeat.
+pub fn level_cell_rects(doc: &Document, ix: LevelIx) -> Vec<WRect> {
+    let l = doc.level(ix);
+    if !l.has_void() {
+        return vec![level_wrect(doc, ix)];
+    }
+    let g = doc.project.grid_size.max(1) as f64;
+    let [w, h] = [l.size[0] as usize, l.size[1] as usize];
+    let mask = l.cell_mask();
+    let o = [l.world_px[0] as f64, l.world_px[1] as f64];
+    // Open rects by their run `(x0, x1)`: the row they started on.
+    let mut open: Vec<(usize, usize, usize)> = Vec::new();
+    let mut out = Vec::new();
+    let close = |(x0, x1, y0): (usize, usize, usize), y1: usize, out: &mut Vec<WRect>| {
+        out.push(WRect::new(
+            [o[0] + x0 as f64 * g, o[1] + y0 as f64 * g],
+            [o[0] + x1 as f64 * g, o[1] + y1 as f64 * g],
+        ));
+    };
+    for y in 0..=h {
+        let mut runs = Vec::new();
+        if y < h {
+            let mut x = 0;
+            while x < w {
+                if mask[y * w + x] {
+                    let s = x;
+                    while x < w && mask[y * w + x] {
+                        x += 1;
+                    }
+                    runs.push((s, x));
+                } else {
+                    x += 1;
+                }
+            }
+        }
+        let mut next = Vec::new();
+        for r in open.drain(..) {
+            if runs.contains(&(r.0, r.1)) {
+                next.push(r);
+            } else {
+                close(r, y, &mut out);
+            }
+        }
+        for (x0, x1) in runs {
+            if !next.iter().any(|r| (r.0, r.1) == (x0, x1)) {
+                next.push((x0, x1, y));
+            }
+        }
+        open = next;
+    }
+    out
+}
+
+/// A non-rectangular level's outline in world pixels (its box's corners
+/// for a rectangle), as `worlds_core::Level::outline`.
+pub fn level_outline(doc: &Document, ix: LevelIx) -> Vec<[f64; 2]> {
+    doc.level(ix)
+        .outline(doc.project.grid_size)
+        .into_iter()
+        .map(|[x, y]| [x as f64, y as f64])
+        .collect()
+}
+
+/// Hatch the void of level `ix` (its cut-out cells): diagonal strokes over
+/// each void rect, clipped to it.
+fn hatch_void(
+    painter: &egui::Painter,
+    doc: &Document,
+    ix: LevelIx,
+    to_srect: &dyn Fn(&WRect) -> Rect,
+    accent: Color32,
+) {
+    let l = doc.level(ix);
+    let g = doc.project.grid_size.max(1) as f64;
+    let o = [l.world_px[0] as f64, l.world_px[1] as f64];
+    let stroke = Stroke::new(1.0, accent.gamma_multiply(0.45));
+    for r in &l.void {
+        let x1 = (r.x + r.w).min(l.size[0]);
+        let y1 = (r.y + r.h).min(l.size[1]);
+        if r.x >= x1 || r.y >= y1 {
+            continue;
+        }
+        let sr = to_srect(&WRect::new(
+            [o[0] + r.x as f64 * g, o[1] + r.y as f64 * g],
+            [o[0] + x1 as f64 * g, o[1] + y1 as f64 * g],
+        ));
+        let p = painter.with_clip_rect(sr.intersect(painter.clip_rect()));
+        p.rect_filled(sr, 0.0, Color32::from_black_alpha(40));
+        let step = 8.0;
+        let span = sr.width() + sr.height();
+        let mut d = 0.0;
+        while d < span {
+            let a = pos2(sr.min.x + d, sr.min.y);
+            let b = pos2(sr.min.x + d - sr.height(), sr.max.y);
+            p.line_segment([a, b], stroke);
+            d += step;
+        }
+    }
+}
+
+/// The Shape tool's strip: what a drag does, Make rectangular, Done.
+fn shape_strip(
+    ctx: &egui::Context,
+    map: Rect,
+    doc: &Document,
+    active: Option<LevelIx>,
+    actions: &mut Vec<Action>,
+) {
+    egui::Area::new(egui::Id::new("shape tool strip"))
+        .fixed_pos(map.min + STRIP_OFFSET)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let level = active.map(|ix| doc.level(ix));
+                    ui.weak(match level {
+                        Some(l) => format!("Shape {}", l.slug),
+                        None => "Shape".into(),
+                    });
+                    ui.label("drag: cut out · Shift-drag: fill in");
+                    if let Some(l) = level.filter(|l| l.has_void())
+                        && ui.button("Make rectangular").clicked()
+                    {
+                        actions.push(Action::Apply(Box::new(
+                            worlds_core::Command::SetLevelVoid {
+                                level: l.slug.clone(),
+                                void: Vec::new(),
+                                restore: false,
+                            },
+                        )));
+                    }
+                    if ui.button("Done").on_hover_text("Escape").clicked() {
+                        actions.push(Action::SetTool(Tool::Select));
+                    }
+                });
+            });
+        });
+}
+
+/// The topmost level of world `world` with a cell under world pixel `wp`
+/// (draw order: depth, then index): a non-rectangular level's void isn't
+/// part of it.
+pub fn level_under_in(doc: &Document, world: usize, wp: [f64; 2]) -> Option<LevelIx> {
+    let mut order: Vec<LevelIx> = (0..doc.levels.len())
+        .filter(|&i| doc.levels[i].world == world)
+        .collect();
+    order.sort_by_key(|&i| (doc.level(i).depth, i));
+    order
+        .into_iter()
+        .rev()
+        .find(|&i| level_wrect(doc, i).contains(wp) && in_level_px(doc, i, wp))
 }
 
 /// What a Select click at `wp` picks, topmost first: a note or pin (card,
@@ -1747,7 +2688,13 @@ pub fn select_item_at(
 
 /// A map with no level says how to make one (and, with no layer either,
 /// where layers come from): a quiet card in the middle of the map.
-fn empty_map_hint(painter: &egui::Painter, rect: Rect, no_layers: bool, accent: Color32) {
+fn empty_map_hint(
+    painter: &egui::Painter,
+    rect: Rect,
+    no_layers: bool,
+    accent: Color32,
+    palette_key: &str,
+) {
     let wrap = (rect.width() - 48.0).clamp(120.0, 460.0);
     let title = painter.layout(
         "No levels yet".into(),
@@ -1755,9 +2702,12 @@ fn empty_map_hint(painter: &egui::Painter, rect: Rect, no_layers: bool, accent: 
         Color32::from_gray(225),
         wrap,
     );
-    let mut body = String::from(
-        "Right-click the map and pick New level here…\nor press Ctrl+P and run New level…",
-    );
+    let mut body = String::from("Right-click the map and pick New level here…\n");
+    if palette_key.is_empty() {
+        body.push_str("or run New level… from Commands in the toolbar");
+    } else {
+        body.push_str(&format!("or press {palette_key} and run New level…"));
+    }
     if no_layers {
         body.push_str(
             "\n\nLayers (what you paint on) and tilesets (your art)\nare set up in the Project tab.",
@@ -1828,7 +2778,43 @@ pub fn select_press(
     view: &mut ViewState,
     p: SelectPress,
 ) -> Option<(LevelIx, Grab)> {
+    select_press_alt(doc, view, p, false)
+}
+
+/// [`select_press`] with Alt held: on a segment of the one selected
+/// annotation, it grabs [`Grab::InsertVertex`] (the release adds a point
+/// there). Without Alt, and first in any case, a geometry handle of the one
+/// selected annotation ([`crate::annot::handle_at`]) grabs
+/// [`Grab::Vertex`] and becomes the highlighted one ([`ViewState::vertex`]);
+/// a press anywhere else takes the highlight away.
+pub fn select_press_alt(
+    doc: &Document,
+    view: &mut ViewState,
+    p: SelectPress,
+    alt: bool,
+) -> Option<(LevelIx, Grab)> {
     use crate::view::SelItem;
+    // A new press drops the grid marquee (a marquee release sets it
+    // again); Ctrl, which adds to the selection, keeps it.
+    if !p.add {
+        view.grid_marquee = None;
+    }
+    let carrier = |view: &ViewState| {
+        crate::annot::edited_note(doc, view)
+            .and_then(|r| r.level())
+            .or(p.level_under)
+            .or(p.active.filter(|&a| a < doc.levels.len()))
+            .or((!doc.levels.is_empty()).then_some(0))
+            .unwrap_or(NO_LEVEL)
+    };
+    if let Some((id, h)) = crate::annot::handle_at(doc, view, p.wp, p.zoom) {
+        view.vertex = Some((id, h));
+        return Some((carrier(view), Grab::Vertex(h)));
+    }
+    view.vertex = None;
+    if alt && crate::annot::plan_vertex_insert(doc, view, p.wp, p.zoom, false).is_some() {
+        return Some((carrier(view), Grab::InsertVertex));
+    }
     if let (true, Some(ix)) = (p.on_tab, p.active) {
         let me = SelItem::Level(doc.ids[ix].clone());
         if view.selection.contains(&me) && view.selection.items.len() > 1 {
@@ -1856,10 +2842,14 @@ pub fn select_press(
         }
         let was_selected = view.selection.contains(&item);
         if !was_selected {
+            // A group member brings its group (unless the group is entered).
+            let items = crate::app::groups::click_items(doc, view, item);
             if p.add {
-                view.selection.add(item);
+                for i in items {
+                    view.selection.add(i);
+                }
             } else {
-                view.selection.set([item]);
+                view.selection.set(items);
             }
         }
         return Some((level.unwrap_or(carrier), Grab::Selection { was_selected }));
@@ -2130,6 +3120,8 @@ pub fn tool_strip_rect(ctx: &egui::Context, map: Rect, tool: Tool) -> Option<Rec
         ("note tool strip", egui::vec2(420.0, 40.0))
     } else if tool.is_paint_mode() {
         ("paint tool strip", egui::vec2(280.0, 40.0))
+    } else if tool == Tool::Shape {
+        ("shape tool strip", egui::vec2(420.0, 40.0))
     } else {
         return None;
     };
@@ -2190,6 +3182,18 @@ fn brush_span(doc: &Document, view: &ViewState, layer: usize, tool: Tool) -> [i3
             [
                 (rect[2] * ts[0]).div_ceil(g).max(1) as i32,
                 (rect[3] * ts[1]).div_ceil(g).max(1) as i32,
+            ]
+        }
+        // A random brush previews one pick's cell (one tile).
+        Some(Brush::Random { tileset, .. }) => {
+            let g = doc.project.layer_grid(def).max(1);
+            let ts = doc
+                .project
+                .tileset(tileset.as_str())
+                .map_or([g, g], |t| t.tile_size);
+            [
+                ts[0].div_ceil(g).max(1) as i32,
+                ts[1].div_ceil(g).max(1) as i32,
             ]
         }
         _ => [1, 1],
@@ -2526,8 +3530,9 @@ fn draw_entities(
                                     worlds_core::FieldType::EntityRef { .. },
                                     serde_json::Value::String(id),
                                 ) => {
-                                    let t = targets
-                                        .get_or_insert_with(|| entity_world_rects(doc, &defs));
+                                    let t = targets.get_or_insert_with(|| {
+                                        entity_world_rects(doc, &defs, scene.world)
+                                    });
                                     t.get(id.as_str()).map(|r| r.center())
                                 }
                                 (worlds_core::FieldType::Point, serde_json::Value::Array(xy)) => {
@@ -2853,14 +3858,16 @@ fn draw_world_labels(
     }
 }
 
-/// Every entity's world rect by id (arrow targets, any level).
+/// Every entity's world rect by id (arrow targets, any level of world
+/// `world`: another world's coordinates mean nothing on this map).
 fn entity_world_rects<'a>(
     doc: &'a Document,
     defs: &std::collections::HashMap<&str, &worlds_core::EntityDef>,
+    world: usize,
 ) -> std::collections::HashMap<&'a str, WRect> {
     let pg = doc.project.grid_size;
     let mut out = std::collections::HashMap::new();
-    for ix in 0..doc.levels.len() {
+    for ix in (0..doc.levels.len()).filter(|&ix| doc.levels[ix].world == world) {
         let level = doc.level(ix);
         let o = [level.world_px[0] as f64, level.world_px[1] as f64];
         for el in &level.entities {
@@ -2911,6 +3918,40 @@ fn draw_grid(
         y += g;
     }
 }
+
+/// A grid-vania world's lattice over the visible rect: lines every `cell`
+/// world px from the origin, every 2nd, 4th, ... when cells are under
+/// [`LATTICE_MIN_PX`] screen px apart.
+fn draw_lattice(
+    painter: &egui::Painter,
+    visible: &WRect,
+    cell: [f64; 2],
+    zoom: f64,
+    to_screen: &dyn Fn([f64; 2]) -> Pos2,
+) {
+    let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 170, 255, 70));
+    for (axis, &c) in cell.iter().enumerate() {
+        let mut step = c.max(1.0);
+        while step * zoom < LATTICE_MIN_PX {
+            step *= 2.0;
+        }
+        let (lo, hi) = (visible.min[axis], visible.max[axis]);
+        let (olo, ohi) = (visible.min[1 - axis], visible.max[1 - axis]);
+        let mut v = (lo / step).ceil() * step;
+        while v <= hi {
+            let (a, b) = if axis == 0 {
+                ([v, olo], [v, ohi])
+            } else {
+                ([olo, v], [ohi, v])
+            };
+            painter.line_segment([to_screen(a), to_screen(b)], stroke);
+            v += step;
+        }
+    }
+}
+
+/// The least screen distance between two lattice lines drawn.
+const LATTICE_MIN_PX: f64 = 12.0;
 
 #[cfg(test)]
 mod label_tests {

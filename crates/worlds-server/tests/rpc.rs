@@ -483,6 +483,108 @@ fn text_blocks_paint_shapes() {
 }
 
 #[test]
+fn find_methods_share_the_query_language() {
+    let (_t, mut s) = session();
+    let pick = |v: &Value, list: &str, key: &str| -> Vec<String> {
+        v[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e[key].as_str().unwrap().to_string())
+            .collect()
+    };
+    // entity.find: a query and the old filters add up.
+    let r = s
+        .call(
+            "entity.find",
+            json!({ "query": "type:*door", "level": "shaft" }),
+        )
+        .unwrap();
+    assert_eq!(pick(&r, "entities", "id"), ["doorshaft2"]);
+    let r = s
+        .call("entity.find", json!({ "query": "field:target != null" }))
+        .unwrap();
+    assert_eq!(pick(&r, "entities", "id"), ["btncrev222"]);
+    let r = s
+        .call(
+            "entity.find",
+            json!({ "text": "Button", "world": "main", "layer": "objects" }),
+        )
+        .unwrap();
+    assert_eq!(pick(&r, "entities", "id"), ["btncrev222"]);
+    for bad in ["kind:pin", "field:x", "\"open"] {
+        assert_eq!(
+            err_code(s.call("entity.find", json!({ "query": bad }))),
+            code::INVALID_PARAMS,
+            "{bad}"
+        );
+    }
+    // level.find.
+    let r = s.call("level.find", json!({})).unwrap();
+    assert_eq!(pick(&r, "levels", "slug"), ["crevasse", "shaft"]);
+    let r = s
+        .call("level.find", json!({ "fields": { "biome": [] } }))
+        .unwrap();
+    assert_eq!(pick(&r, "levels", "slug"), ["shaft"]);
+    assert_eq!(r["levels"][0]["tags"], json!([]));
+    let r = s
+        .call("level.find", json!({ "query": "crev", "world": "main" }))
+        .unwrap();
+    assert_eq!(pick(&r, "levels", "slug"), ["crevasse"]);
+    assert_eq!(
+        err_code(s.call("level.find", json!({ "query": "type:door" }))),
+        code::INVALID_PARAMS
+    );
+    // tiles.find.
+    let r = s
+        .call("tiles.find", json!({ "tileset": "castle_main" }))
+        .unwrap();
+    assert_eq!(r["total"], json!(2));
+    assert_eq!(r["tiles"][0]["level"], json!("crevasse"));
+    assert_eq!(r["tiles"][0]["layer"], json!("decor_back"));
+    let r = s
+        .call("tiles.find", json!({ "query": "tile:6,1", "limit": 0 }))
+        .unwrap();
+    assert_eq!(
+        (r["total"].clone(), r["tiles"].clone()),
+        (json!(1), json!([]))
+    );
+    let r = s.call("tiles.find", json!({ "tile": [6, 1] })).unwrap();
+    assert_eq!(r["tiles"][0]["cell"], json!([5, 2]));
+    assert_eq!(r["tiles"][0]["flip"], json!("x"));
+    assert_eq!(
+        err_code(s.call("tiles.find", json!({ "query": "castle" }))),
+        code::INVALID_PARAMS
+    );
+    // notes.list: text and query.
+    let r = s.call("notes.list", json!({ "text": "TOO EASY" })).unwrap();
+    assert_eq!(
+        r["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["note"]["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["notecrev22"]
+    );
+    let r = s
+        .call("notes.list", json!({ "query": "kind:pin statue" }))
+        .unwrap();
+    assert_eq!(r["notes"][0]["note"]["id"], json!("pinstatue2"));
+    let r = s
+        .call(
+            "notes.list",
+            json!({ "query": "level:crevasse status:done" }),
+        )
+        .unwrap();
+    assert_eq!(r["notes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        err_code(s.call("notes.list", json!({ "query": "channel:3" }))),
+        code::INVALID_PARAMS
+    );
+}
+
+#[test]
 fn entity_find_filters() {
     let (_t, mut s) = session();
     let ids = |v: Value| -> Vec<String> {
@@ -875,5 +977,41 @@ fn cancel_batch_reverts_and_records_nothing() {
     assert_eq!(
         err_code(m.call('a', "history.end_batch", json!({}))),
         code::BATCH_STATE
+    );
+}
+
+/// `level.crop` shrinks a level to its content in one undo entry; a level
+/// that already fits changes nothing, and `level.resize` takes `anchor`.
+#[test]
+fn level_crop_and_anchored_resize() {
+    let (_t, mut s) = session();
+    // shaft (6x8 at [320, 80]) holds only a 1x3 door standing on [2, 7].
+    let r = s.call("level.crop", json!({ "level": "shaft" })).unwrap();
+    assert_eq!(r["status"], "applied", "{r}");
+    let l = s.project().level("shaft").unwrap().clone();
+    assert_eq!((l.size, l.world_px), ([1, 3], [352, 160]));
+    assert_eq!(l.all_entities().next().unwrap().cell, [0, 2]);
+    assert_eq!(s.history().undo_entries().len(), 1);
+    let again = s.call("level.crop", json!({ "level": "shaft" })).unwrap();
+    assert_eq!(again["rev"], r["rev"], "already cropped: nothing applied");
+    s.call("history.undo", json!({})).unwrap();
+    let l = s.project().level("shaft").unwrap().clone();
+    assert_eq!((l.size, l.world_px), ([6, 8], [320, 80]));
+    // Grow from the bottom-right corner: the top-left moves out.
+    s.call(
+        "level.resize",
+        json!({ "level": "shaft", "size": [8, 9], "anchor": [1, 1] }),
+    )
+    .unwrap();
+    let l = s.project().level("shaft").unwrap().clone();
+    assert_eq!((l.size, l.world_px), ([8, 9], [288, 64]));
+    assert_eq!(l.all_entities().next().unwrap().cell, [4, 8]);
+    let e = s
+        .call("level.crop", json!({ "level": "nope" }))
+        .unwrap_err();
+    assert_eq!(e.data.unwrap()["kind"], "unknown_level");
+    assert_eq!(
+        err_code(s.call("level.crop", json!({ "level": "shaft", "size": [1, 1] }))),
+        code::INVALID_PARAMS
     );
 }

@@ -144,6 +144,13 @@ fn render_paths(
     known: &BTreeSet<PathBuf>,
     dirty: &BTreeSet<PathBuf>,
 ) -> Result<DirtyRender> {
+    let expanded;
+    let dirty = if dirty.iter().any(|p| is_world_dir(p)) {
+        expanded = expand_world_dirs(project, known, dirty);
+        &expanded
+    } else {
+        dirty
+    };
     let mut out: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
     let mut gone: BTreeSet<PathBuf> = BTreeSet::new();
     // Each level is rendered at most once, however many of its files are dirty.
@@ -197,6 +204,16 @@ fn render_paths(
                 match project.entity_def(file.trim_end_matches(".json")) {
                     Some(def) => {
                         out.insert(rel.clone(), to_bytes(rel, FileKind::Entity, def)?);
+                    }
+                    None => {
+                        gone.insert(rel.clone());
+                    }
+                }
+            }
+            ["assemblies", file] if file.ends_with(".json") => {
+                match project.assembly(file.trim_end_matches(".json")) {
+                    Some(a) => {
+                        out.insert(rel.clone(), to_bytes(rel, FileKind::Assembly, a)?);
                     }
                     None => {
                         gone.insert(rel.clone());
@@ -292,6 +309,45 @@ fn render_paths(
     })
 }
 
+/// `worlds/<world>`: a whole world directory (a created, removed or
+/// renamed world).
+fn is_world_dir(rel: &Path) -> bool {
+    let parts: Vec<_> = rel.iter().collect();
+    parts.len() == 2 && parts[0] == "worlds"
+}
+
+/// `dirty` with each whole world directory replaced by its `world.json`
+/// and a whole-level entry for every level the world has, in the project
+/// or among the known files (so saving deletes those it no longer has).
+fn expand_world_dirs(
+    project: &Project,
+    known: &BTreeSet<PathBuf>,
+    dirty: &BTreeSet<PathBuf>,
+) -> BTreeSet<PathBuf> {
+    let mut out = BTreeSet::new();
+    for rel in dirty {
+        if !is_world_dir(rel) {
+            out.insert(rel.clone());
+            continue;
+        }
+        out.insert(rel.join("world.json"));
+        let w = rel.iter().nth(1).and_then(|c| c.to_str()).unwrap_or("");
+        for l in project.world(w).into_iter().flat_map(|w| &w.levels) {
+            out.insert(rel.join("levels").join(l.slug.as_str()));
+        }
+        let levels = rel.join("levels");
+        for k in known {
+            if let Ok(rest) = k.strip_prefix(&levels)
+                && let Some(l) = rest.iter().next()
+                && rest.iter().count() > 1
+            {
+                out.insert(levels.join(l));
+            }
+        }
+    }
+    out
+}
+
 /// Every file a full save of `project` would write right now, as (path
 /// relative to the project directory, bytes), unsaved edits included.
 /// Nothing is read from or written to disk. The live API's
@@ -343,6 +399,15 @@ pub fn render_file(project: &Project, rel: &Path) -> Result<Option<Vec<u8>>> {
                 .filter(|e| e.slug.as_str() == stem(file))
             {
                 out.add(format!("entities/{}.json", e.slug), FileKind::Entity, e)?;
+            }
+        }
+        ["assemblies", file] => {
+            for a in project
+                .assemblies
+                .iter()
+                .filter(|a| a.slug.as_str() == stem(file))
+            {
+                out.add(format!("assemblies/{}.json", a.slug), FileKind::Assembly, a)?;
             }
         }
         ["rules", "macros.json"] => {
@@ -434,6 +499,9 @@ pub(crate) fn render(project: &Project) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     }
     if let Some(m) = &p.macros {
         out.add("rules/macros.json", FileKind::Macros, m)?;
+    }
+    for a in &p.assemblies {
+        out.add(format!("assemblies/{}.json", a.slug), FileKind::Assembly, a)?;
     }
     for w in &p.worlds {
         let wdir = format!("worlds/{}", w.slug);

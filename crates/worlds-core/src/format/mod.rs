@@ -5,6 +5,7 @@
 //! entities/<entity>.json
 //! rules/<auto layer>.json  rules/macros.json
 //! worlds/<world>/world.json
+//! assemblies/<assembly>.json
 //! worlds/<world>/levels/<level>/level.json
 //!                              /<int_grid or tiles layer>.json
 //!                              /entities.json  /notes.json
@@ -58,10 +59,11 @@ pub enum FileKind {
     Tiles,
     Entities,
     Notes,
+    Assembly,
 }
 
 impl FileKind {
-    pub const ALL: [FileKind; 13] = [
+    pub const ALL: [FileKind; 14] = [
         FileKind::Project,
         FileKind::Layers,
         FileKind::Tilesets,
@@ -75,6 +77,7 @@ impl FileKind {
         FileKind::Tiles,
         FileKind::Entities,
         FileKind::Notes,
+        FileKind::Assembly,
     ];
 
     /// Schema file stem.
@@ -93,6 +96,7 @@ impl FileKind {
             FileKind::Tiles => "tiles",
             FileKind::Entities => "entities",
             FileKind::Notes => "notes",
+            FileKind::Assembly => "assembly",
         }
     }
 

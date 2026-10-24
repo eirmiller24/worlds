@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use worlds_core::command::Rect;
+use worlds_core::find::{self, FindKind};
 use worlds_core::{Command, CommandError, EntityInstance, Id, Level, Project, Slug, World};
 
 use super::Write;
@@ -109,18 +110,22 @@ pub(crate) fn get(project: &Project, method: &str, p: Value) -> Result<Value, Rp
         "effective_fields": effective(project, f.entity) }))
 }
 
-/// `entity.find { type?, tag?, fields?, level?, rect? }`: every filter
-/// must hold.
+/// `entity.find { query?, type?, tag?, fields?, world?, level?, layer?,
+/// text?, rect? }`: every filter must hold ([`worlds_core::find`]).
 pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct P {
+        query: Option<String>,
         #[serde(rename = "type")]
-        ty: Option<Slug>,
+        ty: Option<String>,
         tag: Option<String>,
         #[serde(default)]
         fields: BTreeMap<String, Value>,
+        world: Option<String>,
         level: Option<Slug>,
+        layer: Option<String>,
+        text: Option<String>,
         rect: Option<[u32; 4]>,
     }
     let p: P = params::parse(method, p)?;
@@ -132,33 +137,33 @@ pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, R
     if let Some(l) = &p.level {
         find_level(project, l.as_str())?;
     }
+    let mut q = params::query(method, p.query.as_deref(), FindKind::Entities)?;
+    q.types.extend(p.ty);
+    q.tags.extend(p.tag);
+    q.fields.extend(params::field_tests(p.fields));
+    q.worlds.extend(p.world);
+    q.levels.extend(p.level.map(|l| l.to_string()));
+    q.layers.extend(p.layer);
+    q.text.extend(p.text.map(|t| t.to_lowercase()));
     let rect = p.rect.map(Rect::from);
-    let entities: Vec<Value> = all(project)
-        .filter(|f| p.level.as_ref().is_none_or(|l| *l == f.level.slug))
-        .filter(|f| p.ty.as_ref().is_none_or(|t| *t == f.entity.ty))
-        .filter(|f| {
-            p.tag.as_ref().is_none_or(|tag| {
-                project
-                    .entity_def(f.entity.ty.as_str())
-                    .is_some_and(|d| d.tags.contains(tag))
-            })
-        })
-        .filter(|f| {
+    let entities: Vec<Value> = find::entities(project, &q)
+        .map_err(|e| RpcError::invalid_params(format!("{method}: {e}")))?
+        .into_iter()
+        .filter(|h| {
             rect.is_none_or(|r| {
-                let [x, y] = f.entity.cell;
+                let [x, y] = h.entity.cell;
                 x >= 0 && y >= 0 && r.contains([x as u32, y as u32])
             })
         })
-        .filter(|f| {
-            if p.fields.is_empty() {
-                return true;
-            }
-            let eff = effective(project, f.entity);
-            p.fields
-                .iter()
-                .all(|(k, v)| eff.get(k).unwrap_or(&Value::Null) == v)
+        .map(|h| {
+            wire(&Found {
+                world: h.world,
+                level: h.level,
+                layer: h.layer,
+                index: h.index,
+                entity: h.entity,
+            })
         })
-        .map(|f| wire(&f))
         .collect();
     Ok(json!({ "entities": entities }))
 }
@@ -259,8 +264,9 @@ pub(crate) fn move_entity(_: &Project, method: &str, p: Value) -> Result<Write, 
     Ok(Write::one(params::command(method, "move_entity", p)?))
 }
 
-/// `entity.remove { ids }` → `remove_entity`s.
-pub(crate) fn remove(_: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+/// `entity.remove { ids }` → `remove_entity`s, and the `set_group`s that
+/// drop them from their object groups.
+pub(crate) fn remove(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct P {
@@ -270,13 +276,16 @@ pub(crate) fn remove(_: &Project, method: &str, p: Value) -> Result<Write, RpcEr
     if p.ids.is_empty() {
         return Err(RpcError::invalid_params(format!("{method}: ids is empty")));
     }
-    Ok(Write::cmds(
-        p.ids
-            .into_iter()
-            .map(|id| Command::RemoveEntity {
-                id,
-                keep_empty: false,
-            })
-            .collect(),
-    ))
+    // Members leave their object groups in the same write.
+    let drop = worlds_core::command::groups::drop_members(project, &p.ids);
+    let mut cmds: Vec<Command> = p
+        .ids
+        .into_iter()
+        .map(|id| Command::RemoveEntity {
+            id,
+            keep_empty: false,
+        })
+        .collect();
+    cmds.extend(drop);
+    Ok(Write::cmds(cmds))
 }

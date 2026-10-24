@@ -789,3 +789,29 @@ impl Project {
         })
     }
 }
+
+impl Project {
+    /// Every macro reference of `kind` with what holds it (an auto layer's
+    /// rule set, or a template), for [`crate::merge`]'s dependencies.
+    pub(crate) fn macro_refs(&mut self, kind: MacroKind) -> Vec<(crate::merge::Owner, Slug)> {
+        use crate::merge::Owner;
+        let mut out = Vec::new();
+        self.visit_macro_refs(kind, &mut |site, n| {
+            let owner = match site {
+                MacroSite::Rule { layer, .. } | MacroSite::Reference { layer, .. } => {
+                    Owner::Layer(layer.clone())
+                }
+                MacroSite::Template(name) => Owner::Template(name.clone()),
+            };
+            out.push((owner, n.clone()));
+            None
+        });
+        out
+    }
+
+    /// The entry `name` of `kind` in `rules/macros.json`, as `set_macro`
+    /// takes it.
+    pub fn macro_def(&self, kind: MacroKind, name: &Slug) -> Option<MacroDef> {
+        get_macro(self.macros.as_ref(), kind, name)
+    }
+}

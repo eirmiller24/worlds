@@ -1,5 +1,5 @@
-//! Drawing annotations on the map: regions, guides, paths, notes and
-//! pins, through egui's painter after the entity boxes and before the
+//! Drawing annotations on the map: regions, guides, paths, connectors,
+//! notes and pins, through egui's painter after the entity boxes and before the
 //! selection outlines. The same function draws them in the editor and in
 //! snapshots (`view.snapshot`, `--snapshot`), where no tag filter applies,
 //! only open notes are drawn, and every guide.
@@ -30,6 +30,7 @@ pub fn kind_color(kind: &str) -> Color32 {
         "pin" => Color32::from_rgb(0xff, 0x8a, 0x65),
         "path" => Color32::from_rgb(0x81, 0xc7, 0x84),
         "region" => Color32::from_rgb(0xba, 0x68, 0xc8),
+        "connector" => Color32::from_rgb(0xf0, 0x92, 0x4f),
         _ => {
             let c = annot::GUIDE_CYAN;
             Color32::from_rgb(c[0], c[1], c[2])
@@ -393,7 +394,7 @@ pub fn draw_annotations(painter: &egui::Painter, f: &NotesFrame<'_>) {
     } else {
         f.view.selection.notes().collect()
     };
-    let notes = annot::all_notes(doc);
+    let notes = annot::shown_notes(doc, f.view);
     // A margin around the view for cards and icons hanging off a point.
     let slack = (annot::CARD_MAX[0].max(annot::CARD_MAX[1]) as f64 + 16.0) / f.zoom;
     let near = f.visible.expand(slack);
@@ -526,6 +527,59 @@ pub fn draw_annotations(painter: &egui::Painter, f: &NotesFrame<'_>) {
                     format!("{len:.0} px · {:.1} tiles", len / g),
                     FontId::proportional(11.0),
                     Color32::WHITE,
+                ));
+            }
+        }
+    }
+    // Connectors: from their computed ends through the waypoints, an
+    // arrowhead at `to` (both ends with `double`, none with `line`), the
+    // label along the middle.
+    for (r, col, sel) in drawn
+        .iter()
+        .filter(|d| matches!(d.0.note.shape, Shape::Connector { .. }))
+    {
+        let Shape::Connector { label, style, .. } = &r.note.shape else {
+            continue;
+        };
+        let pts: Vec<Pos2> = annot::connector_line(doc, *r)
+            .iter()
+            .map(|p| ts([p[0] as f64, p[1] as f64]))
+            .collect();
+        for w in pts.windows(2) {
+            if *sel {
+                seg_quad(&mut halos, w[0], w[1], 5.0, f.accent);
+            }
+            seg_quad(&mut lines, w[0], w[1], 2.0, *col);
+        }
+        if *style != worlds_core::ConnectorStyle::Line
+            && let [.., a, b] = pts.as_slice()
+        {
+            arrowhead(&mut lines, *a, *b, 9.0, *col);
+        }
+        if *style == worlds_core::ConnectorStyle::Double
+            && let [a, b, ..] = pts.as_slice()
+        {
+            arrowhead(&mut lines, *b, *a, 9.0, *col);
+        }
+        for p in pts.iter().skip(1).take(pts.len().saturating_sub(2)) {
+            disk(&mut lines, *p, 2.5, *col);
+        }
+        let text_of = label.as_deref().or(r.note.title.as_deref());
+        if (card || *sel)
+            && let (Some(t), Some(mid)) = (text_of, midpoint(&pts))
+        {
+            let rect = Rect::from_center_size(
+                mid + vec2(0.0, -9.0),
+                vec2(t.chars().count() as f32 * 6.2 + 6.0, 14.0),
+            );
+            if painter.clip_rect().intersects(rect) && space.claim(rect) {
+                fills.add_colored_rect(rect, Color32::from_rgba_unmultiplied(20, 22, 30, 200));
+                text.push(Txt::new(
+                    rect.center(),
+                    Align2::CENTER_CENTER,
+                    t,
+                    FontId::proportional(11.0),
+                    Color32::from_gray(235),
                 ));
             }
         }
