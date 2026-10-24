@@ -2584,10 +2584,12 @@ impl EditorApp {
                     gpu: &self.gpu,
                 };
                 // Close buttons show on map tabs only (the last one has
-                // none: `is_closeable`).
+                // none: `is_closeable`). The `+` at the end of every tab
+                // bar adds a map tab there (`on_add`).
                 DockArea::new(&mut self.dock)
                     .id(egui::Id::new("worlds dock"))
                     .show_close_buttons(true)
+                    .show_add_buttons(true)
                     .show_leaf_close_all_buttons(false)
                     .show_inside(ui, &mut tabs);
             });
@@ -3608,6 +3610,12 @@ impl EditorApp {
     }
 
     /// Perform an action.
+    /// The dock, read-only (tests look up where a tab sits).
+    #[doc(hidden)]
+    pub fn dock(&self) -> &DockState<Pane> {
+        &self.dock
+    }
+
     pub fn run(&mut self, a: Action) {
         match a {
             Action::OpenDialog => {
@@ -3727,6 +3735,9 @@ impl EditorApp {
             Action::DuplicateViewport(id) => {
                 let src = id.unwrap_or(self.st.view.focused);
                 self.open_viewport(None, Some(src), false);
+            }
+            Action::NewViewportAt(path) => {
+                self.open_viewport_at(path);
             }
             Action::CloseViewport(id) => {
                 if let Err(e) = self.close_viewport(id) {
@@ -3960,10 +3971,80 @@ impl EditorApp {
         self.toolbar_split
     }
 
-    /// The left part of the toolbar: tools, undo/redo/save, open, commands.
+    /// The Worlds menu at the toolbar's left end: open, import, save,
+    /// undo, redo, the command palette. Its entries name what they would
+    /// do ("Undo Paint collision") and show their shortcuts.
+    fn worlds_menu(&mut self, ui: &mut egui::Ui) {
+        let undo = self.commands.undo_label();
+        let redo = self.commands.redo_label();
+        let can_undo = self.commands.can_undo();
+        let can_redo = self.commands.can_redo();
+        let dirty = self.commands.has_unsaved();
+        let open = self.st.doc.is_some();
+        let entry = |ui: &mut egui::Ui, enabled: bool, label: String, key: &str| -> bool {
+            ui.add_enabled(
+                enabled,
+                egui::Button::new(label)
+                    .shortcut_text(key)
+                    .min_size(egui::vec2(260.0, 0.0)),
+            )
+            .clicked()
+        };
+        let mut acts = Vec::new();
+        ui.menu_button(egui::RichText::new("Worlds").strong(), |ui| {
+            if entry(ui, true, "Open project…".into(), "Ctrl+O") {
+                acts.push(Action::OpenDialog);
+            }
+            if entry(ui, open, "Import from Worlds project…".into(), "") {
+                acts.push(Action::ImportProject);
+            }
+            if entry(ui, open, "Reload from disk".into(), "Ctrl+R") {
+                acts.push(Action::Reload);
+            }
+            if entry(
+                ui,
+                dirty,
+                if dirty {
+                    "Save •".into()
+                } else {
+                    "Save".into()
+                },
+                "Ctrl+S",
+            ) {
+                acts.push(Action::Save);
+            }
+            ui.separator();
+            let undo_label = match &undo {
+                Some(l) => format!("Undo {l}"),
+                None if can_undo => "Undo the stroke in progress".into(),
+                None => "Undo".into(),
+            };
+            if entry(ui, can_undo, undo_label, "Ctrl+Z") {
+                acts.push(Action::Undo);
+            }
+            let redo_label = match &redo {
+                Some(l) => format!("Redo {l}"),
+                None => "Redo".into(),
+            };
+            if entry(ui, can_redo, redo_label, "Ctrl+Shift+Z") {
+                acts.push(Action::Redo);
+            }
+            ui.separator();
+            if entry(ui, true, "Commands…".into(), "Ctrl+P") {
+                acts.push(Action::CommandPalette);
+            }
+            if !acts.is_empty() {
+                ui.close();
+            }
+        });
+        self.st.actions.extend(acts);
+    }
+
+    /// The left part of the toolbar: the Worlds menu, the world switcher
+    /// and bookmarks, the tools.
     fn toolbar_tools(&mut self, ui: &mut egui::Ui) {
         {
-            ui.strong("Worlds");
+            self.worlds_menu(ui);
             ui.separator();
             if self.world_switcher(ui) {
                 self.bookmarks_button(ui);
@@ -3998,59 +4079,6 @@ impl EditorApp {
                 {
                     self.st.actions.push(act);
                 }
-            }
-            ui.separator();
-            let undo = self.commands.undo_label();
-            let redo = self.commands.redo_label();
-            if ui
-                .add_enabled(self.commands.can_undo(), egui::Button::new("Undo"))
-                .on_hover_text(format!(
-                    "Undo {} (Ctrl+Z)",
-                    undo.as_deref().unwrap_or("the stroke in progress")
-                ))
-                .on_disabled_hover_text("Nothing to undo")
-                .clicked()
-            {
-                self.st.actions.push(Action::Undo);
-            }
-            if ui
-                .add_enabled(self.commands.can_redo(), egui::Button::new("Redo"))
-                .on_hover_text(format!(
-                    "Redo {} (Ctrl+Shift+Z)",
-                    redo.as_deref().unwrap_or_default()
-                ))
-                .on_disabled_hover_text("Nothing to redo")
-                .clicked()
-            {
-                self.st.actions.push(Action::Redo);
-            }
-            let dirty = self.commands.has_unsaved();
-            if ui
-                .add_enabled(
-                    dirty,
-                    egui::Button::new(if dirty { "Save •" } else { "Save" }),
-                )
-                .on_hover_text("Unsaved changes (Ctrl+S)")
-                .on_disabled_hover_text("No unsaved changes")
-                .clicked()
-            {
-                self.st.actions.push(Action::Save);
-            }
-            ui.separator();
-            if ui.button("Open…").on_hover_text("Ctrl+O").clicked() {
-                self.st.actions.push(Action::OpenDialog);
-            }
-            if ui
-                .add_enabled(self.st.doc.is_some(), egui::Button::new("Import…"))
-                .on_hover_text(
-                    "Import from Worlds project…: definitions, worlds or levels of another project",
-                )
-                .clicked()
-            {
-                self.st.actions.push(Action::ImportProject);
-            }
-            if ui.button("Commands").on_hover_text("Ctrl+P").clicked() {
-                self.st.actions.push(Action::CommandPalette);
             }
         }
     }
@@ -4842,6 +4870,11 @@ impl TabViewer for Tabs<'_> {
         {
             self.st.focus_tab(*id);
         }
+    }
+
+    /// The `+` at the end of a tab bar: a new map tab in that leaf.
+    fn on_add(&mut self, path: egui_dock::NodePath) {
+        self.st.actions.push(Action::NewViewportAt(path));
     }
 
     /// A map tab's right-click menu (egui_dock adds Eject and Close).

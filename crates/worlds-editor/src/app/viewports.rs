@@ -248,6 +248,40 @@ impl EditorApp {
         Some(id)
     }
 
+    /// The `+` at the end of a tab bar: a new map tab in the leaf at
+    /// `path`. Next to a map tab it is that tab's world (and that tab is
+    /// focused first, so the new one lands beside it); on a pane's tab bar
+    /// (Layers, Inspector, ...) it is the focused tab's world, appended
+    /// there. Focused either way.
+    pub(super) fn open_viewport_at(&mut self, path: egui_dock::NodePath) -> Option<ViewportId> {
+        let here = self
+            .dock
+            .leaf(path)
+            .ok()?
+            .tabs()
+            .iter()
+            .find_map(|t| match t {
+                Pane::Viewport(id) => Some(*id),
+                _ => None,
+            });
+        if let Some(id) = here {
+            self.st.focus_tab(id);
+            return self.open_viewport(None, None, false);
+        }
+        let doc = self.st.doc.as_ref()?;
+        let id = self.st.view.new_tab(doc, &self.st.viewport, None, None);
+        let pane = Pane::Viewport(id);
+        match self.dock.leaf_mut(path) {
+            Ok(leaf) => {
+                leaf.append_tab(pane);
+                show_pane(&mut self.dock, pane);
+            }
+            Err(_) => dock_tab(&mut self.dock, id, self.st.view.focused, false),
+        }
+        self.st.focus_tab(id);
+        Some(id)
+    }
+
     /// Close map tab `id` (`None`: the focused one), unless it is the last.
     pub(super) fn close_viewport(&mut self, id: Option<ViewportId>) -> Result<(), String> {
         let id = id.unwrap_or(self.st.view.focused);

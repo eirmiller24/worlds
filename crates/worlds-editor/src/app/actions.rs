@@ -124,6 +124,9 @@ pub enum Action {
     /// A new map tab with the same world, level and camera as this one
     /// (`None`: the focused one), focused.
     DuplicateViewport(Option<crate::view::ViewportId>),
+    /// The `+` at the end of a tab bar: a new map tab in that leaf (on the
+    /// world of the map tab there, else the focused one's).
+    NewViewportAt(egui_dock::NodePath),
     /// Close a map tab (`None`: the focused one); the last one stays.
     CloseViewport(Option<crate::view::ViewportId>),
     /// Link two map tabs' cameras (`None`: the focused tab and the next

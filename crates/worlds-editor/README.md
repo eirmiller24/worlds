@@ -122,6 +122,8 @@ Tests and local runs write reference shots to `crates/worlds-editor/screenshots/
 
 ## Using it
 
+The toolbar starts with the **Worlds** menu: Open project…, Import from Worlds project…, Reload from disk, Save (with a • while there are unsaved edits), Undo and Redo (each entry names what it would undo: "Undo Paint collision"), and Commands… (the command palette). After it come the world switcher and bookmarks (see "Worlds" and "Map tabs and bookmarks") and the tools.
+
 | Input | Does |
 | --- | --- |
 | Wheel | zoom to cursor, through fixed steps from 1/256 (0.39%) to 1600% (integers above 100%, so pixel art stays crisp). Fit world (Shift+F, Home), Fit level and `view.focus` pick the largest step that fits, or, for a world too big for 1/256, the exact zoom that fits it (an off-grid zoom); from there the wheel steps in to the nearest step and out not at all |
@@ -172,7 +174,7 @@ Tests and local runs write reference shots to `crates/worlds-editor/screenshots/
 | Ctrl+G, Ctrl+Shift+G | group the selected entities and annotations (one level's) as one object group / ungroup the selection's groups (see "Object groups") |
 | Ctrl+M | toggle the grid |
 | Ctrl+Shift+1..9 | jump to camera bookmark 1..9 in the focused map tab (see "Map tabs and bookmarks") |
-| Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, Ctrl+S | undo, redo (the toolbar tooltips name the entry: "Undo Paint collision"), save |
+| Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, Ctrl+S | undo, redo (the Worlds menu's entries name the entry: "Undo Paint collision"), save |
 
 Every selection edit (drag, nudge, Ctrl+D, Delete) leaves selected entities on a locked layer alone and says so in the status bar ("Layer Objects is locked", or "2 selected entities are on locked layers: left alone" when others were edited).
 
@@ -389,7 +391,7 @@ Clicking an entry undoes or redoes, one step at a time exactly as Ctrl+Z and Ctr
 
 ## Import from Worlds project
 
-**Import…** in the toolbar (or "Import from Worlds project…" in the command palette) picks another project's directory and opens a dialog over `worlds_core::merge` ([docs/importing_worlds.md](../../docs/importing_worlds.md)); `src/app/import.rs`.
+**Import from Worlds project…** in the Worlds menu (or the command palette) picks another project's directory and opens a dialog over `worlds_core::merge` ([docs/importing_worlds.md](../../docs/importing_worlds.md)); `src/app/import.rs`.
 
 - **What**: the presets *Definitions only*, *Everything* and *Pick*, a search box, and a checkbox tree of the source's definitions by kind (tilesets, enums, patterns, legends, templates, layers, level fields, entity types, project settings) and its levels by world (with a checkbox for the whole world: its guide groups and world notes too). Checking something under a preset turns it into *Pick* with the preset spelled out. What a checked item needs shows checked and greyed out; hover says what needs it.
 - **The plan**: every item shows what the import does with it (`add`, `same`, `skip: ours kept`, `overwrite`, `rename -> <slug>_2`, `refused`; hover for why and where a level goes), and each collision gets its own Skip / Overwrite / Rename menu over the default (**On a collision**). **Levels go** into a new world (named after the source; editable), into an existing world, or into the worlds of their own slugs, with an **Offset** in world pixels. Under it the summary line (`12 definitions, 3 levels, 2 renamed, 1 skipped`) and, folded, the ids re-rolled, references dropped, files copied and problems. Every change plans again; nothing changes until Apply.
@@ -401,7 +403,7 @@ The map is a dock tab like the other panes, and there can be any number of them:
 
 - **Per tab**: the camera (with a pending fit), the world shown and the active level. **Shared by every tab**: the tool and Paint mode, brushes and the entity palette, the active layer, layer visibility, lock and opacity, annotation visibility and the selection, so switching tabs never changes what the next click paints, and a copy in one tab pastes in another.
 - **Focus.** A press in a tab (any button) focuses it before the tab handles the press, so the gesture and every key after it (shortcuts, single-key tools, Fit, PgUp/PgDn) act there, as do the toolbar's world switcher, the Inspector's level, the command palette's level actions and the API's default `viewport`. Clicking a tab's title focuses it too. Only the focused tab takes keys and draws the Note and Paint strips; the others still zoom with the wheel under the pointer. The status bar reads the tab under the pointer (cell, readout, zoom, draw stats), focused or not.
-- **New viewport** (command palette, a tab's right-click menu) opens a tab next to the focused one on the world it shows, fitted, and focuses it; **Duplicate viewport** copies a tab's world, level and camera. A tab's close button (shown while there are two or more), its menu's Close and the palette's **Close viewport** close it; the last tab can't close.
+- **New viewport**: the **+** at the right end of any tab bar opens a map tab in that leaf (on the world of the map tab there, else the focused tab's), fitted, and focuses it; the command palette's New viewport and a map tab's right-click menu open one next to the focused tab; **Duplicate viewport** copies a tab's world, level and camera. A tab's close button (shown while there are two or more), its menu's Close and the palette's **Close viewport** close it; the last tab can't close.
 - **Link cameras** (a tab's menu: "Link cameras with" → another tab; the palette links the focused tab with the next one): the pair keeps the same zoom, and the offset between their centers, so panning or zooming one moves the other (for comparing two areas, or the same spot in two worlds). The same pair again unlinks; closing either tab unlinks.
 - **Camera bookmarks**: the toolbar's ★ (right of the world switcher) opens a small window listing them (click to jump, × to forget) with a name field and **Save view**, which bookmarks the focused tab's world and camera (its center and zoom, so it frames the same spot in a tab of any size); an existing name is replaced, an empty one becomes "View n". "Bookmark this view…" in the palette opens it with the name field focused, and every bookmark is a palette entry, "Bookmark: <name>"; Ctrl+Shift+1..9 jump to the first nine. A jump shows the bookmark's world in the focused tab, centered at the saved zoom. Bookmarks are per project view state in `ui.json`, not shared design data (a landmark for the team is a pin). The list is a widget (`viewports::bookmarks_list`); the Levels pane shows it under its rows.
 - **`ui.json`** stores `viewports: [{ id, world, camera, active_level }]`, `focused_viewport`, `linked_viewports` and `bookmarks: [{ name, world, camera: { center, zoom } }]`, each optional. A file from before map tabs (a dock with a bare `"Viewport"` tab, one `camera`, `active_world` and `active_level`) opens as tab 1 holding them; the top-level `camera`, `active_world` and `active_level` are still written (the focused tab's).

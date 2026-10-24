@@ -256,6 +256,31 @@ fn two_map_tabs_side_by_side_on_two_worlds() {
     assert_ne!(id, ViewportId::FIRST);
     assert_eq!(r.world_of(id.0), "main");
     assert_eq!(r.zoom(id.0), r.zoom(1));
+
+    // The + at the end of a tab bar. On a map's tab bar: a new tab in that
+    // leaf, on its world, focused.
+    let leaf_of = |app: &EditorApp, pane: Pane| {
+        app.dock()
+            .find_tab(&pane)
+            .map(|p| p.node_path())
+            .expect("the pane is in the dock")
+    };
+    let map_leaf = leaf_of(&r.app, Pane::Viewport(ViewportId::FIRST));
+    let n = r.app.st.view.tabs.len();
+    r.app.run(Action::NewViewportAt(map_leaf));
+    r.frames(vec![], 3);
+    assert_eq!(r.app.st.view.tabs.len(), n + 1);
+    let added = r.app.st.view.focused;
+    assert_eq!(leaf_of(&r.app, Pane::Viewport(added)), map_leaf);
+    assert_eq!(r.world_of(added.0), "main");
+    // On a pane's tab bar (the Layers pane's): a map tab appended there.
+    let layers_leaf = leaf_of(&r.app, Pane::Layers);
+    assert_ne!(layers_leaf, map_leaf);
+    r.app.run(Action::NewViewportAt(layers_leaf));
+    r.frames(vec![], 3);
+    assert_eq!(r.app.st.view.tabs.len(), n + 2);
+    let added = r.app.st.view.focused;
+    assert_eq!(leaf_of(&r.app, Pane::Viewport(added)), layers_leaf);
 }
 
 /// Pixels in `r` within 40 of color `c` per channel.
