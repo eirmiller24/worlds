@@ -61,7 +61,12 @@ fn rgb(c: [u8; 4]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
-/// Layer list, top layer first: visibility, lock, active, opacity.
+/// Layer list, top layer first: visibility, lock, active, opacity. Layers
+/// with a `folder` sit under collapsible folder rows (a `/` path nests
+/// them) whose eye, lock and opacity apply to every layer inside (editor
+/// state, `ui.json` `folders`). Dragging a layer's ☰ onto a folder row
+/// puts it in that folder, onto another layer's row in that layer's folder
+/// (`set_layer_def` with the new `folder`, one entry).
 pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
     let Some(doc) = &st.doc else {
         ui.weak("No project");
@@ -80,68 +85,17 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
             edit = Some(None);
         }
     }
+    let tree = layer_tree(doc);
+    let mut refile: Option<(usize, Option<String>)> = None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, true])
         .show(ui, |ui| {
-            for i in (0..doc.project.layers.len()).rev() {
-                let def = &doc.project.layers[i];
-                let Some(v) = st.view.layers.get_mut(i) else {
-                    continue;
-                };
-                let active = st.view.active_layer == Some(i) && !st.view.references.active;
-                ui.horizontal(|ui| {
-                    let eye = RichText::new(if v.visible { "👁" } else { "–" }).size(15.0);
-                    ui.toggle_value(&mut v.visible, eye)
-                        .on_hover_text("Visible");
-                    let lock = if v.locked {
-                        RichText::new("🔒").size(15.0)
-                    } else {
-                        RichText::new("🔓").size(15.0).weak()
-                    };
-                    ui.toggle_value(&mut v.locked, lock)
-                        .on_hover_text("Locked: painting tools skip this layer");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().slider_width = 64.0;
-                        ui.add(egui::Slider::new(&mut v.opacity, 0.0..=1.0).show_value(false))
-                            .on_hover_text(format!(
-                                "View opacity {:.0}% (definition: {:.0}%)",
-                                v.opacity * 100.0,
-                                def.opacity * 100.0
-                            ));
-                        // Name takes what's left, truncated.
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                            let name = RichText::new(&def.name);
-                            let r = ui.selectable_label(active, name).on_hover_text(format!(
-                                "{} ({}). Double click or right click to edit it",
-                                def.slug.as_str(),
-                                def.kind.name()
-                            ));
-                            if r.clicked() {
-                                st.view.active_layer = Some(i);
-                                st.view.references.active = false;
-                            }
-                            if r.double_clicked() {
-                                edit = Some(Some(def.slug.clone()));
-                            }
-                            r.context_menu(|ui| {
-                                if ui.button("Edit layer…").clicked() {
-                                    edit = Some(Some(def.slug.clone()));
-                                    ui.close();
-                                }
-                                ui.separator();
-                                layer_ops_menu(ui, doc, &st.view.selection, def, &mut st.actions);
-                            });
-                            // A derived layer says so where the kind goes.
-                            if def.is_derived() {
-                                derived_badge(ui, doc, def, st.accent);
-                            } else {
-                                ui.weak(def.kind.name());
-                            }
-                        });
-                    });
-                });
+            for node in &tree {
+                draw_node(ui, st, node, 0, &mut edit, &mut refile);
             }
+            let Some(doc) = &st.doc else {
+                return;
+            };
             if !doc.project.layers.is_empty() {
                 ui.add_space(4.0);
                 if ui
@@ -158,11 +112,314 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
             }
         });
     super::references::layers_row(ui, st);
+    if let Some((i, folder)) = refile
+        && let Some(cmd) = st.doc.as_ref().and_then(|d| folder_command(d, i, folder))
+    {
+        st.pending.push(cmd);
+    }
     match edit {
         Some(Some(slug)) => st.project.show_layer(slug),
         Some(None) => st.project.show(super::project_pane::Section::Layers),
         None => {}
     }
+}
+
+/// A row of the Layers pane's tree: a layer, or a folder with what is in it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LayerNode {
+    Layer(usize),
+    Folder {
+        /// The full path (`Decor/Back`).
+        path: String,
+        children: Vec<LayerNode>,
+    },
+}
+
+/// The Layers pane's tree, top layer first: each folder where its topmost
+/// layer is, holding its layers and subfolders in the same order.
+pub fn layer_tree(doc: &crate::doc::Document) -> Vec<LayerNode> {
+    fn insert(nodes: &mut Vec<LayerNode>, parts: &[&str], prefix: String, i: usize) {
+        let Some((first, rest)) = parts.split_first() else {
+            nodes.push(LayerNode::Layer(i));
+            return;
+        };
+        let path = if prefix.is_empty() {
+            first.to_string()
+        } else {
+            format!("{prefix}/{first}")
+        };
+        let pos = nodes
+            .iter()
+            .position(|n| matches!(n, LayerNode::Folder { path: p, .. } if *p == path));
+        let pos = pos.unwrap_or_else(|| {
+            nodes.push(LayerNode::Folder {
+                path: path.clone(),
+                children: Vec::new(),
+            });
+            nodes.len() - 1
+        });
+        if let LayerNode::Folder { children, .. } = &mut nodes[pos] {
+            insert(children, rest, path, i);
+        }
+    }
+    let mut out = Vec::new();
+    for i in (0..doc.project.layers.len()).rev() {
+        let parts: Vec<&str> = doc.project.layers[i]
+            .folder
+            .as_deref()
+            .map(|f| f.split('/').filter(|p| !p.is_empty()).collect())
+            .unwrap_or_default();
+        insert(&mut out, &parts, String::new(), i);
+    }
+    out
+}
+
+/// The `set_layer_def` that puts layer `i` in `folder` (`None`: out of any
+/// folder), one entry; `None` when it is there already.
+pub fn folder_command(
+    doc: &crate::doc::Document,
+    i: usize,
+    folder: Option<String>,
+) -> Option<Command> {
+    let def = doc.project.layers.get(i)?;
+    let folder = folder.map(|f| f.trim().trim_matches('/').to_string());
+    let folder = folder.filter(|f| !f.is_empty());
+    if def.folder == folder {
+        return None;
+    }
+    let label = match &folder {
+        Some(f) => format!("Move layer {} to folder {f}", def.slug),
+        None => format!("Take layer {} out of its folder", def.slug),
+    };
+    let mut new = def.clone();
+    new.folder = folder;
+    Some(Command::Batch {
+        label,
+        commands: vec![Command::SetLayerDef {
+            layer: def.slug.clone(),
+            def: new,
+            index: None,
+            content: Vec::new(),
+            rules: None,
+        }],
+    })
+}
+
+/// What a layer's ☰ carries while dragged: its index.
+#[derive(Debug, Clone, Copy)]
+struct LayerDrag(usize);
+
+fn draw_node(
+    ui: &mut egui::Ui,
+    st: &mut EditorState,
+    node: &LayerNode,
+    depth: usize,
+    edit: &mut Option<Option<worlds_core::Slug>>,
+    refile: &mut Option<(usize, Option<String>)>,
+) {
+    match node {
+        LayerNode::Layer(i) => layer_row(ui, st, *i, depth, edit, refile),
+        LayerNode::Folder { path, children } => {
+            let f = st.view.folders.entry(path.clone()).or_default();
+            let name = path.rsplit('/').next().unwrap_or(path);
+            let row = ui.horizontal(|ui| {
+                ui.add_space(depth as f32 * 14.0);
+                let arrow = if f.collapsed { "⏵" } else { "⏷" };
+                let a = ui
+                    .add(egui::Button::new(arrow).frame(false))
+                    .on_hover_text("Fold or unfold the folder");
+                super::fields::mark(ui, &format!("layers:folder:{path}:fold"), a.rect);
+                if a.clicked() {
+                    f.collapsed = !f.collapsed;
+                }
+                let eye = RichText::new(if f.visible { "👁" } else { "–" }).size(15.0);
+                let r = ui
+                    .toggle_value(&mut f.visible, eye)
+                    .on_hover_text("Show or hide every layer in the folder");
+                super::fields::mark(ui, &format!("layers:folder:{path}:eye"), r.rect);
+                let lock = if f.locked {
+                    RichText::new("🔒").size(15.0)
+                } else {
+                    RichText::new("🔓").size(15.0).weak()
+                };
+                ui.toggle_value(&mut f.locked, lock)
+                    .on_hover_text("Locked: painting tools skip every layer in the folder");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().slider_width = 64.0;
+                    ui.add(egui::Slider::new(&mut f.opacity, 0.0..=1.0).show_value(false))
+                        .on_hover_text(format!(
+                            "Folder opacity {:.0}% (times each layer's)",
+                            f.opacity * 100.0
+                        ));
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                        ui.label(RichText::new(format!("🗀 {name}")).strong())
+                            .on_hover_text(format!(
+                                "Folder {path}: drag a layer's ☰ here to put it in"
+                            ));
+                    });
+                });
+            });
+            let resp = row.response;
+            super::fields::mark(ui, &format!("layers:folder:{path}"), resp.rect);
+            if resp.dnd_hover_payload::<LayerDrag>().is_some() {
+                ui.painter().rect_stroke(
+                    resp.rect,
+                    3.0,
+                    Stroke::new(2.0, st.accent),
+                    StrokeKind::Inside,
+                );
+            }
+            if let Some(p) = resp.dnd_release_payload::<LayerDrag>() {
+                *refile = Some((p.0, Some(path.clone())));
+            }
+            let collapsed = st.view.folders.get(path).is_some_and(|f| f.collapsed);
+            if !collapsed {
+                for c in children {
+                    draw_node(ui, st, c, depth + 1, edit, refile);
+                }
+            }
+        }
+    }
+}
+
+/// One layer's row: ☰ (drag into a folder, when the project has folders),
+/// eye, lock, name (click: make active; double click or menu: edit), kind,
+/// opacity.
+fn layer_row(
+    ui: &mut egui::Ui,
+    st: &mut EditorState,
+    i: usize,
+    depth: usize,
+    edit: &mut Option<Option<worlds_core::Slug>>,
+    refile: &mut Option<(usize, Option<String>)>,
+) {
+    let Some(doc) = &st.doc else {
+        return;
+    };
+    let def = &doc.project.layers[i];
+    let folders = doc.project.layers.iter().any(|l| l.folder.is_some());
+    let Some(v) = st.view.layers.get_mut(i) else {
+        return;
+    };
+    let active = st.view.active_layer == Some(i) && !st.view.references.active;
+    let row = ui.horizontal(|ui| {
+        ui.add_space(depth as f32 * 14.0);
+        if folders {
+            let h = ui
+                .add(egui::Label::new(RichText::new("☰").weak()).sense(Sense::drag()))
+                .on_hover_text("Drag onto a folder (or a layer in one) to put the layer in it");
+            super::fields::mark(ui, &format!("layers:{}:handle", def.slug), h.rect);
+            if h.dragged() {
+                h.dnd_set_drag_payload(LayerDrag(i));
+            }
+        }
+        let eye = RichText::new(if v.visible { "👁" } else { "–" }).size(15.0);
+        ui.toggle_value(&mut v.visible, eye)
+            .on_hover_text("Visible");
+        let lock = if v.locked {
+            RichText::new("🔒").size(15.0)
+        } else {
+            RichText::new("🔓").size(15.0).weak()
+        };
+        ui.toggle_value(&mut v.locked, lock)
+            .on_hover_text("Locked: painting tools skip this layer");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().slider_width = 64.0;
+            ui.add(egui::Slider::new(&mut v.opacity, 0.0..=1.0).show_value(false))
+                .on_hover_text(format!(
+                    "View opacity {:.0}% (definition: {:.0}%)",
+                    v.opacity * 100.0,
+                    def.opacity * 100.0
+                ));
+            // Name takes what's left, truncated.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                let name = RichText::new(&def.name);
+                let r = ui.selectable_label(active, name).on_hover_text(format!(
+                    "{} ({}). Double click or right click to edit it",
+                    def.slug.as_str(),
+                    def.kind.name()
+                ));
+                if r.clicked() {
+                    st.view.active_layer = Some(i);
+                    st.view.references.active = false;
+                }
+                if r.double_clicked() {
+                    *edit = Some(Some(def.slug.clone()));
+                }
+                r.context_menu(|ui| {
+                    if ui.button("Edit layer…").clicked() {
+                        *edit = Some(Some(def.slug.clone()));
+                        ui.close();
+                    }
+                    folder_menu(ui, doc, def, i, refile);
+                    ui.separator();
+                    layer_ops_menu(ui, doc, &st.view.selection, def, &mut st.actions);
+                });
+                // A derived layer says so where the kind goes.
+                if def.is_derived() {
+                    derived_badge(ui, doc, def, st.accent);
+                } else {
+                    ui.weak(def.kind.name());
+                }
+            });
+        });
+    });
+    super::fields::mark(ui, &format!("layers:{}", def.slug), row.response.rect);
+    // Dropping a layer on a layer: into that layer's folder.
+    if let Some(p) = row.response.dnd_release_payload::<LayerDrag>()
+        && p.0 != i
+    {
+        *refile = Some((p.0, def.folder.clone()));
+    }
+}
+
+/// A layer menu's folder part: the folders to move it to, out of its
+/// folder, a new one.
+fn folder_menu(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    def: &worlds_core::LayerDef,
+    i: usize,
+    refile: &mut Option<(usize, Option<String>)>,
+) {
+    let mut folders: Vec<&str> = doc
+        .project
+        .layers
+        .iter()
+        .filter_map(|l| l.folder.as_deref())
+        .collect();
+    folders.sort();
+    folders.dedup();
+    ui.menu_button("Move to folder", |ui| {
+        for f in folders {
+            if def.folder.as_deref() != Some(f) && ui.button(f).clicked() {
+                *refile = Some((i, Some(f.to_string())));
+                ui.close();
+            }
+        }
+        if def.folder.is_some() && ui.button("Out of its folder").clicked() {
+            *refile = Some((i, None));
+            ui.close();
+        }
+        ui.separator();
+        ui.label("New folder (a / path):");
+        let id = egui::Id::new(("new layer folder", i));
+        let mut text: String = ui.data_mut(|d| d.get_temp(id).unwrap_or_default());
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .hint_text("Decor/Back")
+                .desired_width(120.0),
+        );
+        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (enter || ui.button("Move").clicked()) && !text.trim().is_empty() {
+            *refile = Some((i, Some(text.trim().to_string())));
+            text.clear();
+            ui.close();
+        }
+        ui.data_mut(|d| d.insert_temp(id, text));
+    });
 }
 
 /// The layer operations of a layer's right-click menu: duplicate, merge
@@ -1254,6 +1511,81 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    /// Layer folders: the tree, the command a drop makes, and a folder's
+    /// eye, lock and opacity applied to the layers inside.
+    #[test]
+    fn layer_folders() {
+        use super::super::testkit::{Driver, batches, state};
+        let (_tmp, mut st) = state();
+        let doc = st.doc.as_mut().unwrap();
+        for (slug, folder) in [("decor_back", "Decor/Back"), ("main_tiling", "Decor")] {
+            let i = doc
+                .project
+                .layers
+                .iter()
+                .position(|l| l.slug == slug)
+                .unwrap();
+            let cmd = folder_command(doc, i, Some(folder.into())).unwrap();
+            doc.project.apply(cmd).unwrap();
+        }
+        let doc = st.doc.as_ref().unwrap();
+        st.view.sync_layers(doc, None);
+        // Top first: objects, then Decor holding Back (decor_back) and
+        // main_tiling, then collision.
+        let tree = layer_tree(doc);
+        let ix = |s: &str| doc.project.layers.iter().position(|l| l.slug == s).unwrap();
+        assert_eq!(
+            tree,
+            [
+                LayerNode::Layer(ix("objects")),
+                LayerNode::Folder {
+                    path: "Decor".into(),
+                    children: vec![
+                        LayerNode::Folder {
+                            path: "Decor/Back".into(),
+                            children: vec![LayerNode::Layer(ix("decor_back"))],
+                        },
+                        LayerNode::Layer(ix("main_tiling")),
+                    ],
+                },
+                LayerNode::Layer(ix("collision")),
+            ]
+        );
+        // A folder's state reaches every layer inside, nested too.
+        let deco = ix("decor_back");
+        st.view.folders.insert(
+            "Decor".into(),
+            crate::view::FolderView {
+                visible: true,
+                locked: true,
+                opacity: 0.5,
+                collapsed: false,
+            },
+        );
+        assert!(st.view.layer_locked(deco) && st.view.layer_locked(ix("main_tiling")));
+        assert!(!st.view.layer_locked(ix("objects")));
+        assert!((st.view.layer_opacity(doc, deco) - 0.8 * 0.5).abs() < 1e-6);
+        st.view.folders.get_mut("Decor").unwrap().visible = false;
+        assert!(!st.view.layer_visible(deco));
+        assert_eq!(st.view.layer_opacity(doc, deco), 0.0);
+        // The pane draws the folders; folding hides what is inside.
+        st.view.folders.clear();
+        let mut d = Driver::new(layers);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        d.rect("layers:folder:Decor/Back");
+        d.rect("layers:decor_back");
+        let fold = d.rect("layers:folder:Decor:fold");
+        d.click(&mut st, fold.center());
+        assert!(st.view.folders["Decor"].collapsed);
+        // Out of its folder, as one entry.
+        let doc = st.doc.as_ref().unwrap();
+        let c = folder_command(doc, deco, None).unwrap();
+        assert_eq!(c.label(), "Take layer decor_back out of its folder");
+        assert_eq!(folder_command(doc, deco, Some("Decor/Back/".into())), None);
+        assert!(batches(&mut st).is_empty());
+    }
 
     /// The palette's random brush: an atlas drag replaces, Ctrl adds tiles,
     /// Shift adds a stamp; the weights, Save preset and a preset's click.

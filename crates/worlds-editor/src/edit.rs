@@ -230,6 +230,23 @@ pub struct Editing {
     /// The origin of the next entry recorded outside a gesture (see
     /// [`Editing::set_next_origin`]).
     next_origin: Option<Origin>,
+    /// A hash of the layer definitions without their `folder`, as of the
+    /// last change (taken at the first edit that changes no definition):
+    /// a change of folders alone ([`layer_print`]) rebakes nothing.
+    layer_print: Option<u64>,
+}
+
+/// A hash of `p`'s layer definitions with every `folder` left out: what
+/// bakes and the map depend on.
+fn layer_print(p: &worlds_core::Project) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for l in &p.layers {
+        let mut l = l.clone();
+        l.folder = None;
+        serde_json::to_string(&l).unwrap_or_default().hash(&mut h);
+    }
+    h.finish()
 }
 
 impl Editing {
@@ -727,6 +744,32 @@ impl Editing {
     /// the app to upload the textures again ([`Invalidation::Tilesets`]).
     fn defs_changed(&mut self, cx: &mut CommandContext<'_>, changes: &[Change]) -> Redefined {
         let doc = &mut *cx.doc;
+        let layer_def = |c: &Change| {
+            matches!(
+                c,
+                Change::Def {
+                    kind: DefKind::Layer,
+                    ..
+                }
+            )
+        };
+        if changes
+            .iter()
+            .any(|c| matches!(c, Change::Def { .. } | Change::DefRenamed { .. }))
+        {
+            // Layer definitions that differ only in `folder` (the Layers
+            // pane's folders): the table follows, nothing rebakes.
+            let print = layer_print(&doc.project);
+            let folders_only = self.layer_print == Some(print) && changes.iter().all(layer_def);
+            self.layer_print = Some(print);
+            if folders_only {
+                cx.view.resync_layers(doc, &[]);
+                doc.defs_gen += 1;
+                return Redefined::None;
+            }
+        } else if self.layer_print.is_none() {
+            self.layer_print = Some(layer_print(&doc.project));
+        }
         let mut all = false;
         let mut layers: BTreeSet<Slug> = BTreeSet::new();
         let mut tilesets = false;
@@ -1378,7 +1421,9 @@ impl Editing {
                 if pixel {
                     cx.view.selection.toggle(item);
                 } else {
-                    cx.view.selection.set([item]);
+                    // A group member keeps its group (unless entered).
+                    let items = crate::app::groups::click_items(cx.doc, cx.view, item);
+                    cx.view.selection.set(items);
                 }
             }
             return;

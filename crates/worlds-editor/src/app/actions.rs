@@ -157,6 +157,11 @@ pub enum Action {
     ToggleLibrary,
     /// Ctrl+L: the Levels pane in front, its search box focused.
     ShowLevels,
+    /// Ctrl+G with entities or annotations selected: one object group of
+    /// them.
+    GroupSelection,
+    /// Ctrl+Shift+G: remove the groups of the selected members.
+    UngroupSelection,
 }
 
 impl Action {
@@ -173,7 +178,21 @@ impl Action {
             ("Zoom in".into(), "+", Action::ZoomIn),
             ("Zoom out".into(), "-", Action::ZoomOut),
             ("Zoom 100%".into(), "1", Action::ZoomActual),
-            ("Toggle grid".into(), "Ctrl+G", Action::ToggleGrid),
+            (
+                "Toggle grid".into(),
+                "Ctrl+G (nothing selected)",
+                Action::ToggleGrid,
+            ),
+            (
+                "Group the selection".into(),
+                "Ctrl+G",
+                Action::GroupSelection,
+            ),
+            (
+                "Ungroup the selection".into(),
+                "Ctrl+Shift+G",
+                Action::UngroupSelection,
+            ),
             ("Next level".into(), "PgDn", Action::NextLevel),
             ("Previous level".into(), "PgUp", Action::PrevLevel),
             ("New level…".into(), "", Action::NewLevel(None)),

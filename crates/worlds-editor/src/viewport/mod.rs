@@ -1181,7 +1181,14 @@ impl Viewport {
             && cx.view.paste.is_none()
             && let Some(ix) = level_under
         {
-            self.pending_fit = Some(Fit::Level(ix));
+            // On a group member, a double click enters the group (the
+            // member alone selected); elsewhere it frames the level.
+            let member = pointer_world
+                .and_then(|wp| select_item_at(doc, cx.view, level_under, wp, cam.zoom))
+                .filter(|item| crate::app::groups::enter(doc, cx.view, item));
+            if member.is_none() {
+                self.pending_fit = Some(Fit::Level(ix));
+            }
         }
         // The paste ghost where a click would land it.
         if let Some(p) = cx.view.paste.as_mut() {
@@ -2769,10 +2776,14 @@ pub fn select_press_alt(
         }
         let was_selected = view.selection.contains(&item);
         if !was_selected {
+            // A group member brings its group (unless the group is entered).
+            let items = crate::app::groups::click_items(doc, view, item);
             if p.add {
-                view.selection.add(item);
+                for i in items {
+                    view.selection.add(i);
+                }
             } else {
-                view.selection.set([item]);
+                view.selection.set(items);
             }
         }
         return Some((level.unwrap_or(carrier), Grab::Selection { was_selected }));

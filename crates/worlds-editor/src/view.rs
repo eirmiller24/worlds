@@ -186,6 +186,49 @@ pub struct ViewState {
     /// layer's palette, favorites, collapsed categories (`ui.json`
     /// `library`).
     pub library: crate::library::LibraryView,
+    /// The object group a double click entered, (level id, group id): a
+    /// click on one of its members picks that member alone.
+    pub entered_group: Option<(Id, Id)>,
+    /// Layer folders' visibility, lock, opacity and collapse, by folder
+    /// path (`ui.json` `folders`).
+    pub folders: std::collections::BTreeMap<String, FolderView>,
+    /// Each layer's `folder` (same order as [`Self::layers`]), as of the
+    /// last sync.
+    pub layer_folders: Vec<Option<String>>,
+}
+
+/// A layer folder's state in the Layers pane: applied to every layer
+/// inside it (and in its subfolders). Editor state, saved in `ui.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FolderView {
+    pub visible: bool,
+    pub locked: bool,
+    /// Multiplies the layers' view opacity.
+    pub opacity: f32,
+    pub collapsed: bool,
+}
+
+impl Default for FolderView {
+    fn default() -> Self {
+        FolderView {
+            visible: true,
+            locked: false,
+            opacity: 1.0,
+            collapsed: false,
+        }
+    }
+}
+
+/// `"Decor/Back"`, then its parents: `"Decor/Back"`, `"Decor"`.
+pub fn folder_chain(path: &str) -> impl Iterator<Item = &str> {
+    let mut end = Some(path.len());
+    std::iter::from_fn(move || {
+        let e = end?;
+        let p = &path[..e];
+        end = p.rfind('/');
+        (!p.is_empty()).then_some(p)
+    })
 }
 
 impl Default for ViewState {
@@ -221,6 +264,9 @@ impl Default for ViewState {
             bookmarks: Vec::new(),
             brush_flip: None,
             library: Default::default(),
+            entered_group: None,
+            folders: Default::default(),
+            layer_folders: Vec::new(),
         }
     }
 }
@@ -724,6 +770,7 @@ impl ViewState {
         }
         self.layers = fresh;
         self.layer_slugs = layers.iter().map(|l| l.slug.clone()).collect();
+        self.layer_folders = layers.iter().map(|l| l.folder.clone()).collect();
         self.active_layer = active.or_else(|| default_active_layer(doc));
     }
 
@@ -761,6 +808,7 @@ impl ViewState {
         }
         self.layers = fresh;
         self.layer_slugs = layers.iter().map(|l| l.slug.clone()).collect();
+        self.layer_folders = layers.iter().map(|l| l.folder.clone()).collect();
         self.active_layer = active.or_else(|| default_active_layer(doc));
     }
 
@@ -779,19 +827,36 @@ impl ViewState {
         });
     }
 
+    /// The folders layer `i` is in, innermost first.
+    fn folders_of(&self, i: usize) -> impl Iterator<Item = FolderView> + '_ {
+        self.layer_folders
+            .get(i)
+            .and_then(|f| f.as_deref())
+            .into_iter()
+            .flat_map(folder_chain)
+            .map(|p| self.folders.get(p).copied().unwrap_or_default())
+    }
+
+    /// Locked itself, or in a locked folder.
     pub fn layer_locked(&self, i: usize) -> bool {
-        self.layers.get(i).is_some_and(|l| l.locked)
+        self.layers.get(i).is_some_and(|l| l.locked) || self.folders_of(i).any(|f| f.locked)
     }
 
+    /// Visible itself and every folder it is in.
     pub fn layer_visible(&self, i: usize) -> bool {
-        self.layers.get(i).is_none_or(|l| l.visible)
+        self.layers.get(i).is_none_or(|l| l.visible) && self.folders_of(i).all(|f| f.visible)
     }
 
-    /// Effective opacity of project layer `i`.
+    /// Effective opacity of project layer `i`: the definition's, the
+    /// layer's view opacity and its folders'.
     pub fn layer_opacity(&self, doc: &Document, i: usize) -> f32 {
         let def = doc.project.layers.get(i).map_or(1.0, |d| d.opacity as f32);
         let v = self.layers.get(i).copied().unwrap_or_default();
-        if v.visible { def * v.opacity } else { 0.0 }
+        if self.layer_visible(i) {
+            def * v.opacity * self.folders_of(i).map(|f| f.opacity).product::<f32>()
+        } else {
+            0.0
+        }
     }
 }
 

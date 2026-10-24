@@ -13,6 +13,7 @@ pub mod defs;
 pub mod entities;
 pub mod fields;
 pub mod find;
+pub mod groups;
 pub mod history;
 pub mod import;
 pub mod inspector;
@@ -334,6 +335,9 @@ struct UiFile {
     /// The Palette's Library: shown or not, favorites, collapsed parts.
     #[serde(default)]
     library: crate::library::LibraryView,
+    /// Layer folders' eye, lock, opacity and fold, by folder path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    folders: BTreeMap<String, crate::view::FolderView>,
 }
 
 /// The map tabs of `f`: one per map tab in the dock (`docked`), with the
@@ -2354,6 +2358,7 @@ impl EditorApp {
         self.st.view.references.ui = f.references;
         self.st.view.bookmarks = f.bookmarks;
         self.st.view.library = f.library;
+        self.st.view.folders = f.folders;
         self.last_ui_json = text;
         true
     }
@@ -2455,6 +2460,22 @@ impl EditorApp {
             linked_viewports: view.link,
             bookmarks: view.bookmarks.clone(),
             library: self.st.view.library.clone(),
+            // Only folders the layers still have, and not at their default.
+            folders: self
+                .st
+                .view
+                .folders
+                .iter()
+                .filter(|(p, v)| {
+                    **v != crate::view::FolderView::default()
+                        && doc.project.layers.iter().any(|l| {
+                            l.folder.as_deref().is_some_and(|f| {
+                                crate::view::folder_chain(f).any(|c| c == p.as_str())
+                            })
+                        })
+                })
+                .map(|(p, v)| (p.clone(), *v))
+                .collect(),
         };
         let Ok(json) = serde_json::to_string_pretty(&f) else {
             return;
@@ -3390,6 +3411,10 @@ impl EditorApp {
         let mut acts = Vec::new();
         let on_map = !ctx.egui_wants_keyboard_input() && !self.palette.open;
         let turnable = self.turnable().is_some();
+        // Ctrl+G groups a selection of entities or annotations, else (as
+        // before groups) toggles the grid.
+        let groupable = self.st.view.selection.entities().next().is_some()
+            || self.st.view.selection.notes().next().is_some();
         ctx.input_mut(|i| {
             let cmd = Modifiers::COMMAND;
             if i.consume_key(cmd, Key::P) {
@@ -3414,8 +3439,15 @@ impl EditorApp {
             if i.consume_key(cmd, Key::Z) {
                 acts.push(Action::Undo);
             }
+            if i.consume_key(cmd | Modifiers::SHIFT, Key::G) {
+                acts.push(Action::UngroupSelection);
+            }
             if i.consume_key(cmd, Key::G) {
-                acts.push(Action::ToggleGrid);
+                acts.push(if groupable {
+                    Action::GroupSelection
+                } else {
+                    Action::ToggleGrid
+                });
             }
             if i.consume_key(cmd, Key::F) {
                 acts.push(Action::ShowFind);
@@ -3694,6 +3726,20 @@ impl EditorApp {
                     self.st
                         .view
                         .set_status(format!("Forgot bookmark {}", b.name), false);
+                }
+            }
+            Action::GroupSelection | Action::UngroupSelection => {
+                let Some(doc) = &self.st.doc else {
+                    return;
+                };
+                let cmd = if a == Action::GroupSelection {
+                    groups::group_command(doc, &self.st.view)
+                } else {
+                    groups::ungroup_command(doc, &self.st.view)
+                };
+                match cmd.and_then(|c| self.apply_command(c)) {
+                    Ok(()) => self.st.view.entered_group = None,
+                    Err(e) => self.st.view.set_status(e, true),
                 }
             }
             Action::ShowLevels => {

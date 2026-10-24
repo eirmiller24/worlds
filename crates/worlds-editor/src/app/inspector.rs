@@ -49,6 +49,11 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                 let k = part(ui, st);
                 n += k;
             }
+            // The selection's object group.
+            if n > 0 {
+                let k = super::groups::inspector_section(ui, st);
+                n += k;
+            }
             // The selected reference image, if any.
             let k = super::references::inspector_section(ui, st);
             if k > 0 {

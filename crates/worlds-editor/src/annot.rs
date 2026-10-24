@@ -1520,6 +1520,17 @@ pub fn plan_delete(doc: &Document, view: &ViewState) -> DeletePlan {
             id: n.note.id.clone(),
         });
     }
+    // Deleted members leave their object groups in the same entry.
+    let gone: Vec<Id> = r
+        .entities
+        .iter()
+        .cloned()
+        .chain(r.notes.iter().map(|n| n.note.id.clone()))
+        .collect();
+    commands.extend(worlds_core::command::groups::drop_members(
+        &doc.project,
+        &gone,
+    ));
     let mut levels = Vec::new();
     for &ix in &r.levels {
         let l = doc.level(ix);
