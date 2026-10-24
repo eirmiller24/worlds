@@ -703,3 +703,33 @@ fn duplicate_level_gives_its_references_new_ids() {
     assert_ne!(copy[0].id, id("refsketch2"));
     assert_eq!(copy[0].image, "art/sketch.png");
 }
+
+#[test]
+fn duplicate_layer_copies_into_every_world() {
+    let mut p = common::fixture();
+    p.apply(Command::CreateWorld {
+        slug: s("caves"),
+        name: None,
+    })
+    .unwrap();
+    p.apply(Command::MoveLevelToWorld {
+        level: s("crevasse"),
+        world: s("caves"),
+        world_px: None,
+    })
+    .unwrap();
+    check(
+        &mut p,
+        Command::DuplicateLayer {
+            layer: s("decor_back"),
+            slug: s("decor_back_copy"),
+        },
+    );
+    assert_eq!(p.world_of_level("crevasse").unwrap().slug, "caves");
+    let crev = p.level("crevasse").unwrap();
+    assert!(!crev.tiles_layer("decor_back").unwrap().tiles.is_empty());
+    assert_eq!(
+        crev.tiles_layer("decor_back_copy").unwrap().tiles,
+        crev.tiles_layer("decor_back").unwrap().tiles
+    );
+}

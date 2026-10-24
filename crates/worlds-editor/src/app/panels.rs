@@ -88,7 +88,7 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
                 let Some(v) = st.view.layers.get_mut(i) else {
                     continue;
                 };
-                let active = st.view.active_layer == Some(i);
+                let active = st.view.active_layer == Some(i) && !st.view.references.active;
                 ui.horizontal(|ui| {
                     let eye = RichText::new(if v.visible { "👁" } else { "–" }).size(15.0);
                     ui.toggle_value(&mut v.visible, eye)
@@ -119,6 +119,7 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
                             ));
                             if r.clicked() {
                                 st.view.active_layer = Some(i);
+                                st.view.references.active = false;
                             }
                             if r.double_clicked() {
                                 edit = Some(Some(def.slug.clone()));
@@ -128,6 +129,8 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
                                     edit = Some(Some(def.slug.clone()));
                                     ui.close();
                                 }
+                                ui.separator();
+                                layer_ops_menu(ui, doc, &st.view.selection, def, &mut st.actions);
                             });
                             // A derived layer says so where the kind goes.
                             if def.is_derived() {
@@ -154,10 +157,83 @@ pub fn layers(ui: &mut egui::Ui, st: &mut EditorState) {
                 }
             }
         });
+    super::references::layers_row(ui, st);
     match edit {
         Some(Some(slug)) => st.project.show_layer(slug),
         Some(None) => st.project.show(super::project_pane::Section::Layers),
         None => {}
+    }
+}
+
+/// The layer operations of a layer's right-click menu: duplicate, merge
+/// down (greyed out, saying why, unless the layer below is a tiles layer on
+/// the same grid), move the selection here (tile stacks to a tiles layer,
+/// entities to an entities layer).
+fn layer_ops_menu(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    selection: &crate::view::Selection,
+    def: &worlds_core::LayerDef,
+    actions: &mut Vec<Action>,
+) {
+    let slug = def.slug.clone();
+    if ui
+        .button("Duplicate layer")
+        .on_hover_text(format!(
+            "A copy of {} and its content in every level, right above it",
+            def.name
+        ))
+        .clicked()
+    {
+        actions.push(Action::DuplicateLayer(Some(slug.clone())));
+        ui.close();
+    }
+    if def.is_tiles() {
+        let target = worlds_core::command::layer_ops::merge_target(&doc.project, &slug);
+        let r = ui.add_enabled(target.is_ok(), egui::Button::new("Merge down"));
+        let r = match &target {
+            Ok(lower) => r.on_hover_text(format!(
+                "Put its tiles on top of {}'s in every level, then remove it",
+                lower.name
+            )),
+            Err(e) => r.on_disabled_hover_text(e.to_string()),
+        };
+        if r.clicked() {
+            actions.push(Action::MergeLayerDown(Some(slug.clone())));
+            ui.close();
+        }
+    }
+    let n = if def.is_tiles() {
+        selection.tiles().filter(|(_, l, _)| **l != slug).count()
+    } else if def.is_entities() {
+        selection
+            .entities()
+            .filter(|id| doc.find_entity(id).is_some_and(|(_, l, _)| *l != slug))
+            .count()
+    } else {
+        return;
+    };
+    let what = match (def.is_tiles(), n == 1) {
+        (true, true) => "tile stack",
+        (true, false) => "tile stacks",
+        (false, true) => "entity",
+        (false, false) => "entities",
+    };
+    let text = if n == 0 {
+        "Move selection here".to_string()
+    } else {
+        format!("Move {n} selected {what} here")
+    };
+    let r = ui
+        .add_enabled(n > 0, egui::Button::new(text))
+        .on_disabled_hover_text(if def.is_tiles() {
+            "Select tile stacks on another tiles layer first"
+        } else {
+            "Select entities on another entities layer first"
+        });
+    if r.clicked() {
+        actions.push(Action::MoveSelectionToLayer(Some(slug)));
+        ui.close();
     }
 }
 

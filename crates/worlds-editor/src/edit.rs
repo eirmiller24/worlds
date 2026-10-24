@@ -218,6 +218,9 @@ pub struct Editing {
     /// Cells the random brush filled during the current gesture: later
     /// picks that would cover them are skipped.
     taken: HashSet<[i32; 2]>,
+    /// The origin of the next entry recorded outside a gesture (see
+    /// [`Editing::set_next_origin`]).
+    next_origin: Option<Origin>,
 }
 
 impl Editing {
@@ -263,6 +266,12 @@ impl Editing {
     /// The incremental bake cache (tests).
     pub fn cache(&self) -> &BakeCache {
         &self.cache
+    }
+
+    /// The next command applied outside a gesture is recorded with this
+    /// origin instead of the user (files applied from disk).
+    pub fn set_next_origin(&mut self, origin: Origin) {
+        self.next_origin = Some(origin);
     }
 
     /// The history, for the live API: agent entries are recorded here.
@@ -394,7 +403,8 @@ impl Editing {
     /// the command joins it.
     fn push(&mut self, cx: &mut CommandContext<'_>, cmd: Command) -> Result<(), String> {
         let t = Instant::now();
-        let changes = match self.history.push(&mut cx.doc.project, cmd) {
+        let origin = self.next_origin.take().unwrap_or(Origin::User);
+        let changes = match self.history.push_as(&mut cx.doc.project, cmd, origin) {
             Ok(c) => c,
             Err(e) => return Err(self.failed(cx, e)),
         };

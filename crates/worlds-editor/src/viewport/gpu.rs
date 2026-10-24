@@ -46,6 +46,10 @@ impl Gpu {
 /// Number of project layers the opacity table holds.
 pub const MAX_LAYERS: usize = 64;
 
+/// Texture slots of reference images start here (tilesets take the slots
+/// from 2 up; see `scene::tileset_tex`).
+pub const REF_TEX_BASE: u32 = 4096;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Uniforms {
@@ -100,6 +104,13 @@ pub struct ViewportGpu {
     pub viewport_px: [f32; 4],
     /// Instances uploaded since the last [`Self::take_upload_count`].
     uploaded: usize,
+    /// Reference images' quads, drawn before every chunk (under the
+    /// layers): one buffer rewritten each frame ([`Self::set_refs`]).
+    refs: Option<GpuChunk>,
+    /// This frame's reference image draws (`chunk` unused).
+    pub ref_draws: Vec<DrawCmd>,
+    /// Reference image textures by image path ([`super::references`]).
+    pub ref_images: super::references::RefImages,
 }
 
 impl ViewportGpu {
@@ -216,6 +227,9 @@ impl ViewportGpu {
             draws: Vec::with_capacity(1024),
             viewport_px: [0.0; 4],
             uploaded: 0,
+            refs: None,
+            ref_draws: Vec::new(),
+            ref_images: Default::default(),
         };
         vg.set_texture(device, queue, TEX_WHITE, 1, 1, &[255, 255, 255, 255]);
         #[rustfmt::skip]
@@ -357,6 +371,30 @@ impl ViewportGpu {
         self.uploaded += c.instances.len();
     }
 
+    /// Upload this frame's reference image quads (drawn with
+    /// [`Self::ref_draws`]).
+    pub fn set_refs(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, inst: &[Instance]) {
+        let n = inst.len() as u32;
+        if n == 0 {
+            return;
+        }
+        if self.refs.as_ref().is_none_or(|g| g.capacity < n) {
+            let capacity = n.next_power_of_two().max(16);
+            self.refs = Some(GpuChunk {
+                buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("worlds references"),
+                    size: capacity as u64 * std::mem::size_of::<Instance>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                capacity,
+                version: 0,
+            });
+        }
+        let g = self.refs.as_ref().expect("just made");
+        queue.write_buffer(&g.buffer, 0, bytemuck::cast_slice(inst));
+    }
+
     pub fn take_upload_count(&mut self) -> usize {
         std::mem::take(&mut self.uploaded)
     }
@@ -366,7 +404,7 @@ impl ViewportGpu {
     }
 
     fn paint(&self, pass: &mut wgpu::RenderPass<'static>) {
-        if self.draws.is_empty() {
+        if self.draws.is_empty() && self.ref_draws.is_empty() {
             return;
         }
         let [x, y, w, h] = self.viewport_px;
@@ -382,6 +420,21 @@ impl ViewportGpu {
             .bind_group;
         let mut bound_tex = u32::MAX;
         let mut bound_chunk = u32::MAX;
+        if let Some(refs) = self.refs.as_ref().filter(|_| !self.ref_draws.is_empty()) {
+            pass.set_vertex_buffer(0, refs.buffer.slice(..));
+            for d in &self.ref_draws {
+                if d.tex != bound_tex {
+                    let bg = self
+                        .textures
+                        .get(d.tex as usize)
+                        .and_then(|t| t.as_ref())
+                        .map_or(missing, |t| &t.bind_group);
+                    pass.set_bind_group(1, bg, &[]);
+                    bound_tex = d.tex;
+                }
+                pass.draw(0..4, d.start..d.end);
+            }
+        }
         for d in &self.draws {
             let Some(Some(chunk)) = self.chunks.get(d.chunk as usize) else {
                 continue;
