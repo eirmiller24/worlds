@@ -157,9 +157,14 @@ impl Handler {
                     false
                 } else {
                     self.mutated(host, &a.changes);
-                    host.doc()
-                        .history
-                        .record(p.label.clone(), client.origin(), vec![a.inverse])
+                    let parts = p.commands.iter().map(Command::label).collect();
+                    host.doc().history.record_with(
+                        p.label.clone(),
+                        client.origin(),
+                        vec![a.inverse],
+                        parts,
+                        &a.changes,
+                    )
                 };
                 if recorded {
                     self.last_batch = Some(p.label.clone());

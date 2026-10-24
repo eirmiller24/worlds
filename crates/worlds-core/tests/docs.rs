@@ -148,6 +148,10 @@ fn commands_md_examples_apply_in_order() {
         "remove_world",
         "reorder_worlds",
         "move_level_to_world",
+        "duplicate_layer",
+        "add_reference",
+        "update_reference",
+        "remove_reference",
     ];
     let missing: Vec<&str> = all.iter().copied().filter(|o| !ops.contains(*o)).collect();
     assert!(missing.is_empty(), "no example for {missing:?}");

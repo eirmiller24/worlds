@@ -12,13 +12,16 @@ pub mod defs;
 pub mod entities;
 pub mod fields;
 pub mod find;
+pub mod history;
 pub mod inspector;
+mod layer_actions;
 pub mod note_inspector;
 pub mod notes;
 pub mod panels;
 pub mod problems;
 pub mod project_pane;
 pub mod recovery;
+pub mod references;
 pub mod rules;
 #[cfg(test)]
 pub(crate) mod testkit;
@@ -70,6 +73,8 @@ pub enum Pane {
     Project,
     /// Project-wide find and replace ([`find`]), tab "Find".
     Find,
+    /// The undo log ([`history`]): click an entry to go back to it.
+    History,
 }
 
 /// Default layout. Split fractions are the share of the first (left or
@@ -88,7 +93,7 @@ pub fn default_dock() -> DockState<Pane> {
     );
     let [_inspector, _problems] =
         s.split_below(right, 0.7, vec![Pane::Problems, Pane::Notes, Pane::Find]);
-    let [_center, _log] = s.split_below(center, 0.62, vec![Pane::Log, Pane::Rules]);
+    let [_center, _log] = s.split_below(center, 0.62, vec![Pane::Log, Pane::Rules, Pane::History]);
     dock
 }
 
@@ -191,6 +196,26 @@ pub fn add_find_pane(dock: &mut DockState<Pane>) {
     }
 }
 
+/// Give a layout saved before the History pane existed one: a tab next to
+/// the Log, else next to the Rules pane, else a bottom split of the map.
+pub fn add_history_pane(dock: &mut DockState<Pane>) {
+    if dock.find_tab(&Pane::History).is_some() {
+        return;
+    }
+    for next_to in [Pane::Log, Pane::Rules] {
+        if let Some(p) = dock.find_tab(&next_to)
+            && let Ok(leaf) = dock.leaf_mut(p.node_path())
+        {
+            leaf.append_tab(Pane::History);
+            return;
+        }
+    }
+    if let Some((node, _)) = dock.find_main_surface_tab(&Pane::Viewport) {
+        dock.main_surface_mut()
+            .split_below(node, 0.62, vec![Pane::History]);
+    }
+}
+
 /// Bring `pane` to the front of its tab group.
 pub fn show_pane(dock: &mut DockState<Pane>, pane: Pane) {
     if let Some(p) = dock.find_tab(&pane) {
@@ -229,6 +254,9 @@ struct UiFile {
     /// The world the map shows (by slug).
     #[serde(default)]
     active_world: Option<String>,
+    /// The References pseudo-layer's eye and lock.
+    #[serde(default)]
+    references: crate::viewport::references::RefsUi,
 }
 
 fn default_paint_mode() -> Tool {
@@ -342,6 +370,10 @@ pub struct EditorState {
     pub pane_rects: HashMap<Pane, egui::Rect>,
     /// The Find pane.
     pub find: find::FindState,
+    /// The History pane.
+    pub history: history::HistoryState,
+    /// "Add reference image…": the file dialog, while it is open.
+    pub ref_picker: Option<references::Picker>,
 }
 
 impl Default for EditorState {
@@ -372,6 +404,8 @@ impl Default for EditorState {
             project: project_pane::ProjectState::default(),
             pane_rects: HashMap::new(),
             find: find::FindState::default(),
+            history: history::HistoryState::default(),
+            ref_picker: None,
         }
     }
 }
@@ -1115,6 +1149,8 @@ impl EditorApp {
             UiStep::Cut(_) => self.status_step(Action::Cut),
             UiStep::Paste(p) => self.paste_step(p),
             UiStep::Find(f) => self.find_step(f),
+            UiStep::History(h) => self.history_step(h),
+            UiStep::Reference(r) => self.reference_step(r),
         }
     }
 
@@ -2073,6 +2109,7 @@ impl EditorApp {
         add_notes_pane(&mut self.dock);
         add_project_pane(&mut self.dock);
         add_find_pane(&mut self.dock);
+        add_history_pane(&mut self.dock);
         self.st.viewport.camera = f.camera;
         self.st.view.active_level = f.active_level.and_then(|s| doc.level_ix(&s));
         if let Some(i) = f
@@ -2100,6 +2137,7 @@ impl EditorApp {
             .active_world
             .and_then(|s| Slug::new(s).ok())
             .filter(|s| doc.project.world(s.as_str()).is_some());
+        self.st.view.references.ui = f.references;
         self.last_ui_json = text;
         true
     }
@@ -2156,6 +2194,7 @@ impl EditorApp {
                 .worlds
                 .get(self.st.view.world_ix(doc))
                 .map(|w| w.slug.to_string()),
+            references: self.st.view.references.ui,
         };
         let Ok(json) = serde_json::to_string_pretty(&f) else {
             return;
@@ -2222,6 +2261,11 @@ impl EditorApp {
         if std::mem::take(&mut self.st.find.focus) {
             show_pane(&mut self.dock, Pane::Find);
         }
+        history::refresh(
+            &mut self.st.history,
+            rev,
+            self.commands.editing_ref().map(|e| e.history()),
+        );
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
@@ -2281,6 +2325,7 @@ impl EditorApp {
             show_pane(&mut self.dock, Pane::EntityDefs);
         }
         self.project_pane_commands();
+        self.poll_reference_picker();
         self.apply_invalidations();
         self.report_user_edits();
         // The drain point: agent requests, unless a gesture is in progress.
@@ -2428,7 +2473,7 @@ impl EditorApp {
 
     /// At the drain point, unless a gesture or an agent batch is open: apply
     /// the entity definition files that changed on disk as one entry
-    /// ("Disk: entities/door.json", origin user, reported as `changed`),
+    /// ("Disk: entities/door.json", origin disk, reported as `changed`),
     /// then mark those files clean, since disk already holds them. Undoing
     /// it marks them dirty again (a save then writes the old definition
     /// back). A file that doesn't load keeps the old definition and is
@@ -2486,6 +2531,11 @@ impl EditorApp {
         let Some(cmd) = d.command else {
             return;
         };
+        // The entry says it came from disk (the History pane, `changed`
+        // events' `entry_origin` on undo).
+        if let Some(e) = self.commands.editing() {
+            e.set_next_origin(worlds_core::command::Origin::Disk);
+        }
         match self.apply_command(cmd) {
             Ok(()) => {
                 if let Some(doc) = &mut self.st.doc {
@@ -3033,6 +3083,7 @@ impl EditorApp {
                     }
                 }
                 WatchChange::Tileset(i) => self.tileset_changed(i),
+                WatchChange::Image(p) => self.reference_image_changed(&p),
             }
         }
     }
@@ -3281,6 +3332,13 @@ impl EditorApp {
             Action::RenameWorld(w) => self.open_world_dialog(Some(w)),
             Action::DeleteWorld(w) => self.ask_delete_world(w),
             Action::MoveLevelToWorld { level, world } => self.move_level_to_world(level, world),
+            Action::ShowHistory => show_pane(&mut self.dock, Pane::History),
+            Action::HistoryJump(to) => self.history_jump(to),
+            Action::DuplicateLayer(l) => self.duplicate_layer(l),
+            Action::MergeLayerDown(l) => self.merge_layer_down(l),
+            Action::MoveSelectionToLayer(l) => self.move_selection_to_layer(l),
+            Action::AddReference(scope) => self.add_reference_dialog(scope),
+            Action::ShowInspector => show_pane(&mut self.dock, Pane::Inspector),
             Action::DeleteSelection => self.delete_selection(),
             Action::DuplicateSelection => self.duplicate_selection(),
             Action::DuplicateLevel(ix) => self.duplicate_level(ix),
@@ -4204,6 +4262,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Notes => "Notes".into(),
             Pane::Project => "Project".into(),
             Pane::Find => "Find".into(),
+            Pane::History => "History".into(),
         }
     }
 
@@ -4236,6 +4295,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Notes => notes::pane(ui, self.st),
             Pane::Project => project_pane::pane(ui, self.st),
             Pane::Find => find::pane(ui, self.st),
+            Pane::History => history::pane(ui, self.st),
         }
     }
 

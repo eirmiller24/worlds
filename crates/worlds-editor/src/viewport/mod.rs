@@ -27,6 +27,7 @@
 pub mod camera;
 pub mod gpu;
 pub mod notes;
+pub mod references;
 pub mod scene;
 
 use std::time::Duration;
@@ -190,6 +191,7 @@ impl Viewport {
         let mut r = gpu.renderer.write();
         if let Some(vg) = r.callback_resources.get_mut::<ViewportGpu>() {
             vg.clear_chunks();
+            vg.ref_images.clear();
             for i in 0..doc.project.tilesets.len() {
                 upload_tileset(vg, gpu, doc, i);
             }
@@ -457,6 +459,15 @@ impl Viewport {
                 }
                 stats.draws = vg.draws.len();
                 stats.uploaded = vg.take_upload_count();
+                references::sync(
+                    vg,
+                    cx.gpu,
+                    doc,
+                    cx.view.world_ix(doc),
+                    &mut cx.view.references,
+                    &scene.draw_order,
+                    &view,
+                );
                 vg.viewport_px = [left as f32, top as f32, w as f32, h as f32];
                 let off = cam.snapped_offset();
                 let mut u = Uniforms {
@@ -480,6 +491,38 @@ impl Viewport {
                 );
             }
         } else {
+            // Flat: no tiles, but reference images still draw (one quad
+            // each) over the level fills.
+            if references::drawn(doc, &cx.view.references, cx.view.world_ix(doc)) {
+                let mut r = cx.gpu.renderer.write();
+                if let Some(vg) = r.callback_resources.get_mut::<ViewportGpu>() {
+                    vg.draws.clear();
+                    references::sync(
+                        vg,
+                        cx.gpu,
+                        doc,
+                        cx.view.world_ix(doc),
+                        &mut cx.view.references,
+                        &scene.draw_order,
+                        &view,
+                    );
+                    vg.viewport_px = [left as f32, top as f32, w as f32, h as f32];
+                    let off = cam.snapped_offset();
+                    vg.write_uniforms(
+                        &cx.gpu.queue,
+                        &Uniforms {
+                            view: [off[0] as f32, off[1] as f32, cam.zoom as f32, 0.0],
+                            size: [w as f32, h as f32, 0.0, 0.0],
+                            opacity: [[1.0; 4]; gpu::MAX_LAYERS / 4],
+                        },
+                    );
+                }
+                drop(r);
+                painter.add(egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    ViewportCallback,
+                ));
+            }
             if self.draw_entities {
                 draw_world_labels(&painter, doc, scene, cx.view, &view, &to_screen);
             }
@@ -529,6 +572,14 @@ impl Viewport {
                 accent: cx.accent,
                 snapshot: false,
             },
+        );
+        references::draw_overlay(
+            &painter,
+            doc,
+            &cx.view.references,
+            cx.view.world_ix(doc),
+            &to_screen,
+            cx.accent,
         );
 
         // ---- overlays ----
@@ -751,7 +802,40 @@ impl Viewport {
             )
         });
         let escape = kb_free && ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if cx.view.pick.is_some() && self.gesture.is_none() {
+        // The Select tool on reference images (the References pseudo-layer
+        // active): a press it takes doesn't start the Select gesture.
+        let mut ref_cmds = Vec::new();
+        let ref_busy = references::interact(
+            doc,
+            cx.view.world_ix(doc),
+            &mut cx.view.references,
+            &scene.draw_order,
+            &references::Input {
+                tool,
+                hand,
+                hovered: resp.hovered(),
+                pressed,
+                down,
+                released,
+                escape,
+                free: self.gesture.is_none()
+                    && cx.view.pick.is_none()
+                    && cx.view.drawing.is_none()
+                    && cx.view.paste.is_none()
+                    && !on_tab
+                    && handle.is_none()
+                    && !strip.zip(pointer_pts).is_some_and(|(r, p)| r.contains(p)),
+                pointer_world,
+                pointer: pointer_pts,
+                to_screen: &to_screen,
+            },
+            &mut ref_cmds,
+        );
+        cx.actions
+            .extend(ref_cmds.into_iter().map(|c| Action::Apply(Box::new(c))));
+        if ref_busy {
+            // Taken by the reference drag.
+        } else if cx.view.pick.is_some() && self.gesture.is_none() {
             // A canvas pick armed by an editor takes the next click, whatever
             // the tool; Escape cancels it.
             if escape {
@@ -1433,6 +1517,8 @@ impl Viewport {
                 vg.free_chunk(id);
             }
             vg.draws.clear();
+            // Reference images aren't part of a snapshot.
+            vg.ref_draws.clear();
             for &cr in &self.visible {
                 let c = scene.chunk(cr);
                 vg.sync_chunk(&cx.gpu.device, &cx.gpu.queue, c);

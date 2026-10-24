@@ -14,6 +14,7 @@ mod derived;
 mod entity;
 mod expand;
 mod layer;
+mod reference;
 mod rules;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +40,7 @@ pub use layer::{
     LayerKind, LayerState, Override, RESERVED_GLYPHS, TilePlacement, TilesDef, TilesLayer,
     glyph_problem,
 };
+pub use reference::Reference;
 pub use rules::{
     ANCHOR_GLYPH, Align, CellMatch, CellTest, Checker, Draw, Edge, GroupMode, Legend,
     LevelFieldRequirement, LevelTagRequirement, Macros, MatchSelect, Modulo, OutOfBounds, Output,
@@ -495,6 +497,10 @@ pub struct World {
     /// World-scope annotations (world pixel coordinates), in insertion order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Annotation>,
+    /// World-scope reference images (world pixels), bottom first. Never
+    /// exported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<Reference>,
     /// `levels/<slug>/`, sorted by slug.
     #[serde(skip)]
     pub levels: Vec<Level>,
@@ -507,6 +513,7 @@ impl World {
             name: None,
             guide_groups: Vec::new(),
             notes: Vec::new(),
+            references: Vec::new(),
             levels: Vec::new(),
         }
     }
@@ -555,6 +562,10 @@ pub struct Level {
     /// has seed 0, no optional groups and no tileset substitutions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub layers: BTreeMap<Slug, LayerState>,
+    /// Reference images under the layer stack (level pixels), bottom
+    /// first. Never exported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<Reference>,
 
     /// `<layer>.json` for (non-derived) int_grid layers, sorted by layer
     /// slug. A layer with no entry is all empty.
@@ -589,6 +600,7 @@ impl Level {
             tags: Vec::new(),
             fields: BTreeMap::new(),
             layers: BTreeMap::new(),
+            references: Vec::new(),
             int_grids: Vec::new(),
             overrides: Vec::new(),
             tiles: Vec::new(),
@@ -658,6 +670,7 @@ impl Level {
             tags,
             fields,
             layers,
+            references,
             int_grids,
             overrides,
             tiles,
@@ -676,6 +689,7 @@ impl Level {
             tags: tags.clone(),
             fields: fields.clone(),
             layers: layers.clone(),
+            references: references.clone(),
             int_grids: int_grids
                 .iter()
                 .filter(|g| file(&g.layer))

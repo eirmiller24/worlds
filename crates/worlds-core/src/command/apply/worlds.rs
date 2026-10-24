@@ -134,10 +134,16 @@ impl Project {
         }
         let w = &self.worlds[wi];
         let (levels, notes, groups) = (w.levels.len(), w.notes.len(), w.guide_groups.len());
-        if !confirm && levels + notes + groups > 0 {
+        let refs = w.references.len();
+        if !confirm && levels + notes + groups + refs > 0 {
+            let refs = if refs > 0 {
+                format!(", {refs} reference image(s)")
+            } else {
+                String::new()
+            };
             return Err(CommandError::Invalid(format!(
                 "world {world} isn't empty ({levels} level(s), {notes} world note(s), {groups} \
-                 guide group(s)); set confirm to remove it with everything in it"
+                 guide group(s){refs}); set confirm to remove it with everything in it"
             )));
         }
         // Build the inverse first: splitting a level can fail, and nothing
@@ -160,6 +166,14 @@ impl Project {
                 index: None,
             });
         }
+        // World-scope reference images, bottom first.
+        for r in &w.references {
+            undo.push(Command::AddReference {
+                scope: NoteScope::World(world.clone()),
+                reference: r.clone(),
+                index: None,
+            });
+        }
         let mut changes = Vec::new();
         for l in &w.levels {
             let (meta, content) = self.split_level(l.clone())?;
@@ -179,6 +193,13 @@ impl Project {
                 world: world.clone(),
                 level: None,
                 id: n.id.clone(),
+            });
+        }
+        for r in &w.references {
+            changes.push(Change::Reference {
+                world: world.clone(),
+                level: None,
+                id: r.id.clone(),
             });
         }
         let old_order = self.world_order.clone();

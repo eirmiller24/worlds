@@ -92,6 +92,8 @@ pub struct ViewState {
     /// The last Select marquee in a level while an int_grid layer was
     /// active: the cells Copy takes from that layer.
     pub grid_marquee: Option<crate::clipboard::GridMarquee>,
+    /// Reference images: the pseudo-layer, the selected one, a drag.
+    pub references: crate::viewport::references::RefsView,
 }
 
 impl Default for ViewState {
@@ -119,6 +121,7 @@ impl Default for ViewState {
             vertex: None,
             paste: None,
             grid_marquee: None,
+            references: Default::default(),
         }
     }
 }

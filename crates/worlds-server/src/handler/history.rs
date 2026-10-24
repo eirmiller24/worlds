@@ -167,6 +167,8 @@ pub(crate) fn begin_batch(
             label,
             client: client.clone(),
             inverses: Vec::new(),
+            parts: Vec::new(),
+            recorded_changes: 0,
             changes: Vec::new(),
             entries: 0,
             last_activity: Instant::now(),
@@ -249,11 +251,14 @@ impl Handler {
             return Some(self.submit(host, &b.client, b.label, c.commands, None, true));
         }
         let inverses = std::mem::take(&mut b.inverses);
-        if host
-            .doc()
-            .history
-            .record(b.label.clone(), b.client.origin(), inverses)
-        {
+        let parts = std::mem::take(&mut b.parts);
+        if host.doc().history.record_with(
+            b.label.clone(),
+            b.client.origin(),
+            inverses,
+            parts,
+            &b.changes[b.recorded_changes..],
+        ) {
             b.entries += 1;
         }
         let changes = coalesce(b.changes);

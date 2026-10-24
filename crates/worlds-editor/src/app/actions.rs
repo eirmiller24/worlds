@@ -96,6 +96,24 @@ pub enum Action {
     },
     /// Ctrl+F: the Find pane in front, its query box focused.
     ShowFind,
+    /// Bring the History pane to the front.
+    ShowHistory,
+    /// Undo or redo until this many entries are done (a click in the
+    /// History pane).
+    HistoryJump(usize),
+    /// Duplicate a layer (`None`: the active one) as `<slug>_copy`.
+    DuplicateLayer(Option<worlds_core::Slug>),
+    /// Merge a tiles layer (`None`: the active one) into the tiles layer
+    /// below it.
+    MergeLayerDown(Option<worlds_core::Slug>),
+    /// Move the selected tile stacks or entities to a layer (`None`: the
+    /// active one) of the same kind.
+    MoveSelectionToLayer(Option<worlds_core::Slug>),
+    /// Pick a PNG and add it as a reference image at this scope (`None`:
+    /// the active level, else the world).
+    AddReference(Option<worlds_core::command::NoteScope>),
+    /// Bring the Inspector to the front.
+    ShowInspector,
 }
 
 impl Action {
@@ -159,6 +177,31 @@ impl Action {
                 "Find: search the whole project".into(),
                 "Ctrl+F",
                 Action::ShowFind,
+            ),
+            (
+                "History: show the History pane".into(),
+                "",
+                Action::ShowHistory,
+            ),
+            (
+                "Layer: duplicate the active layer".into(),
+                "",
+                Action::DuplicateLayer(None),
+            ),
+            (
+                "Layer: merge the active layer down".into(),
+                "",
+                Action::MergeLayerDown(None),
+            ),
+            (
+                "Selection: move to the active layer".into(),
+                "",
+                Action::MoveSelectionToLayer(None),
+            ),
+            (
+                "Add reference image…".into(),
+                "",
+                Action::AddReference(None),
             ),
         ];
         use super::project_pane::Section;

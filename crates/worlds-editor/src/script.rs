@@ -44,6 +44,14 @@
 //! selects entities (the Inspector shows them; [`SelectStep`]) and opens the
 //! Types pane ([`TypesStep`]). Each `ui` kind refuses unknown keys.
 //!
+//! ```json
+//! { "ui": "reference", "add": "sketches/crevasse.png", "level": "crevasse", "opacity": 0.6 }
+//! { "ui": "history", "expand": true }
+//! ```
+//!
+//! adds a reference image as "Add reference image…" does
+//! ([`ReferenceStep`]) and shows the History pane ([`HistoryStep`]).
+//!
 //! An `entity` gesture places with the entity tool: `type` and `fields` set
 //! the brush first, `ctrl` holds Ctrl (pixel placement), `shift` resizes,
 //! `alt` samples:
@@ -234,6 +242,11 @@ pub enum UiStep {
     /// `"ui": "find"`: the Find pane with a query, optionally Select all
     /// and Replace.
     Find(FindStep),
+    /// `"ui": "history"`: the History pane in front, its agent batches
+    /// expanded, a jump.
+    History(HistoryStep),
+    /// `"ui": "reference"`: "Add reference image…" with a given PNG.
+    Reference(ReferenceStep),
 }
 
 /// `{ "ui": "find", "query": "...", "kind"?: "all" | "entities" |
@@ -289,6 +302,45 @@ pub struct PasteStep {
     pub place: bool,
     #[serde(default)]
     pub in_place: bool,
+}
+
+/// `{ "ui": "history", "expand"?: true, "jump"?: n }`: the History pane in
+/// front; `expand` opens every agent batch's list of writes; `jump` undoes
+/// or redoes until `n` entries are done, as clicking an entry does (`0`:
+/// the "Opened" row). A `jump` past the history's length is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryStep {
+    #[serde(default)]
+    pub expand: bool,
+    #[serde(default)]
+    pub jump: Option<usize>,
+}
+
+/// `{ "ui": "reference", "add": path, "level"?: slug, "world"?: slug,
+/// "px"?: [x, y], "scale"?, "opacity"?, "locked"? }`: what "Add reference
+/// image…" does with that PNG (relative to the current directory; an image
+/// outside the project is copied into `art/`): one `add_reference` entry at
+/// the level (default: the active level, else the world) with its corner at
+/// `px` (default the level's corner), opacity 0.5 unless given; the new
+/// reference is selected, the References pseudo-layer active and the
+/// Inspector in front. An image that doesn't read is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceStep {
+    pub add: String,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub world: Option<String>,
+    #[serde(default)]
+    pub px: Option<[i64; 2]>,
+    #[serde(default)]
+    pub scale: Option<f64>,
+    #[serde(default)]
+    pub opacity: Option<f64>,
+    #[serde(default)]
+    pub locked: bool,
 }
 
 /// `{ "ui": "project", "add_layer"?: kind, "add_tileset"?: path,

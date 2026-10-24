@@ -21,6 +21,9 @@ pub enum WatchChange {
     Project(Vec<PathBuf>),
     /// Tileset `i`'s image changed: re-upload it.
     Tileset(usize),
+    /// Another PNG in the project changed (absolute path): a reference
+    /// image using it reloads.
+    Image(PathBuf),
 }
 
 pub struct ProjectWatcher {
@@ -117,6 +120,8 @@ impl ProjectWatcher {
                 }
             } else if p.extension().is_some_and(|e| e == "json") {
                 project.push(p);
+            } else if c.starts_with(&self.dir) && !out.contains(&WatchChange::Image(c.clone())) {
+                out.push(WatchChange::Image(c));
             }
         }
         if !project.is_empty() {

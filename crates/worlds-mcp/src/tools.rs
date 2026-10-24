@@ -2013,6 +2013,212 @@ impl Engine {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddReference {
+    scope: Scope,
+    image: String,
+    px: [i64; 2],
+    scale: Option<f64>,
+    opacity: Option<f64>,
+    locked: Option<bool>,
+    visible: Option<bool>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReferencePatch {
+    image: Option<String>,
+    px: Option<[i64; 2]>,
+    scale: Option<f64>,
+    opacity: Option<f64>,
+    locked: Option<bool>,
+    visible: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateReference {
+    id: String,
+    patch: ReferencePatch,
+    #[serde(default)]
+    confirm: bool,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveReference {
+    ids: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LayerOp {
+    Duplicate,
+    MergeDown,
+    MoveTiles,
+    MoveEntities,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayerOperation {
+    op: LayerOp,
+    layer: Option<String>,
+    to: Option<String>,
+    level: Option<String>,
+    cells: Option<Vec<[u32; 2]>>,
+    ids: Option<Vec<String>>,
+    label: Option<String>,
+}
+
+impl Engine {
+    pub(crate) fn add_reference(&mut self, a: Value) -> ToolResult {
+        let a: AddReference = args("add_reference", a)?;
+        a.scope.check()?;
+        let mut reference = json!({ "image": a.image, "px": a.px });
+        put(&mut reference, "scale", &a.scale);
+        put(&mut reference, "opacity", &a.opacity);
+        put(&mut reference, "locked", &a.locked);
+        put(&mut reference, "visible", &a.visible);
+        let label = Self::label("add_reference", a.label.as_deref(), &a.scope.name());
+        let p = json!({ "scope": a.scope, "reference": reference });
+        let r = self.write(&label, |_| Ok(vec![("reference.add", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn update_reference(&mut self, a: Value) -> ToolResult {
+        let a: UpdateReference = args("update_reference", a)?;
+        let pt = &a.patch;
+        let mut patch = json!({});
+        put(&mut patch, "image", &pt.image);
+        put(&mut patch, "px", &pt.px);
+        put(&mut patch, "scale", &pt.scale);
+        put(&mut patch, "opacity", &pt.opacity);
+        put(&mut patch, "locked", &pt.locked);
+        put(&mut patch, "visible", &pt.visible);
+        if patch.as_object().is_some_and(|m| m.is_empty()) {
+            return Err("patch is empty: give image, px, scale, opacity, locked or visible".into());
+        }
+        let label = Self::label("update_reference", a.label.as_deref(), &a.id);
+        let mut p = json!({ "id": a.id, "patch": patch });
+        if a.confirm {
+            p["confirm"] = json!(true);
+        }
+        let r = self.write(&label, |_| Ok(vec![("reference.update", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn remove_reference(&mut self, a: Value) -> ToolResult {
+        let a: RemoveReference = args("remove_reference", a)?;
+        if a.ids.is_empty() {
+            return Err("ids is empty: give the ids of the reference images to remove".into());
+        }
+        let summary = match a.ids.as_slice() {
+            [one] => one.clone(),
+            many => format!("{} references", many.len()),
+        };
+        let label = Self::label("remove_reference", a.label.as_deref(), &summary);
+        let mut p = json!({ "ids": a.ids });
+        if a.confirm {
+            p["confirm"] = json!(true);
+        }
+        let r = self.write(&label, |_| Ok(vec![("reference.remove", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn layer_operation(&mut self, a: Value) -> ToolResult {
+        let a: LayerOperation = args("layer_operation", a)?;
+        let need = |v: &Option<String>, key: &str, op: &str| {
+            v.clone().ok_or_else(|| format!("{op} needs {key}"))
+        };
+        let only = |given: &[(&str, bool)], op: &str| -> Result<(), String> {
+            match given.iter().find(|(_, g)| *g) {
+                Some((k, _)) => Err(format!("{op} doesn't take {k}")),
+                None => Ok(()),
+            }
+        };
+        let (summary, method, p) = match a.op {
+            LayerOp::Duplicate => {
+                let layer = need(&a.layer, "layer", "duplicate")?;
+                only(
+                    &[
+                        ("level", a.level.is_some()),
+                        ("cells", a.cells.is_some()),
+                        ("ids", a.ids.is_some()),
+                    ],
+                    "duplicate",
+                )?;
+                let mut p = json!({ "kind": "layer", "slug": layer });
+                put(&mut p, "to", &a.to);
+                (format!("duplicate {layer}"), "defs.duplicate", p)
+            }
+            LayerOp::MergeDown => {
+                let layer = need(&a.layer, "layer", "merge_down")?;
+                only(
+                    &[
+                        ("to", a.to.is_some()),
+                        ("level", a.level.is_some()),
+                        ("cells", a.cells.is_some()),
+                        ("ids", a.ids.is_some()),
+                    ],
+                    "merge_down",
+                )?;
+                (
+                    format!("merge_down {layer}"),
+                    "defs.merge_down",
+                    json!({ "kind": "layer", "slug": layer }),
+                )
+            }
+            LayerOp::MoveTiles => {
+                let layer = need(&a.layer, "layer", "move_tiles")?;
+                let to = need(&a.to, "to", "move_tiles")?;
+                let level = need(&a.level, "level", "move_tiles")?;
+                only(&[("ids", a.ids.is_some())], "move_tiles")?;
+                let cells = a
+                    .cells
+                    .clone()
+                    .filter(|c| !c.is_empty())
+                    .ok_or("move_tiles needs cells: the [x, y] cells whose tiles move")?;
+                (
+                    format!("move_tiles {layer} in {level}"),
+                    "tiles.move_to_layer",
+                    json!({ "level": level, "layer": layer, "to": to, "cells": cells }),
+                )
+            }
+            LayerOp::MoveEntities => {
+                let to = need(&a.to, "to", "move_entities")?;
+                only(
+                    &[
+                        ("layer", a.layer.is_some()),
+                        ("level", a.level.is_some()),
+                        ("cells", a.cells.is_some()),
+                    ],
+                    "move_entities",
+                )?;
+                let ids = a
+                    .ids
+                    .clone()
+                    .filter(|i| !i.is_empty())
+                    .ok_or("move_entities needs ids: the entities to move")?;
+                (
+                    format!("move_entities to {to}"),
+                    "entity.move_to_layer",
+                    json!({ "ids": ids, "layer": to }),
+                )
+            }
+        };
+        let label = Self::label("layer_operation", a.label.as_deref(), &summary);
+        let r = self.write(&label, |_| Ok(vec![(method, p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+}
+
 /// Rows with the column rulers and row numbers of the text view.
 fn picture(rows: &[String]) -> String {
     let rw = rows.first().map_or(0, |r| r.chars().count());

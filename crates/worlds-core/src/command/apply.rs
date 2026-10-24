@@ -6,6 +6,8 @@
 mod defs;
 mod duplicate;
 mod fields;
+mod layer_ops;
+mod references;
 mod resize;
 mod rules;
 mod worlds;
@@ -545,6 +547,14 @@ impl Project {
                 world,
                 world_px,
             } => self.move_level_to_world(level, world, world_px),
+            DuplicateLayer { layer, slug } => self.duplicate_layer(layer, slug),
+            AddReference {
+                scope,
+                reference,
+                index,
+            } => self.add_reference(scope, reference, index),
+            UpdateReference { id, reference } => self.update_reference(id, reference),
+            RemoveReference { id } => self.remove_reference(id),
         }
     }
 
@@ -1028,6 +1038,21 @@ impl Project {
             }
         }
         level.notes = content.notes;
+        if !restore {
+            let taken: BTreeSet<&Id> = self
+                .worlds
+                .iter()
+                .flat_map(|w| w.references.iter())
+                .chain(other_levels().flat_map(|l| l.references.iter()))
+                .map(|r| &r.id)
+                .collect();
+            let mut seen = BTreeSet::new();
+            for r in &level.references {
+                if taken.contains(&r.id) || !seen.insert(&r.id) {
+                    return Err(CommandError::DuplicateId(r.id.clone()));
+                }
+            }
+        }
         level.normalize();
         Ok(level)
     }
@@ -1338,6 +1363,9 @@ impl Project {
         }
         for n in &mut new.notes {
             n.shape.translate(shift_px);
+        }
+        for r in &mut new.references {
+            r.px = [r.px[0] + shift_px[0], r.px[1] + shift_px[1]];
         }
         let (meta, content) = self.split_level(self.level_at(at).clone())?;
         let old = std::mem::replace(self.level_at_mut(at), new);

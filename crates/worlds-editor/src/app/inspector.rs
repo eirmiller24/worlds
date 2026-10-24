@@ -49,6 +49,12 @@ pub fn inspector(ui: &mut egui::Ui, st: &mut EditorState) {
                 let k = part(ui, st);
                 n += k;
             }
+            // The selected reference image, if any.
+            let k = super::references::inspector_section(ui, st);
+            if k > 0 {
+                ui.add_space(8.0);
+                n += k;
+            }
             if let Some(ts) = tile_count(st)
                 && ts > 0
             {
