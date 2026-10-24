@@ -76,6 +76,7 @@ This creates its own wgpu device (no window and no display, so no `xvfb-run` nee
   | `{ "gesture": "vertex", "note": id, "insert": [x, y], "ctrl"? }` | an Alt+click there: on a segment of the annotation, a point added (one entry, highlighted) |
   | `{ "ui": "copy" }`, `{ "ui": "cut" }` | Ctrl+C, Ctrl+X on the selection and the grid marquee, exactly as the keys (`clipboard::copy_selection`, `cut_selection`); the fragment becomes the editor's clipboard (and the system clipboard's text). Nothing to copy is an error |
   | `{ "ui": "paste", "fragment"?: {...}, "level"?, "origin"?: [x, y], "place"?: true, "in_place"?: true }` | Ctrl+V with `fragment` (default: the last copy): the paste ghost is armed; with `level` and `origin` (the fragment's top-left corner in cells of the project grid) it is pinned there, so a `--screenshot` shows it; `place` then lands it as a click does (one entry, the pasted things selected). `in_place` is Ctrl+Shift+V instead. An unknown level, or a refused paste, is an error |
+  | `{ "ui": "find", "query": "...", "kind"?: "all" \| "entities" \| "levels" \| "notes" \| "tiles", "select_all"?: true, "replace"?: { "field", "value" } }` | the Find pane in front with that query and kind (default `all`) and its results (see "The Find pane"); `select_all` presses Select all (every result selected, the first result's level active), `replace` presses Replace with that field and value text (one entry, "Replace item in 2 entities"). A query that doesn't parse or that the kind doesn't take, Select all with no result, and a Replace no result's type can take are errors |
 
   For example (the forms; real points depend on the project: a marquee must start in empty space, a stack under a tiles press is selected instead):
 
@@ -350,6 +351,8 @@ src/
     project_pane.rs  the Project pane: layers (+ Layer, reorder, remove, values
                      and groups), tilesets (file dialog, copy into art/, preview),
                      project settings
+    find.rs          the Find pane: worlds_core::find queries over every world,
+                     rows cache, click to jump, Select all, Replace (one batch)
     problems.rs      live validation: quiet time, worker, stale results dropped
     recovery.rs      the session lock's "already open" message, the recovery prompt
                      (Recover / Discard / Later, per-file diffs), --recover, the autosave tick
@@ -404,6 +407,8 @@ tests/gpu_screenshot.rs   WORLDS_GPU_TESTS=1: render smoke test, --script paint 
                           entity palette + bench, entity gesture + save, disk entity wait,
                           multi-select inspector, Types pane, live problems pane,
                           zoomed hover readout, a broken entity file's problem
+tests/find_ui.rs          WORLDS_GPU_TESTS=1: "ui": "find" selects across levels,
+                          Replace is one entry, bad steps
 tests/project_setup.rs    WORLDS_GPU_TESTS=1: a fresh project set up in the Project pane
                           (empty-map hint, a level moved with no layer, + Layer, + Tileset,
                           settings, saved files)
@@ -511,3 +516,28 @@ The GPU tests run on temp copies of the `game` fixture (`tests/fixtures/game/`: 
 ## Versions
 
 egui_dock 0.21.1 is built against egui 0.36, so the editor pins eframe, egui and egui-wgpu to 0.36 (wgpu 30) instead of 0.37. Move all four together when egui_dock catches up.
+
+## The Find pane
+
+`Find` is a tab next to Notes and Problems (`Pane::Find`, `src/app/find.rs`; a layout saved before it existed gets it next to the Notes, else the Problems, else the Inspector, else as a split right of the map). Ctrl+F (or "Find: search the whole project" in the command palette) brings it to the front with the query box focused. It searches every world of the project, not just the one on the map.
+
+A query is words separated by spaces, and every word must hold. The same language is the API's `query` on `entity.find`, `level.find`, `tiles.find` and `notes.list` and the MCP `find` tool's, because all of them call `worlds_core::find`:
+
+| Word | Finds |
+| --- | --- |
+| `type:locked_door` | entities of that type |
+| `tag:puzzle` | entities whose type has the tag, levels and annotations with it |
+| `channel:3` | entities (and levels) whose field `channel` is 3: any `key:value` whose key isn't one of the words in this table is a field test |
+| `field:target = null`, `field:needs_item != ""` | the same with `=` or `!=` (spaces around it optional); `null` finds fields with no value and no default |
+| `world:main`, `level:crevasse`, `layer:objects` | where it is (`level:` leaves world-scope annotations out) |
+| `kind:pin`, `status:open` | annotations of a kind (`note`, `pin`, `path`, `region`, `guide`, `connector`) or status |
+| `tileset:castle_main`, `tile:4,2` | painted tiles from that tileset, of that atlas column and row |
+| `brass`, `"key room"` | plain words: an entity's id, type slug or type name; a level's slug, name or id; an annotation's id, title, body or label (case-insensitive) |
+
+Values are compared with the field's effective value (what it stores, else its default), as JSON when they parse (`3`, `true`, `null`, `[1,2]` without spaces) and as text otherwise; quote a value to keep it text (`label:"3"`) or keep spaces in it. `*` is a wildcard in slugs: `type:*door`, `tileset:ssw_*`. A word a kind doesn't take rules that kind out: field tests are for entities and levels, `type` for entities, `kind` and `status` for annotations, `tileset` and `tile` for tiles, plain words for everything but tiles.
+
+The kind picker next to the box is **All** (every kind the query can match, entities first; tiles only for a query with `tileset:` or `tile:`, so plain words never list thousands of tiles; an empty query lists nothing) or one of **Entities**, **Levels**, **Notes** and **Tiles** (an empty query lists all of it; a word it doesn't take shows the reason in red). Each result is a row: its kind, `world / level` (or the world for a world-scope annotation) and a one-line preview (an entity's type, id, cell and first stored fields; a level's name, slug, size, tags and fields; an annotation's kind, id and title; a tile's tileset, atlas tile, cell and layer). A click selects it and frames its level, which becomes active (an annotation: its own box, as in the Notes pane); in a project with several worlds that also switches the map to the level's world. Rows stop at 10 000 (the count says how many matched).
+
+**Select all** puts every result in the selection, the first result's level active, so an Inspector edit (the multi-select form shows the fields they share) or Delete applies to all of them, across levels. **Replace** appears when there are entity results: pick a field (each with how many results have it), type a value, and **Replace in n** sets it on every entity result whose type has that field, as one undo entry ("Replace channel in 12 entities"). The value is read for the field's type (`worlds_core::find::replace_value`): text for string, text, color, enum, entity_ref and path fields (`3` is `"3"`), JSON otherwise (`3`, `true`, `[1,2]`), `null` for null, and `"..."` always text.
+
+The rows are rebuilt only when the project changes (the edit revision) or the query or kind does. Tests: `worlds-core` `tests/find.rs` and the module's own (the language, every kind on mini.worlds, Replace as one batch, values by field type); `src/app/find.rs` (each kind, All, the errors, idle frames don't search, a click selects in another level, Select all, Replace queues one batch); `src/app/mod.rs` `old_layouts_get_the_find_pane_next_to_the_notes`; GPU `tests/find_ui.rs` (`"ui": "find"` on the game fixture: the two pickups in two levels selected, Replace one entry that undo takes back, the pane drawn, bad steps).

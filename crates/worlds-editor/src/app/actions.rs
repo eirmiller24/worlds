@@ -79,6 +79,8 @@ pub enum Action {
         level: crate::doc::LevelIx,
         origin: [i64; 2],
     },
+    /// Ctrl+F: the Find pane in front, its query box focused.
+    ShowFind,
 }
 
 impl Action {
@@ -134,6 +136,11 @@ impl Action {
             ),
             ("Edit level fields".into(), "", Action::OpenTypes(None)),
             ("Notes: show the Notes pane".into(), "", Action::ShowNotes),
+            (
+                "Find: search the whole project".into(),
+                "Ctrl+F",
+                Action::ShowFind,
+            ),
         ];
         use super::project_pane::Section;
         for (name, s) in [
