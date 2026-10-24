@@ -85,6 +85,7 @@ This creates its own wgpu device (no window and no display, so no `xvfb-run` nee
   | `{ "ui": "paste", "fragment"?: {...}, "level"?, "origin"?: [x, y], "place"?: true, "in_place"?: true }` | Ctrl+V with `fragment` (default: the last copy): the paste ghost is armed; with `level` and `origin` (the fragment's top-left corner in cells of the project grid) it is pinned there, so a `--screenshot` shows it; `place` then lands it as a click does (one entry, the pasted things selected). `in_place` is Ctrl+Shift+V instead. An unknown level, or a refused paste, is an error |
   | `{ "ui": "find", "query": "...", "kind"?: "all" \| "entities" \| "levels" \| "notes" \| "tiles", "select_all"?: true, "replace"?: { "field", "value" } }` | the Find pane in front with that query and kind (default `all`) and its results (see "The Find pane"); `select_all` presses Select all (every result selected, the first result's level active), `replace` presses Replace with that field and value text (one entry, "Replace item in 2 entities"). A query that doesn't parse or that the kind doesn't take, Select all with no result, and a Replace no result's type can take are errors |
   | `{ "ui": "history", "expand"?: true, "jump"?: n }` | the History pane in front (see "The History pane"); `expand` opens every agent batch's list of writes; `jump` undoes or redoes until `n` entries are done, as a click on an entry does (`0`: the "Opened" row). A `jump` past the history's length is an error |
+  | `{ "ui": "levels", "search"?: text, "sort"?: "order" \| "name" \| "position", "all_worlds"?: bool, "select"?: slug }` | the Levels pane in front with that search (default none), sort (default `order`) and grouping (default the world shown only) (see "The Levels pane"); `select` clicks that level's row: it becomes the active level and the selection. An unknown sort or level is an error |
   | `{ "ui": "reference", "add": path, "level"?: slug, "world"?: slug, "px"?: [x, y], "scale"?, "opacity"?, "locked"? }` | what "Add reference image…" does with that PNG (relative to the current directory; one outside the project is copied into `art/` right away, as `add_tileset` does): one `add_reference` entry at the level (default the active one, else the world), its corner at `px` (default the level's corner, or the active level's in the world), opacity 0.5 unless given; the new reference is selected, the References pseudo-layer active and the Inspector in front. An unreadable image, an unknown level or world, or both keys, is an error |
   | `{ "ui": "import_project", "source", "selection"?, "policy"?, "search"?, "apply"?: true }` | the Import from Worlds project dialog on the project in `source` (relative to the current directory) with `project.import_plan`'s `selection` and `policy` and the search text, so a `--screenshot` shows the plan; `apply` then clicks Apply (one entry, `Import from <name>`; the plan's files are copied into `art/` first, the one other file a run without `--save` writes). This project itself, a source that doesn't load, a refused plan or nothing to apply is an error |
 
@@ -164,9 +165,11 @@ Tests and local runs write reference shots to `crates/worlds-editor/screenshots/
 | Ctrl+A | select every entity of the active level (visible, unlocked layers) |
 | F / Shift+F (or Home) | fit active level / fit world (the world shown: its levels, or with none its world annotations) |
 | 1, +, - | 100%, zoom in, zoom out |
-| PgUp / PgDn | previous / next level (and frame it) |
+| PgUp / PgDn | previous / next level in the world's level order (the Levels pane's) and frame it |
+| Ctrl+L | the Levels pane in front, its search box focused (see "The Levels pane") |
 | Ctrl+P | command palette (fuzzy), including New level, Delete level, Crop level to content, New world…, Rename world…, Delete world…, New / Duplicate / Close viewport, Link cameras, Bookmark this view… and every bookmark |
-| Ctrl+O, Ctrl+R (F5), Ctrl+G | open, reload, toggle grid |
+| Ctrl+O, Ctrl+R (F5) | open, reload |
+| Ctrl+G, Ctrl+Shift+G | group the selected entities and annotations (one level's) as one object group / ungroup the selection's groups (see "Object groups"); Ctrl+G with no entity or annotation selected toggles the grid, as before |
 | Ctrl+Shift+1..9 | jump to camera bookmark 1..9 in the focused map tab (see "Map tabs and bookmarks") |
 | Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, Ctrl+S | undo, redo (the toolbar tooltips name the entry: "Undo Paint collision"), save |
 
@@ -178,7 +181,7 @@ The Inspector shows the selected entities first (see "The Inspector" below), the
 
 Saving writes only the files the edits touched (`worlds_core::save_dirty`), then re-runs validation for the problems panel (which also follows every edit; see "Live problems"). With `"export_on_save": true` in `project.json` it also writes `export/` from the editor's cached bakes. The title bar and the Save button show a dot while there are unsaved edits. Closing the window with unsaved edits asks Save / Discard / Cancel. When the project changes on disk: if every changed file holds exactly what our last save wrote there (or a level directory we deleted is still gone), it was our own save and nothing happens. That check hashes only the changed files and doesn't look at memory, so undoing right after a save doesn't prompt. Otherwise it reloads, or, with unsaved edits, asks first (Keep mine is the default).
 
-The dock layout, the map tabs (`viewports`, `focused_viewport`, `linked_viewports`; see "Map tabs and bookmarks"), camera bookmarks (`bookmarks`), the focused tab's camera, active world (`active_world`) and level, active layer, per-layer visibility/lock/opacity, tool, the Paint mode (`paint_mode`), palette brushes and the entity palette's state are saved per project in `.worlds/ui.json` (a layout saved before a pane existed gets it added: Rules next to the Log, Types next to the Inspector, History next to the Log) (every 2 s when changed, and on exit). The editor watches the project directory (plus tileset image directories outside it). After 100 ms of quiet, a changed project JSON reloads the document, keeping view state that still applies, except when every changed file is an entity definition (`entities/*.json`) and none of them has unsaved edits: then each file is read with the core loader's checks and applied as `set_entity_def` (or `remove_entity_def { keep_instances: true }` for a deleted file) at the drain point (after an open stroke or agent batch ends), all of them as one undo entry labelled `Disk: entities/<slug>.json` (several: `Disk: N entity files`), origin `disk` (the History pane says so), reported as `changed`; the files are then marked clean (`Project::mark_clean`), since disk already holds them. Undoing that entry marks them dirty again, so the next save writes the old definitions back over the files. A queued file that an edit made dirty in the meantime (a panel edit or an agent request runs before the drain, or a stroke held the queue) isn't applied over that edit: the "changed on disk" prompt asks instead, as when it was dirty to begin with. A file that doesn't load (bad JSON, a slug that isn't its file name) keeps the old definition, with a status message, a toast and an entry in the Problems pane. Files whose content equals the open definition change nothing. A changed tileset PNG re-uploads just that texture and, if any auto layer's rules draw from it (the rules read tile opacity), drops those layers' cached bakes and rebakes every level on the workers; the old bakes stay on screen until the new ones arrive, and results from bakes started before the change are dropped. `.worlds/`, `export/`, `schema/` and `.git/` are ignored.
+The dock layout, the map tabs (`viewports`, `focused_viewport`, `linked_viewports`; see "Map tabs and bookmarks"), camera bookmarks (`bookmarks`), the focused tab's camera, active world (`active_world`) and level, active layer, per-layer visibility/lock/opacity, tool, the Paint mode (`paint_mode`), palette brushes and the entity palette's state are saved per project in `.worlds/ui.json` (a layout saved before a pane existed gets it added: Rules next to the Log, Types next to the Inspector, History next to the Log, Levels next to the Layers), the layer folders' eye, lock, opacity and fold (`folders`) (every 2 s when changed, and on exit). The editor watches the project directory (plus tileset image directories outside it). After 100 ms of quiet, a changed project JSON reloads the document, keeping view state that still applies, except when every changed file is an entity definition (`entities/*.json`) and none of them has unsaved edits: then each file is read with the core loader's checks and applied as `set_entity_def` (or `remove_entity_def { keep_instances: true }` for a deleted file) at the drain point (after an open stroke or agent batch ends), all of them as one undo entry labelled `Disk: entities/<slug>.json` (several: `Disk: N entity files`), origin `disk` (the History pane says so), reported as `changed`; the files are then marked clean (`Project::mark_clean`), since disk already holds them. Undoing that entry marks them dirty again, so the next save writes the old definitions back over the files. A queued file that an edit made dirty in the meantime (a panel edit or an agent request runs before the drain, or a stroke held the queue) isn't applied over that edit: the "changed on disk" prompt asks instead, as when it was dirty to begin with. A file that doesn't load (bad JSON, a slug that isn't its file name) keeps the old definition, with a status message, a toast and an entry in the Problems pane. Files whose content equals the open definition change nothing. A changed tileset PNG re-uploads just that texture and, if any auto layer's rules draw from it (the rules read tile opacity), drops those layers' cached bakes and rebakes every level on the workers; the old bakes stay on screen until the new ones arrive, and results from bakes started before the change are dropped. `.worlds/`, `export/`, `schema/` and `.git/` are ignored.
 
 ## Notes and guides
 
@@ -355,7 +358,7 @@ A project can hold several worlds (`worlds/<slug>/`, [format.md](../../docs/form
 - **Switcher**: the toolbar's combo left of the tools names the world shown and lists every world (hover: slug and level count) in display order, then **New world…**. Picking one shows it, fitted (`Action::SwitchWorld`).
 - **New world…** (switcher, command palette, Project pane's **+ World**): a dialog with a slug (default `world_<n>`) and an optional name; Create is `create_world` and shows the new world. **Rename world…** (command palette: the world shown; Project pane: that row's): slug and name; a new slug is `rename_world` (the directory moves on the next save), an empty name removes it. **Delete world…**: asks in the corner ("Delete world dungeon and its 3 levels? Undo brings it back."), then `remove_world` with `confirm`; refused with a toast for the last world.
 - **Move to world** in a level's right-click menu: `move_level_to_world` at the same position; the level becomes active, so the map follows it.
-- The Project pane's **Worlds** part lists, shows, reorders, renames and deletes them (see "The Project pane").
+- The Project pane's **Worlds** part lists, shows, reorders, renames and deletes them (see "The Project pane"), and under them sets the **Layout** of the world shown (see "World layouts").
 
 Each of these is one command, so one undo entry, through the same path as any edit; an undo that removes the world shown falls back to the first world. `src/app/worlds.rs` has the switcher, the dialog, the confirmation and the pane section.
 ## Layer operations
@@ -449,12 +452,16 @@ src/
                      presets, per-collision policy, placement, summary), Apply
     viewports.rs     map tabs: docking, focus, New / Duplicate / Close, linked cameras;
                      camera bookmarks (the ★ window, jump, save); their script steps
+    levels.rs        the Levels pane: rows (search, sort, worlds), CPU thumbnails,
+                     drag to reorder, the row menu, rename
+    groups.rs        object groups: a click takes the group, a double click enters
+                     it, Ctrl+G / Ctrl+Shift+G, the Inspector's group part
     problems.rs      live validation: quiet time, worker, stale results dropped
     recovery.rs      the session lock's "already open" message, the recovery prompt
                      (Recover / Discard / Later, per-file diffs), --recover, the autosave tick
     agent.rs         the live API in the shell: server start/stop, drain point, events,
                      indicator, agent toasts, approval panel, reload
-    panels.rs        layers (and their right-click layer operations), palette (atlas
+    panels.rs        layers (folders, and their right-click layer operations), palette (atlas
                      textures), the level inspector, problems (click targets), log
     history.rs       the History pane: the undo log, the jump
     references.rs    reference images in the Layers pane (the pseudo-layer, Add…) and
@@ -524,6 +531,9 @@ tests/viewports.rs        WORLDS_GPU_TESTS=1: two map tabs side by side on two w
                           (script, Ctrl+Shift+1), Close refused for the last, Duplicate;
                           reference images per tab's world, a reference drag read in the
                           focused tab only, a Find jump moves only the focused tab
+tests/levels_groups_ui.rs WORLDS_GPU_TESTS=1: "ui": "levels", PgDn after a reorder,
+                          a drag snapped to a grid-vania lattice and refused in a strip,
+                          a group selected by a click, Ctrl+G, Delete drops a member
 tests/project_setup.rs    WORLDS_GPU_TESTS=1: a fresh project set up in the Project pane
                           (empty-map hint, a level moved with no layer, + Layer, + Tileset,
                           settings, saved files)
@@ -691,3 +701,35 @@ An **assembly** is a saved piece of a level, kept in the project as `assemblies/
 - **Arrange levels** (two or more levels selected; the context menu's Arrange N levels, or `Levels: ...` in the command palette): align left, right, top or bottom edges (onto the outermost), horizontal or vertical centers (onto the first selected), distribute horizontally or vertically (equal gaps, the outer two stay), butt together leftwards, rightwards, upwards or downwards (close the gaps). One entry, a `batch` of `move_level`, positions on the project grid.
 - **Level-edge snapping**: a level drag snaps its edges to the other levels' edges of its world within 8 screen px, as it snaps to guides (`arrange::level_edges`, a candidate list `annot::drag_delta` takes).
 
+## The Levels pane
+
+`Levels` is a tab next to the Layers pane (`Pane::Levels`, `src/app/levels.rs`; a layout saved before it existed gets it there, else next to the Palette, else as a split left of the map). Ctrl+L (or "Levels: show the Levels pane" in the command palette) brings it to the front with the search box focused.
+
+It lists the levels of the world shown, or with **All worlds** every world's under a header per world, one row each: a thumbnail, the name, the slug, the size in cells, the tags (`#forest`) and, when validation reports any in the level's directory, the problem count (⚠ 3).
+
+- **Search**: every word must be in the name, the slug or a tag (`tag:` may prefix a word).
+- **Sort**: **Order** (the world's level order, `world.json` `levels`; the default), **Name**, or **Position** (top to bottom, then left to right).
+- **Reorder**: drag a row to another place in its world (in Order, with no search), or use the row menu's **Move earlier** / **Move later**. One `reorder_levels`, one undo entry. PgUp/PgDn and the export follow the order, and in a strip layout the levels move to their new places in the same entry.
+- A click makes the level active and selects it (in another world, the map switches there); a double click frames it (the map's Fit level). Right click: **Frame**, **Rename…** (name and slug in the row; Enter applies, `rename_level`), **Duplicate** (`duplicate_level`), **Crop to content**, **Move earlier** / **Move later**, **Move to world** (with several worlds), **Delete…** (asks first).
+
+Thumbnails are small CPU renders (at most 64 px a side) of the level: its background, the visible layers bottom first (int_grid values in their colors, hand-placed and baked auto tiles in each tile's average color, entities as dots), made for the rows on screen, four per frame at most, and remade when the project changes, the level's bake arrives or the tileset images do. They live in memory only. The rows are rebuilt only when the project, the world shown, the search, the sort or the grouping change, and drawn with `show_rows`. A slot under the rows (`bookmarks_slot`) is where the camera bookmarks list (roadmap 3.6) goes.
+
+## World layouts
+
+The Project pane's Worlds part has a **Layout** for the world shown (`world.json` `layout`, [format.md](../../docs/format.md#world-layouts)): **Mode** Free, Horizontal, Vertical or Grid vania (set at once), **Gap** (strips) and **Cell** (grid vania, pixels), sent when their field is left; each is one `set_world_layout` entry.
+
+- **Horizontal / Vertical**: the levels sit in the level order from the world origin, `gap` apart. The commands keep them there (a reorder, a new, duplicated, resized or deleted level). Dragging or nudging a level is refused with a status message pointing at the Levels pane.
+- **Grid vania**: the lattice is drawn on the map (every second, fourth, ... line when cells get under 12 screen px). A level drag puts the level's corner on the nearest lattice point, as a step of its own after the grid and guide snapping (a guide snap on an axis the lattice moved is dropped; `annot::lattice_delta`); so does a drag of several selected levels, by their top-left corner. New levels go on the lattice cell under the point, their size rounded up to whole cells. Validation reports a level off the lattice.
+
+## Object groups
+
+An object group is a named set of a level's entities and annotations (`level.json` `groups`, [format.md](../../docs/format.md#object-groups)) that selects and moves together (`src/app/groups.rs`).
+
+- With Select, a click on a member selects the whole group (the clicked member first); a drag moves them all. A **double click** on a member **enters** the group: that member alone is selected, and clicks on the group's members pick one at a time, until a click on anything outside it.
+- **Ctrl+G** (or "Group the selection") makes the selected entities and annotations of one level a new group named "Group \<n\>" (a member of another group leaves it); **Ctrl+Shift+G** removes the groups of the selected members (they stay). One entry each.
+- The **Inspector** shows the group of the selection: its name (edit it and leave the field: one `set_group`), the member count, Ungroup, and Group when the selection holds more than one group or ungrouped things.
+- **Delete** (and Cut) take deleted members out of their groups in the same entry (a group left empty goes).
+
+## Layer folders
+
+A layer's `folder` (`layers.json`, a `/` path like `Decor/Back`) files it under a folder row in the Layers pane (`panels::layer_tree`): folders sit where their topmost layer is, nest by path, and fold with ⏷/⏵. A folder's eye, lock and opacity apply to every layer inside it and its subfolders (visible only when the layer and every folder it is in are; locked when any is; the opacities multiply) and are editor state, saved in `ui.json` `folders`. With any folder in the project each layer row gets a ☰ handle: drag it onto a folder row to put the layer in that folder, or onto another layer to put it in that layer's folder. A layer's right-click menu has **Move to folder** (the project's folders, **Out of its folder**, and a new path). Each is one `set_layer_def` entry; a change of folders alone rebakes nothing.

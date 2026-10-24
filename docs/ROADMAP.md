@@ -36,7 +36,7 @@ Shipped: the fragment format is in [format.md](format.md#clipboard-fragments), `
 
 ### 2.2 Duplicate level
 
-Shipped: `duplicate_level` is in [commands.md](commands.md#duplicate_level), `level.duplicate` in [api.md](api.md#level), MCP `duplicate_level` in [mcp.md](mcp.md#duplicate_level), Ctrl+D on a level, its context menu and the level Inspector in the [editor README](../crates/worlds-editor/README.md) (the Levels pane entry comes with 3.1).
+Shipped: `duplicate_level` is in [commands.md](commands.md#duplicate_level), `level.duplicate` in [api.md](api.md#level), MCP `duplicate_level` in [mcp.md](mcp.md#duplicate_level), Ctrl+D on a level, its context menu and the level Inspector in the [editor README](../crates/worlds-editor/README.md) and the Levels pane's row menu.
 
 ### 2.3 Assemblies (prefabs)
 
@@ -68,9 +68,7 @@ Finding your way around a big project, and planning on the map.
 
 ### 3.1 Levels pane
 
-**What.** A dock pane listing the active world's levels (or every world, grouped) with thumbnails from the existing cache, name, size, tags and problem count; search by name and tag; sort by name, position or order; drag to reorder (PgUp/PgDn and the export follow that order). Right-click: Frame, Rename, Duplicate (2.2), Move to world (1.1), Delete. Double-click frames the level in the focused viewport.
-
-**Commands.** `reorder_levels { world, order }`.
+Shipped: the level order (`world.json` `levels`) in [format.md](format.md#worldsltworldgtworldjson), `reorder_levels` in [commands.md](commands.md#reorder_levels), `level.reorder` in [api.md](api.md#level-order-world-layouts-and-object-groups), MCP `reorder_levels` in [mcp.md](mcp.md#reorder_levels), the Levels pane (Ctrl+L, thumbnails, search, sort, drag to reorder) and the `"ui": "levels"` step in the [editor README](../crates/worlds-editor/README.md#the-levels-pane) (the camera bookmarks list of 3.6 has a slot there).
 
 ### 3.2 Find and replace
 
@@ -78,14 +76,7 @@ Shipped: the query language is `worlds_core::find`, `entity.find`/`level.find`/`
 
 ### 3.3 Object groups and layer folders
 
-**What.** Two different kinds of grouping that both come up:
-
-- **Object groups**: a named set of entities and annotations in a level (a puzzle, an encounter) that selects and moves together. Clicking a member selects the group; double-click enters the group to pick one member.
-- **Layer folders**: `layers.json` layers gain an optional `folder` (`"Decor/Back"`, a `/` path like entity categories). The Layers pane shows folders collapsible with visibility, lock and opacity applied to every layer inside them.
-
-**Format.** `level.json` `groups: [{ "id", "name", "members": [ids] }]` (entities and annotations by id; tile stacks have no id and are not members in v1). `folder` on layer definitions. Nothing in the export: both are editor organisation.
-
-**Commands.** `set_group`, `remove_group`; `folder` is edited with `set_layer_def`.
+Shipped: `groups` and `folder` in [format.md](format.md#object-groups), `set_group`/`remove_group` in [commands.md](commands.md#set_group), `group.*` in [api.md](api.md#level-order-world-layouts-and-object-groups), MCP `edit_groups` in [mcp.md](mcp.md#edit_groups), groups (click, double click, Ctrl+G, Ctrl+Shift+G, the Inspector) and layer folders in the Layers pane in the [editor README](../crates/worlds-editor/README.md#object-groups).
 
 ### 3.4 Reference images
 
@@ -109,11 +100,7 @@ Shipped: the History pane in the [editor README](../crates/worlds-editor/README.
 
 ### 3.9 World layout modes
 
-**What.** Besides Free (the only layout today), `horizontal`, `vertical` and `grid_vania` as LDtk has them: in a strip layout levels are laid out in order with a gap and the order is what you edit (drag in the Levels pane); in grid vania levels snap to a cell lattice of a chosen size and must be whole cells.
-
-**Format.** `world.json` `layout: { "mode": "free" | "horizontal" | "vertical" | "grid_vania", "gap"?: px, "cell"?: [w, h] }`. `world_px` stays the stored truth in every mode (the export and the game never need to know the mode); the mode drives the tools: strip layouts recompute `world_px` from the order on every reorder, grid vania snaps drags and validation reports an off-lattice level.
-
-## Phase 4: content and the game loop
+Shipped: `layout` in [format.md](format.md#world-layouts) (the lattice check is `worlds_core::lattice_problem`, which takes any rect), `set_world_layout` and the strip relayout in [commands.md](commands.md#set_world_layout), `world.set_layout` in [api.md](api.md#level-order-world-layouts-and-object-groups), `edit_worlds` `layout` in [mcp.md](mcp.md#edit_worlds), the Project pane's Layout, the lattice on the map and snapped drags in the [editor README](../crates/worlds-editor/README.md#world-layouts).
 
 ### 4.1 Non-rectangular levels
 
