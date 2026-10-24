@@ -88,6 +88,7 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `duplicate_level` | `level.duplicate` |
 | `create_world` | `world.create` |
 | `edit_worlds` | `world.rename` per rename, `world.reorder`, `world.remove` per world (`confirm` passed through), in that order (several in one batch) |
+| `import_project` | `project.import_plan`; then, unless `dry_run`, `project.import` with its `plan_id` (on `stale_rev` the plan is made again) |
 | `move_level` | `level.move_to_world` when `world` is given, else `level.move` |
 | `add_reference` | `reference.add` |
 | `update_reference` | `reference.update` with a `patch` (`confirm: true` only when the call has it) |
@@ -876,6 +877,47 @@ One operation on layers, as one undo entry. op "duplicate": copy layer (its defi
   "required": ["op"], "additionalProperties": false }
 ```
 
+### import_project
+
+```text
+Bring definitions, worlds or levels of another Worlds project into this one, as one undo entry. source is that project's directory (absolute, or relative to this project's). selection says what: preset "defs_only" (every layer, tileset, entity type, enum, rule set, macro, level field and project setting; the way to start a sequel), "everything" (that plus every world with its levels), or lists of slugs by kind (levels, worlds, layers, entities, ...); a level brings what it needs (its layers, their tilesets, the entity types it places, their enums, the rules of its auto layers and the macros they use). policy.on_conflict decides what happens to a slug this project already has with a different definition: "skip" keeps ours (the default), "overwrite" takes theirs (refused per item where it would orphan stored content), "rename" takes theirs as <slug>_2 with every reference inside the import rewritten; identical ones are "same" and skipped. Instance ids this project already has are re-rolled and references follow; references to things neither project resolves are dropped and listed. Levels go into a new world named after the source project (policy.placement mode "new_world"), into an existing world ("world" with world and offset), or into the world of their own source world's slug ("keep"); a level needs the same grid size as this project. Tileset images and path field files are copied under art/. Call with dry_run: true first to show the user the plan (every item, collision, dependency, re-rolled id and dropped reference); without it the plan is applied.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "source": { "type": "string", "description": "The other project's directory, e.g. \"../first_game/game.worlds\"." },
+    "selection": { "type": "object", "description": "What to import.",
+      "properties": {
+        "preset": { "type": "string", "enum": ["pick", "defs_only", "everything"], "default": "pick" },
+        "tilesets": { "type": "array", "items": { "type": "string" } },
+        "enums": { "type": "array", "items": { "type": "string" } },
+        "patterns": { "type": "array", "items": { "type": "string" } },
+        "legends": { "type": "array", "items": { "type": "string" } },
+        "templates": { "type": "array", "items": { "type": "string" } },
+        "layers": { "type": "array", "items": { "type": "string" } },
+        "level_fields": { "type": "array", "items": { "type": "string" } },
+        "entities": { "type": "array", "items": { "type": "string" }, "description": "Entity type slugs." },
+        "settings": { "type": "array", "items": { "type": "string", "enum": ["grid_size", "bg_color", "collision_layer", "blocking_values", "default_level_size"] } },
+        "worlds": { "type": "array", "items": { "type": "string" }, "description": "Whole worlds: their levels, guide groups and world notes." },
+        "levels": { "type": "array", "items": { "type": "string" } } },
+      "additionalProperties": false },
+    "policy": { "type": "object", "description": "Collisions and placement.",
+      "properties": {
+        "on_conflict": { "type": "string", "enum": ["skip", "overwrite", "rename"], "default": "skip" },
+        "conflicts": { "type": "object", "additionalProperties": { "type": "string", "enum": ["skip", "overwrite", "rename"] }, "description": "Per item, by \"<kind>:<slug>\" (\"layer:collision\", \"level:crevasse\", \"asset:tiles.png\")." },
+        "placement": { "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["new_world", "world", "keep"], "default": "new_world" },
+            "world": { "type": "string", "description": "new_world: its slug (default: the source project's name). world: the existing world." },
+            "offset": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "World pixels added to every imported level's position." } },
+          "additionalProperties": false } },
+      "additionalProperties": false },
+    "dry_run": { "type": "boolean", "default": false, "description": "Only return the plan; change nothing." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["source"], "additionalProperties": false }
+```
+
 ## Results by tool
 
 | Tool | Result |
@@ -894,6 +936,7 @@ One operation on layers, as one undo entry. op "duplicate": copy layer (its defi
 | `copy_fragment` | `{ rev, fragment }`, the `edit.copy` result |
 | `paste_fragment` | the write result above plus `items`, `ids` (fragment id -> new id) and `problems` (`[]` when everything went in), from `edit.paste` |
 | `duplicate_level` | the write result above plus `id` (the copy's level id) and `world_px` |
+| `import_project` | with `dry_run`: the `project.import_plan` result (`{ rev, plan_id, empty, source, label, summary, items, ids, dropped, problems, assets }`). Otherwise the write result above plus `plan` (that result, without `rev` and `plan_id`) and `copied` (the files written under `art/`). A plan that imports nothing is a tool error naming its summary |
 | `find` | `{ rev, kind, total, entities \| levels \| notes \| tiles }`: the method's list (the key is `kind`), cut to `limit`; `total` counts every match |
 
 **`screenshot` in headless mode** is not an error. Headless `worlds-mcp` saves after every write, so the files on disk are the project; it runs the editor binary's headless screenshot mode on them, asking for the map alone as `view.snapshot` draws it: `worlds --screenshot <tmp>.png --snapshot [--level <slug> | --world-rect x,y,w,h] --max-size WxH [--layers a,b] <project>` with the level or world rect, size (default `1024x1024`) and layers of the call (the editor's [README](../crates/worlds-editor/README.md) describes the flags), and returns that PNG. `scale` is then the image width over the drawn width in world pixels. The binary is `WORLDS_EDITOR_BIN` when set, else `worlds` next to the `worlds-mcp` executable. If it can't be found or exits non-zero, the tool error says so, names the path tried and includes its stderr.

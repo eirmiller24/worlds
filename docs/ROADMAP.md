@@ -32,21 +32,7 @@ Shipped. The spec now lives in [format.md](format.md) (`project.json` `worlds`, 
 
 ### 1.3 Import from another Worlds project
 
-**What.** Bring part of another Worlds project into the open one and choose what: definitions (layers, tilesets, entity types, enums, rules, macros, level fields, project settings), whole worlds, or individual levels with everything they need. The headline use: start a sequel from a finished game with one "definitions only" import, then design levels.
-
-**Core.** `worlds_core::merge`: `plan(src: &Project, dst: &Project, selection, policy) -> Plan` and `Plan::commands() -> Vec<Command>`. The plan is computed first and shown before anything changes: every item to add, every collision and what the policy does with it, every dependency pulled in, every id re-rolled. Applying it is one batch of existing commands (`set_layer_def`, `set_tileset`, `set_entity_def`, `set_enum`, `set_rule_group`, `set_macro`, `create_level`, `replace_level`, `add_note`, `set_guide_group`, `create_world`), so undo is one entry and the live API path needs nothing new.
-
-- **Selection**: a checkbox tree. Definitions by kind and slug; worlds; levels. Checking a level checks its dependencies (its layers, their tilesets, the entity types it places, their enums, the rules of its auto layers and the macros they use) and greys them out as required. Presets: *Definitions only*, *Everything*, *Pick*.
-- **Collisions** (a slug the destination already has): per item `skip` (keep ours), `overwrite` (take theirs; refused when it would orphan stored content, as `set_layer_def` already refuses), or `rename` (`<slug>_2`, with every reference inside the imported set rewritten). Identical definitions are reported as "same" and skipped silently.
-- **Instance ids** (levels, entities, notes): kept unless the destination has them; a colliding id is re-rolled and every `entity_ref` and `note:` link inside the imported set follows. A reference that points outside the imported set is kept if the destination resolves it, else dropped and reported.
-- **Placement**: imported levels go into a new world (default, named after the source project), into an existing world at an offset, or keep their coordinates.
-- **Assets**: tileset images and `path` field targets are copied under the project (`art/`), with the same collision policy by file name.
-
-**CLI.** `worlds-cli import-project <src.worlds> --into <dst.worlds> [--defs-only | --all | --levels a,b | --worlds w] [--on-conflict skip|overwrite|rename] [--world <slug> | --new-world <slug>] [--offset x,y] [--dry-run]`. `--dry-run` prints the plan as the dialog shows it, and as JSON with `--json`.
-
-**API / MCP.** `project.import_plan { source, selection, policy }` returns the plan; `project.import { plan_id }` applies it as one batch. MCP `import_project` with the same arguments and a `dry_run` flag, so an agent can show the user the plan and then run it.
-
-**Editor.** File > Import from Worlds project… opens the tree with a search box, the presets, the policy per collision, the placement, and a summary ("12 definitions, 3 levels, 2 renamed, 1 skipped"). Apply is one undo entry labelled `Import from <name>`.
+Shipped. The spec now lives in [importing_worlds.md](importing_worlds.md) (`worlds_core::merge`, `worlds-cli import-project`), [api.md](api.md#import-from-another-project) (`project.import_plan`, `project.import`), [mcp.md](mcp.md#import_project) (`import_project`) and the [editor README](../crates/worlds-editor/README.md#import-from-worlds-project) (Import…, `"ui": "import_project"`).
 
 ## Phase 2: everyday editing
 

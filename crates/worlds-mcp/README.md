@@ -1,6 +1,6 @@
 # worlds-mcp
 
-An MCP server (stdio, `rmcp`) that lets an agent such as Claude Code read and edit a Worlds project: 38 coarse tools (`describe_project`, `read_level`, `create_level`, `paint`, ...) and `worlds://` resources. [`docs/mcp.md`](../../docs/mcp.md) is the contract: tool names, descriptions and input schemas there are exactly what the binary publishes (`tests/docs.rs` checks it).
+An MCP server (stdio, `rmcp`) that lets an agent such as Claude Code read and edit a Worlds project: 39 coarse tools (`describe_project`, `read_level`, `create_level`, `paint`, ...) and `worlds://` resources. [`docs/mcp.md`](../../docs/mcp.md) is the contract: tool names, descriptions and input schemas there are exactly what the binary publishes (`tests/docs.rs` checks it).
 
 ```
 worlds-mcp [--project <dir>] [--headless] [--name <client>]

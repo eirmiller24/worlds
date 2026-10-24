@@ -79,6 +79,7 @@ This creates its own wgpu device (no window and no display, so no `xvfb-run` nee
   | `{ "ui": "find", "query": "...", "kind"?: "all" \| "entities" \| "levels" \| "notes" \| "tiles", "select_all"?: true, "replace"?: { "field", "value" } }` | the Find pane in front with that query and kind (default `all`) and its results (see "The Find pane"); `select_all` presses Select all (every result selected, the first result's level active), `replace` presses Replace with that field and value text (one entry, "Replace item in 2 entities"). A query that doesn't parse or that the kind doesn't take, Select all with no result, and a Replace no result's type can take are errors |
   | `{ "ui": "history", "expand"?: true, "jump"?: n }` | the History pane in front (see "The History pane"); `expand` opens every agent batch's list of writes; `jump` undoes or redoes until `n` entries are done, as a click on an entry does (`0`: the "Opened" row). A `jump` past the history's length is an error |
   | `{ "ui": "reference", "add": path, "level"?: slug, "world"?: slug, "px"?: [x, y], "scale"?, "opacity"?, "locked"? }` | what "Add reference image…" does with that PNG (relative to the current directory; one outside the project is copied into `art/` right away, as `add_tileset` does): one `add_reference` entry at the level (default the active one, else the world), its corner at `px` (default the level's corner, or the active level's in the world), opacity 0.5 unless given; the new reference is selected, the References pseudo-layer active and the Inspector in front. An unreadable image, an unknown level or world, or both keys, is an error |
+  | `{ "ui": "import_project", "source", "selection"?, "policy"?, "search"?, "apply"?: true }` | the Import from Worlds project dialog on the project in `source` (relative to the current directory) with `project.import_plan`'s `selection` and `policy` and the search text, so a `--screenshot` shows the plan; `apply` then clicks Apply (one entry, `Import from <name>`; the plan's files are copied into `art/` first, the one other file a run without `--save` writes). This project itself, a source that doesn't load, a refused plan or nothing to apply is an error |
 
   For example (the forms; real points depend on the project: a marquee must start in empty space, a stack under a tiles press is selected instead):
 
@@ -372,6 +373,14 @@ A sketch, a concept painting or a screenshot of the old game behind the grid ([`
 
 Clicking an entry undoes or redoes, one step at a time exactly as Ctrl+Z and Ctrl+Shift+Z, until it is the last one done ("Opened" undoes everything); a step that fails stops there with its status. An agent's batch made of several writes has ⏵, which lists its writes (each command's label) and the files. The pane reads a snapshot of `worlds_core::History` rebuilt only when the history changed.
 
+## Import from Worlds project
+
+**Import…** in the toolbar (or "Import from Worlds project…" in the command palette) picks another project's directory and opens a dialog over `worlds_core::merge` ([docs/importing_worlds.md](../../docs/importing_worlds.md)); `src/app/import.rs`.
+
+- **What**: the presets *Definitions only*, *Everything* and *Pick*, a search box, and a checkbox tree of the source's definitions by kind (tilesets, enums, patterns, legends, templates, layers, level fields, entity types, project settings) and its levels by world (with a checkbox for the whole world: its guide groups and world notes too). Checking something under a preset turns it into *Pick* with the preset spelled out. What a checked item needs shows checked and greyed out; hover says what needs it.
+- **The plan**: every item shows what the import does with it (`add`, `same`, `skip: ours kept`, `overwrite`, `rename -> <slug>_2`, `refused`; hover for why and where a level goes), and each collision gets its own Skip / Overwrite / Rename menu over the default (**On a collision**). **Levels go** into a new world (named after the source; editable), into an existing world, or into the worlds of their own slugs, with an **Offset** in world pixels. Under it the summary line (`12 definitions, 3 levels, 2 renamed, 1 skipped`) and, folded, the ids re-rolled, references dropped, files copied and problems. Every change plans again; nothing changes until Apply.
+- **Apply** plans once more against the project as it is, copies the plan's files under `art/`, and applies its batch as one undo entry, `Import from <name>`; a new world is then shown. Escape or Cancel closes it.
+
 ## Crate layout
 
 ```
@@ -403,6 +412,8 @@ src/
                      Delete world confirmation, Move to world, the Project pane's Worlds
     find.rs          the Find pane: worlds_core::find queries over every world,
                      rows cache, click to jump, Select all, Replace (one batch)
+    import.rs        Import from Worlds project: the folder pick, the dialog (tree,
+                     presets, per-collision policy, placement, summary), Apply
     problems.rs      live validation: quiet time, worker, stale results dropped
     recovery.rs      the session lock's "already open" message, the recovery prompt
                      (Recover / Discard / Later, per-file diffs), --recover, the autosave tick
@@ -463,6 +474,9 @@ tests/gpu_screenshot.rs   WORLDS_GPU_TESTS=1: render smoke test, --script paint 
                           entity palette + bench, entity gesture + save, disk entity wait,
                           multi-select inspector, Types pane, live problems pane,
                           zoomed hover readout, a broken entity file's problem
+tests/import.rs           WORLDS_GPU_TESTS=1: the import dialog on the game fixture over a fresh
+                          project (an import_project step), presets and checkboxes, Apply
+                          as one entry that makes a world and copies images, bad steps
 tests/worlds.rs           WORLDS_GPU_TESTS=1: one world on the map at a time (levels drawn,
                           labels, Fit world), the switcher, Switch world, a level made active
                           in another world, Move to world and its undo

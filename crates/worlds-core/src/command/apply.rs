@@ -1057,8 +1057,9 @@ impl Project {
         Ok(level)
     }
 
-    /// Split a level into its `level.json` part and its content.
-    fn split_level(&self, mut level: Level) -> Result<(Level, LevelContent)> {
+    /// Split a level into its `level.json` part and its content (what
+    /// `create_level` takes).
+    pub fn split_level(&self, mut level: Level) -> Result<(Level, LevelContent)> {
         let mut int_grids = Vec::new();
         for g in std::mem::take(&mut level.int_grids) {
             let def = self.grid_def(&g.layer)?;

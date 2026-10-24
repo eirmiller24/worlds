@@ -103,6 +103,7 @@ fn api_md_examples_replay() {
     assert!(blocks.len() > 100, "found only {} blocks", blocks.len());
 
     let (_tmp, dir) = common::mini();
+    common::game_beside(&dir);
     let server = worlds_server::headless::run(&dir, Default::default()).unwrap();
     let info = ServerInfo::read(&dir).unwrap().unwrap();
     assert_eq!(info.port, server.port());

@@ -218,3 +218,109 @@ fn validate_enum_source() {
         assert_eq!(code, Some(2), "{args:?}: {out}");
     }
 }
+
+#[test]
+fn import_project() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let game = root.join("tests/fixtures/game/game.worlds");
+    let mini = root.join("crates/worlds-core/tests/fixtures/mini.worlds");
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("sequel.worlds");
+    assert!(cli().arg("new").arg(&dir).status().unwrap().success());
+    let run = |args: &[&str]| {
+        let out = cli()
+            .arg("import-project")
+            .args(args)
+            .arg("--into")
+            .arg(&dir)
+            .output()
+            .unwrap();
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        (out.status.code(), text)
+    };
+    let g = game.to_str().unwrap();
+
+    // A dry run prints the plan and changes nothing.
+    let before = std::fs::read_to_string(dir.join("project.json")).unwrap();
+    let (code, out) = run(&[g, "--defs-only", "--dry-run"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(
+        out.starts_with("Import from game (26 definitions, 0 levels"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  overwrite grid_size: this project has no levels yet\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  add       ../assets/tiles.png -> art/tiles.png\n"),
+        "{out}"
+    );
+    assert!(out.ends_with("dry run: nothing changed\n"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("project.json")).unwrap(),
+        before
+    );
+
+    // --json is the plan as the API returns it.
+    let (code, out) = run(&[g, "--levels", "level_2", "--dry-run", "--json"]);
+    assert_eq!(code, Some(0), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["label"], "Import from game");
+    assert_eq!(v["applied"], false);
+    let level = v["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "level")
+        .unwrap();
+    assert_eq!(level["slug"], "level_2");
+    assert_eq!(level["world"], "game");
+
+    // Definitions, then two levels into a new world: it validates clean
+    // and the images were copied.
+    let (code, out) = run(&[g, "--defs-only"]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(dir.join("art/tiles.png").is_file());
+    let (code, out) = run(&[
+        g,
+        "--levels",
+        "level_1,level_2",
+        "--new-world",
+        "old",
+        "--offset",
+        "-64,0",
+    ]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(
+        dir.join("worlds/old/levels/level_1/level.json").is_file(),
+        "{out}"
+    );
+    assert_eq!(
+        cli().arg("validate").arg(&dir).status().unwrap().code(),
+        Some(0)
+    );
+
+    // mini is on another grid: its levels are refused. Saying nothing to
+    // import is a usage error.
+    let (code, out) = run(&[
+        mini.to_str().unwrap(),
+        "--levels",
+        "shaft",
+        "--on-conflict",
+        "rename",
+        "--world",
+        "old",
+    ]);
+    assert_eq!(code, Some(0), "{out}");
+    assert!(
+        out.contains("  refused   shaft (into world old): the source grid is 16 px"),
+        "{out}"
+    );
+    let (code, _) = run(&[g]);
+    assert_eq!(code, Some(2));
+}

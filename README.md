@@ -50,7 +50,7 @@ Binaries in `target/release/`:
 | Binary | What it is |
 | --- | --- |
 | `worlds` | the editor (window; also headless screenshots and scripts) |
-| `worlds-cli` | `new`, `validate`, `bake`, `check-export`, `schema`, `import-ldtk` |
+| `worlds-cli` | `new`, `validate`, `bake`, `check-export`, `schema`, `import-ldtk`, `import-project` |
 | `worlds-mcp` | MCP server (stdio) for agents |
 | `worlds-server` | the live API on a project without the editor (tests, tools) |
 
@@ -66,7 +66,10 @@ worlds-cli check-export mygame.worlds/export --project mygame.worlds --fresh
 ```
 
 Coming from LDtk? `worlds-cli import-ldtk` converts an LDtk 1.5 project; see
-[docs/importing_ldtk.md](docs/importing_ldtk.md).
+[docs/importing_ldtk.md](docs/importing_ldtk.md). Starting a sequel?
+`worlds-cli import-project first.worlds --into sequel.worlds --defs-only`
+brings over every definition of another Worlds project; see
+[docs/importing_worlds.md](docs/importing_worlds.md).
 
 ## Using the export in your game
 
@@ -108,6 +111,7 @@ per tool call, optionally waiting for your approval); with it closed,
 | [docs/api.md](docs/api.md) | the live JSON-RPC API |
 | [docs/mcp.md](docs/mcp.md) | the MCP tools |
 | [docs/importing_ldtk.md](docs/importing_ldtk.md) | `worlds-cli import-ldtk` |
+| [docs/importing_worlds.md](docs/importing_worlds.md) | `worlds-cli import-project`: definitions, worlds or levels from another Worlds project |
 | [docs/ldtk_parity.md](docs/ldtk_parity.md) | LDtk's auto-layer rule semantics, as reference for the engine |
 | `crates/*/README.md` | per crate: editor, server, MCP, rules engine |
 

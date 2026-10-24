@@ -23,6 +23,7 @@ pub mod format;
 pub mod fragment;
 pub mod id;
 pub mod ldtk;
+pub mod merge;
 pub mod model;
 pub mod schema;
 pub mod text;

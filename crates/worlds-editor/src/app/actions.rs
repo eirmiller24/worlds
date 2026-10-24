@@ -114,6 +114,8 @@ pub enum Action {
     AddReference(Option<worlds_core::command::NoteScope>),
     /// Bring the Inspector to the front.
     ShowInspector,
+    /// Import from Worlds project…: pick a project, then the import dialog.
+    ImportProject,
 }
 
 impl Action {
@@ -202,6 +204,11 @@ impl Action {
                 "Add reference image…".into(),
                 "",
                 Action::AddReference(None),
+            ),
+            (
+                "Import from Worlds project…".into(),
+                "",
+                Action::ImportProject,
             ),
         ];
         use super::project_pane::Section;

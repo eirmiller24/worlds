@@ -2227,6 +2227,78 @@ It is locked now, so moving it needs `confirm`:
   "changes": [ { "change": "reference", "world": "main", "level": "crevasse", "id": "refsketch2" } ] } }
 ```
 
+### import from another project
+
+Bring definitions, worlds or levels of another Worlds project into this one ([importing_worlds.md](importing_worlds.md)). Planning and applying are two calls, so the plan can be shown before anything changes.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `project.import_plan` | `{ source, selection?, policy? }`: `source` is a project directory, absolute or relative to this project's. `selection`: `{ preset?: "pick" \| "defs_only" \| "everything", tilesets?, enums?, patterns?, legends?, templates?, layers?, level_fields?, entities?, settings?, worlds?, levels? }` (lists of slugs; `settings` are `grid_size`, `bg_color`, `collision_layer`, `blocking_values`, `default_level_size`). `policy`: `{ on_conflict?: "skip" \| "overwrite" \| "rename", conflicts?: { "<kind>:<slug>": ... }, placement?: { mode?: "new_world" \| "world" \| "keep", world?, offset?: [x, y] } }` | `{ rev, plan_id, empty, source, label, summary, items, ids, dropped, problems, assets }` (a read: nothing changes). `items` lists every item with its `kind`, `slug`, `action` (`add`, `same`, `skip`, `overwrite`, `rename`, `refused`), `to` (a rename's new slug), `world` (where a level or guide group goes), `required_by` (for a dependency nobody selected) and `reason`. `ids`: instance ids re-rolled (`{ kind, from, to }`); `dropped`: references nothing here resolves; `assets`: files to copy under `art/` (`{ from, to, action, reason? }`). An unknown slug in the selection is `command_error`; a source that doesn't load is `invalid_params` |
+| `project.import` (write) | `{ plan_id }` | Copies the plan's files, then applies it as one `batch` labelled `Import from <name>`: one undo entry. The write result adds `plan_id`, `summary` and `copied` (the files written). Refused with `stale_rev` when the project changed since the plan was made (plan again), `invalid_params` for an unknown `plan_id` (plans are kept until used, the last 16), `invalid` when the plan imports nothing |
+
+Plan an import of two entity types from the `game` project next to this one, renaming what collides. `locked_door` differs from ours, so theirs comes in as `locked_door_2`; `lever` needs nothing we lack:
+
+```json
+{ "jsonrpc": "2.0", "id": 148, "method": "project.import_plan", "params": { "source": "../game.worlds",
+  "selection": { "entities": ["lever", "locked_door"] }, "policy": { "on_conflict": "rename" } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 148, "result": { "rev": 72, "plan_id": "plan_1", "empty": false, "source": "game",
+  "label": "Import from game", "summary": "2 definitions, 0 levels, 1 renamed, 0 skipped",
+  "items": [
+    { "kind": "entity", "slug": "lever", "action": "add" },
+    { "kind": "entity", "slug": "locked_door", "action": "rename", "to": "locked_door_2" } ],
+  "ids": [], "dropped": [], "problems": [], "assets": [] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 149, "method": "project.import", "params": { "plan_id": "plan_1" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 149, "result": { "rev": 73, "status": "applied", "label": "claude-code: Import from game",
+  "plan_id": "plan_1", "summary": "2 definitions, 0 levels, 1 renamed, 0 skipped", "copied": [],
+  "changes": [
+    { "change": "def", "kind": "entity", "slug": "lever" },
+    { "change": "def", "kind": "entity", "slug": "locked_door_2" } ] } }
+```
+
+A plan made before the project changed is refused; plan again:
+
+```json
+{ "jsonrpc": "2.0", "id": 150, "method": "project.import_plan", "params": { "source": "../game.worlds",
+  "selection": { "entities": ["torch"] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 150, "result": { "rev": 73, "plan_id": "plan_2", "empty": false, "source": "game",
+  "label": "Import from game", "summary": "1 definition, 0 levels, 0 renamed, 0 skipped",
+  "items": [ { "kind": "entity", "slug": "torch", "action": "add" } ],
+  "ids": [], "dropped": [], "problems": [], "assets": [] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 151, "method": "world.create", "params": { "slug": "annex" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 151, "result": { "rev": 74, "status": "applied", "label": "claude-code: Create world annex",
+  "changes": [
+    { "change": "world_created", "world": "annex" },
+    { "change": "project", "key": "worlds" } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 152, "method": "project.import", "params": { "plan_id": "plan_2" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 152, "error": { "code": -32001,
+  "message": "the project changed since plan plan_2 was made (rev 67 then, 68 now): call project.import_plan again",
+  "data": { "expected": 67, "current": 68 } } }
+```
+
 ## Headless mode
 
 `worlds_server::headless` runs the same method handler over a `Project` loaded from a directory, with its own `History` and `BakeCache`: `headless::Session` answers calls in-process with no socket, and `headless::run` (the `worlds-server <dir>` binary) serves it over the same WebSocket and `server.json` as the editor (the docs test uses that). Differences from the editor:
@@ -2241,4 +2313,4 @@ It is locked now, so moving it needs `confirm`:
 
 ## Testing
 
-`crates/worlds-server/tests/docs.rs` checks this page. Every ` ```json ` and ` ```json norun ` block must parse. A ` ```json ` block holding a request (an object with `jsonrpc`, `method` and `id`) is replayed, in document order, over one WebSocket connection to a headless server on a fresh copy of `mini.worlds`; the next block is its expected response. The test first writes opaque placeholder images for the fixture's tilesets (`art/castle_main.png` 512x512, `art/ssw_set5.png` 268x268, so atlases are 32x32 and 8x8 tiles). The `session.hello` example is sent with the server's real token. For each replayed request (notifications that arrive meanwhile are skipped): an error response must come back as an error with the same `code`, and for `command_error` and `needs_confirm` the same `data.kind` or `data.reason`; a result must come back as a result, and each of `rev`, `status`, `label`, `id`, `entries`, `steps` and `changes` that the example has must equal the real one exactly (as JSON values), as must the `text` of a `level.get` (the text view). Other result keys are checked for presence only, so values that depend on bakes, rendering or the clock can stay illustrative. Blocks that aren't requests or responses (notifications, standalone objects) are only parsed. `norun` blocks (editor-only and approval-mode exchanges) are parsed but not replayed.
+`crates/worlds-server/tests/docs.rs` checks this page. Every ` ```json ` and ` ```json norun ` block must parse. A ` ```json ` block holding a request (an object with `jsonrpc`, `method` and `id`) is replayed, in document order, over one WebSocket connection to a headless server on a fresh copy of `mini.worlds`; the next block is its expected response. The test first writes opaque placeholder images for the fixture's tilesets (`art/castle_main.png` 512x512, `art/ssw_set5.png` 268x268, so atlases are 32x32 and 8x8 tiles) and copies the game fixture (`tests/fixtures/game/`: `game.worlds` and its `assets/`) next to the project, so `../game.worlds` is a second project to import from. The `session.hello` example is sent with the server's real token. For each replayed request (notifications that arrive meanwhile are skipped): an error response must come back as an error with the same `code`, and for `command_error` and `needs_confirm` the same `data.kind` or `data.reason`; a result must come back as a result, and each of `rev`, `status`, `label`, `id`, `entries`, `steps` and `changes` that the example has must equal the real one exactly (as JSON values), as must the `text` of a `level.get` (the text view). Other result keys are checked for presence only, so values that depend on bakes, rendering or the clock can stay illustrative. Blocks that aren't requests or responses (notifications, standalone objects) are only parsed. `norun` blocks (editor-only and approval-mode exchanges) are parsed but not replayed.

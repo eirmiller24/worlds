@@ -44,6 +44,15 @@ pub fn mini() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// An engine on `dir` named `claude-code`.
+/// The game fixture (`tests/fixtures/game/`) copied next to `dir`, so
+/// `../game.worlds` is a second project to import from.
+pub fn game_beside(dir: &Path) {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/game");
+    let parent = dir.parent().unwrap();
+    copy_dir(&root.join("game.worlds"), &parent.join("game.worlds"));
+    copy_dir(&root.join("assets"), &parent.join("assets"));
+}
+
 pub fn engine(dir: &Path, force_headless: bool) -> Engine {
     let mut e = Engine::new(Config {
         dir: dir.to_path_buf(),

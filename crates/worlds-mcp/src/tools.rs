@@ -2011,6 +2011,55 @@ impl Engine {
         let r = self.write(&label, |_| Ok(vec![write.clone()]))?;
         Ok(vec![json_block(&r)])
     }
+
+    pub(crate) fn import_project(&mut self, a: Value) -> ToolResult {
+        let a: ImportProject = args("import_project", a)?;
+        let mut p = json!({ "source": a.source });
+        put(&mut p, "selection", &a.selection);
+        put(&mut p, "policy", &a.policy);
+        if a.dry_run {
+            let r = self.read("project.import_plan", p)?;
+            return self.json_result(r);
+        }
+        let label = Self::label(
+            "import_project",
+            a.label.as_deref(),
+            &format!("from {}", a.source),
+        );
+        let mut plan = Value::Null;
+        let (mut out, raw) = self.write_full(&label, |e| {
+            let r = e.read("project.import_plan", p.clone())?;
+            if r["empty"] == true {
+                return Err(format!(
+                    "nothing to import: {}",
+                    r["summary"].as_str().unwrap_or("")
+                ));
+            }
+            plan = r.clone();
+            Ok(vec![("project.import", json!({ "plan_id": r["plan_id"] }))])
+        })?;
+        if let Some(o) = plan.as_object_mut() {
+            o.remove("rev");
+            o.remove("plan_id");
+            o.remove("notices");
+        }
+        out["plan"] = plan;
+        if let Some(c) = raw.as_ref().and_then(|r| r.get("copied")) {
+            out["copied"] = c.clone();
+        }
+        Ok(vec![json_block(&out)])
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportProject {
+    source: String,
+    selection: Option<Value>,
+    policy: Option<Value>,
+    #[serde(default)]
+    dry_run: bool,
+    label: Option<String>,
 }
 
 #[derive(Deserialize)]
