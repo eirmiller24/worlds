@@ -1813,9 +1813,10 @@ impl<'a> Validator<'a> {
         }
     }
 
-    /// `world.json` `layout`: a strip's levels where the strip puts them; a
-    /// grid vania's on the lattice, whole cells, and the cell a whole number
-    /// of project cells.
+    /// `world.json` `layout`: a strip's levels where the strip puts them (by
+    /// their bounding box `size`, void or not); a grid vania's on the
+    /// lattice, whole cells, void rects whole cells, and the cell a whole
+    /// number of project cells.
     fn layout(&mut self, f: &str, w: &World) {
         let g = self.p.grid_size;
         if let Some(places) = w.strip_positions(g) {
@@ -1868,6 +1869,23 @@ impl<'a> Validator<'a> {
                     key,
                     format!("grid vania: {why}"),
                 );
+            }
+            // Void rects cut whole lattice cells too, measured from the
+            // level's corner (which is on a lattice point when the level is).
+            for (i, r) in l.void.iter().enumerate() {
+                let vr = [
+                    r.x as i64 * gi,
+                    r.y as i64 * gi,
+                    r.w as i64 * gi,
+                    r.h as i64 * gi,
+                ];
+                if let Some(why) = crate::model::lattice_problem(cell, vr) {
+                    self.push(
+                        &format!("worlds/{}/levels/{}/level.json", w.slug, l.slug),
+                        format!("void[{i}]"),
+                        format!("grid vania, void rect in pixels from the level's corner: {why}"),
+                    );
+                }
             }
         }
     }

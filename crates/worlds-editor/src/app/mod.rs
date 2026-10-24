@@ -1348,12 +1348,18 @@ impl EditorApp {
         self.st.levels.sort = sort;
         self.st.levels.all_worlds = l.all_worlds.unwrap_or(false);
         show_pane(&mut self.dock, Pane::Levels);
-        if let Some(slug) = &l.select {
+        for (slug, frame) in [(&l.select, false), (&l.frame, true)] {
+            let Some(slug) = slug else {
+                continue;
+            };
             let doc = self.st.doc.as_ref().ok_or("no project open")?;
             let ix = doc
                 .level_ix(slug)
                 .ok_or_else(|| format!("no level {slug:?}"))?;
             levels::select(&mut self.st.view, doc, ix);
+            if frame {
+                self.run(Action::FitLevel);
+            }
         }
         Ok(())
     }

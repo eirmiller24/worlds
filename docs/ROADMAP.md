@@ -68,7 +68,7 @@ Finding your way around a big project, and planning on the map.
 
 ### 3.1 Levels pane
 
-Shipped: the level order (`world.json` `levels`) in [format.md](format.md#worldsltworldgtworldjson), `reorder_levels` in [commands.md](commands.md#reorder_levels), `level.reorder` in [api.md](api.md#level-order-world-layouts-and-object-groups), MCP `reorder_levels` in [mcp.md](mcp.md#reorder_levels), the Levels pane (Ctrl+L, thumbnails, search, sort, drag to reorder) and the `"ui": "levels"` step in the [editor README](../crates/worlds-editor/README.md#the-levels-pane) (the camera bookmarks list of 3.6 has a slot there).
+Shipped: the level order (`world.json` `levels`) in [format.md](format.md#worldsltworldgtworldjson), `reorder_levels` in [commands.md](commands.md#reorder_levels), `level.reorder` in [api.md](api.md#level-order-world-layouts-and-object-groups), MCP `reorder_levels` in [mcp.md](mcp.md#reorder_levels), the Levels pane (Ctrl+L, thumbnails, search, sort, drag to reorder) and the `"ui": "levels"` step in the [editor README](../crates/worlds-editor/README.md#the-levels-pane) (it follows the focused map tab of 1.2 and shows the camera bookmarks list of 3.6 under its rows).
 
 ### 3.2 Find and replace
 

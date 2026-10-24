@@ -1587,6 +1587,59 @@ mod tests {
         assert!(batches(&mut st).is_empty());
     }
 
+    /// Layer folders, the References pseudo-layer under them and the
+    /// Palette's Library switch, drawn in one frame: each keeps its own
+    /// state, a hidden folder hides its layers but not the references.
+    #[test]
+    fn folders_references_and_the_library_together() {
+        use super::super::testkit::{Driver, state};
+        fn both(ui: &mut egui::Ui, st: &mut EditorState) {
+            layers(ui, st);
+            ui.separator();
+            palette(ui, st);
+        }
+        let (_tmp, mut st) = state();
+        let doc = st.doc.as_mut().unwrap();
+        let i = doc
+            .project
+            .layers
+            .iter()
+            .position(|l| l.slug == "decor_back")
+            .unwrap();
+        let cmd = folder_command(doc, i, Some("Decor".into())).unwrap();
+        doc.project.apply(cmd).unwrap();
+        let doc = st.doc.as_ref().unwrap();
+        st.view.sync_layers(doc, None);
+        // The active layer inside a hidden, collapsed folder; the Library
+        // in the Palette.
+        st.view.active_layer = Some(i);
+        st.view.folders.insert(
+            "Decor".into(),
+            crate::view::FolderView {
+                visible: false,
+                locked: false,
+                opacity: 1.0,
+                collapsed: true,
+            },
+        );
+        st.view.library.open = true;
+        let mut d = Driver::new(both);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        let folder = d.rect("layers:folder:Decor");
+        let refs = d.rect("references");
+        assert!(refs.top() >= folder.bottom(), "{refs:?} under {folder:?}");
+        assert!(!st.view.layer_visible(i));
+        assert!(st.view.references.ui.visible, "references stay shown");
+        // Making References active leaves the folder and the Library be.
+        d.click(&mut st, refs.center());
+        assert!(st.view.references.active);
+        assert!(st.view.folders["Decor"].collapsed);
+        assert!(st.view.library.open);
+        d.frame(&mut st, vec![]);
+        d.rect("layers:folder:Decor");
+    }
+
     /// The palette's random brush: an atlas drag replaces, Ctrl adds tiles,
     /// Shift adds a stamp; the weights, Save preset and a preset's click.
     #[test]

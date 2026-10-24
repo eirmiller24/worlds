@@ -300,11 +300,12 @@ pub struct ImportStep {
 }
 
 /// `{ "ui": "levels", "search"?: text, "sort"?: "order" | "name" |
-/// "position", "all_worlds"?: bool, "select"?: slug }`: the Levels pane in
-/// front with that search (default none), sort (default order) and world
-/// grouping (default the world shown only); `select` clicks that level's
-/// row (it becomes active and selected). An unknown sort or level is an
-/// error.
+/// "position", "all_worlds"?: bool, "select"?: slug, "frame"?: slug }`: the
+/// Levels pane in front with that search (default none), sort (default
+/// order) and world grouping (default the focused map tab's world only);
+/// `select` clicks that level's row (it becomes active and selected),
+/// `frame` double clicks it (selects it and frames it in the focused map
+/// tab). An unknown sort or level is an error.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LevelsStep {
@@ -316,6 +317,8 @@ pub struct LevelsStep {
     pub all_worlds: Option<bool>,
     #[serde(default)]
     pub select: Option<String>,
+    #[serde(default)]
+    pub frame: Option<String>,
 }
 
 /// `{ "ui": "find", "query": "...", "kind"?: "all" | "entities" |

@@ -1,7 +1,9 @@
 //! The Levels pane (`Pane::Levels`, tab "Levels", next to the Layers
-//! pane; Ctrl+L or "Levels: show the Levels pane"): the shown world's
-//! levels, or every world's grouped by world, each row a thumbnail, the
-//! name and slug, the size in cells, the tags and the problem count.
+//! pane; Ctrl+L or "Levels: show the Levels pane"): the focused map tab's
+//! world's levels, or every world's grouped by world, each row a
+//! thumbnail, the name and slug, the size in cells, the tags and the
+//! problem count. Under the rows, the camera bookmarks (the toolbar ★
+//! window's list).
 //!
 //! - **Search** by name, slug and tag: every word of the box must be in one
 //!   of them (`forest boss`).
@@ -11,8 +13,9 @@
 //!   menu's Move earlier / Move later. One `reorder_levels`, one undo entry;
 //!   PgUp/PgDn and the export follow the order, and a strip layout moves its
 //!   levels to their new places in the same entry.
-//! - A click makes the level active (and selects it); a double click frames
-//!   it in the map (the Map's Fit level). Right click: Frame, Rename,
+//! - A click makes the level active (and selects it), in the focused map
+//!   tab (a level of another world takes that tab there); a double click
+//!   also frames it in that tab (the Map's Fit level). Right click: Frame, Rename,
 //!   Duplicate, Crop to content, Move earlier/later, Move to world, Delete.
 //!
 //! Thumbnails are small CPU renders of the level (background, int_grid
@@ -233,6 +236,8 @@ pub fn move_to(doc: &Document, level: &Slug, to: usize) -> Option<Command> {
 
 /// Make level `ix` active and the selection (a click on its row).
 pub fn select(view: &mut ViewState, doc: &Document, ix: LevelIx) {
+    // A level of another world (All worlds) takes the focused tab there.
+    view.set_world(doc, doc.levels[ix].world);
     view.active_level = Some(ix);
     view.selection.set([SelItem::Level(doc.ids[ix].clone())]);
 }
@@ -474,10 +479,21 @@ impl Thumbs {
 
 // ---- the pane ----
 
-/// A placeholder for the camera bookmarks list (roadmap 3.6, not on this
-/// branch yet): when bookmarks land, their list goes here, under the
-/// levels.
-fn bookmarks_slot(_ui: &mut egui::Ui) {}
+/// The camera bookmarks under the levels: the toolbar ★ window's list
+/// ([`super::viewports::bookmarks_list`]), folding away. A request to focus
+/// the name field (the ★ window opening) is left for the window.
+fn bookmarks(ui: &mut egui::Ui, st: &mut EditorState) {
+    let n = st.view.bookmarks.len();
+    let r = egui::CollapsingHeader::new(format!("Bookmarks ({n})"))
+        .id_salt("levels bookmarks")
+        .default_open(true)
+        .show(ui, |ui| {
+            let focus = std::mem::take(&mut st.bookmark_focus);
+            super::viewports::bookmarks_list(ui, st);
+            st.bookmark_focus |= focus;
+        });
+    mark(ui, "levels:bookmarks", r.header_response.rect);
+}
 
 /// The Levels pane.
 pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
@@ -510,6 +526,10 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
             .on_hover_text("Every world's levels, grouped by world");
         mark(ui, "levels:all_worlds", r.rect);
     });
+    // The bookmarks take the bottom; the rows scroll in the rest.
+    egui::Panel::bottom("levels bookmarks")
+        .resizable(false)
+        .show(ui, |ui| bookmarks(ui, st));
     let EditorState {
         doc,
         view,
@@ -707,7 +727,6 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
             }
         }
     }
-    bookmarks_slot(ui);
     // ---- what the rows asked for ----
     if cancel_rename {
         ls.rename = None;

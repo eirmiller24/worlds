@@ -15,7 +15,8 @@
 //!   field values (a transform never changes a field; [`SelectionPlan`]'s
 //!   `notes` say when an enum field looks directional).
 //! - [`arrange_levels`] aligns, distributes and butts levels together: one
-//!   batch of `move_level`.
+//!   batch of `move_level`. Refused in a strip world layout (the level
+//!   order places those); in grid vania the results snap to the lattice.
 //!
 //! A turn with `t` needs square tiles: refused when a tile in it comes from
 //! a tileset whose tiles aren't square, as rules require for `rotate`.
@@ -856,6 +857,14 @@ pub fn arrange_levels(
             f.1.slug, project.worlds[f.0].slug, project.worlds[wi].slug
         )));
     }
+    let layout = &project.worlds[wi].layout;
+    if layout.is_strip() {
+        return Err(CommandError::Invalid(format!(
+            "world {} has a {} layout: its level order places the levels",
+            project.worlds[wi].slug,
+            layout.mode.name()
+        )));
+    }
     let g = project.grid_size.max(1) as i64;
     let snap = |v: i64| (v as f64 / g as f64).round() as i64 * g;
     // [x, y, w, h] in world pixels.
@@ -944,6 +953,10 @@ pub fn arrange_levels(
                 pos[i][a] = edge;
             }
         }
+    }
+    // Grid vania: every level lands on a lattice point.
+    for p in &mut pos {
+        *p = layout.snap(project.grid_size, *p);
     }
     let world = project.worlds[wi].slug.clone();
     let commands: Vec<Command> = found

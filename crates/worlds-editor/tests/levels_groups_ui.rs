@@ -226,3 +226,143 @@ fn levels_layouts_and_groups_in_the_app() {
         frame(&mut app);
     }
 }
+
+/// The Levels pane lists the focused map tab's world and frames in that
+/// tab; All worlds lists every world whatever tab is focused; the
+/// bookmarks list sits under the rows.
+#[test]
+fn the_levels_pane_follows_the_focused_tab() {
+    use worlds_editor::app::levels::Row;
+    use worlds_editor::view::ViewportId;
+    if !gpu_tests() {
+        return;
+    }
+    let (_tmp, dir) = game_copy();
+    let hl = Headless::new([1600, 900]).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = EditorApp::new(
+        &ctx,
+        hl.gpu.clone(),
+        worlds_editor::log::init(),
+        AppOptions {
+            headless: true,
+            ..Default::default()
+        },
+    );
+    app.set_commands(Box::new(worlds_editor::edit::Editing::new()));
+    app.open(&dir);
+    let mut t = 0.0;
+    let mut frames = |app: &mut EditorApp, n: usize| {
+        for _ in 0..n {
+            t += 1.0 / 60.0;
+            hl.frame_with(&ctx, app, t, vec![]);
+        }
+    };
+    frames(&mut app, 3);
+    steps(
+        &mut app,
+        r#"[
+          { "op": "create_world", "slug": "dungeon", "name": "Dungeon" },
+          { "op": "move_level_to_world", "level": "level_1", "world": "dungeon", "world_px": [0, 0] },
+          { "ui": "focus", "level": "crevasse" },
+          { "ui": "viewport", "open": { "world": "dungeon" } },
+          { "ui": "focus", "world": "dungeon", "world_rect": [-4000, -4000, 256, 128] },
+          { "ui": "levels" }
+        ]"#,
+    )
+    .unwrap();
+    frames(&mut app, 4);
+    assert_eq!(app.st.view.focused, ViewportId(2));
+    let listed = |app: &EditorApp| -> Vec<String> {
+        let doc = app.document().unwrap();
+        app.st
+            .levels
+            .rows()
+            .iter()
+            .filter_map(|r| match r {
+                Row::Level(ix) => Some(doc.level(*ix).slug.to_string()),
+                Row::World { .. } => None,
+            })
+            .collect()
+    };
+    assert_eq!(listed(&app), ["level_1"]);
+    // Framing from the pane moves the focused tab (2) only.
+    let cam = |app: &EditorApp, id| {
+        let st = &app.st;
+        let (c, size) = st.view.tab_camera(&st.viewport, ViewportId(id)).unwrap();
+        c.center(size)
+    };
+    let tab1 = cam(&app, 1);
+    steps(&mut app, r#"[{ "ui": "levels", "frame": "level_1" }]"#).unwrap();
+    frames(&mut app, 4);
+    let (want, tab2) = {
+        let doc = app.document().unwrap();
+        let l = doc.project.level("level_1").unwrap();
+        let g = doc.project.grid_size as f64;
+        (
+            [
+                l.world_px[0] as f64 + l.size[0] as f64 * g / 2.0,
+                l.world_px[1] as f64 + l.size[1] as f64 * g / 2.0,
+            ],
+            cam(&app, 2),
+        )
+    };
+    assert!(
+        (tab2[0] - want[0]).abs() < 2.0 && (tab2[1] - want[1]).abs() < 2.0,
+        "{tab2:?} vs {want:?}"
+    );
+    assert_eq!(cam(&app, 1), tab1, "tab 1 didn't move");
+    // Focus tab 1: the pane lists main's levels.
+    steps(&mut app, r#"[{ "ui": "viewport", "focus": 1 }]"#).unwrap();
+    frames(&mut app, 3);
+    let main = listed(&app);
+    assert!(main.contains(&"crevasse".to_string()), "{main:?}");
+    assert!(!main.contains(&"level_1".to_string()), "{main:?}");
+    // All worlds: both worlds, every level, focus or not.
+    steps(&mut app, r#"[{ "ui": "levels", "all_worlds": true }]"#).unwrap();
+    frames(&mut app, 3);
+    let worlds = app
+        .st
+        .levels
+        .rows()
+        .iter()
+        .filter(|r| matches!(r, Row::World { .. }))
+        .count();
+    assert_eq!(worlds, 2);
+    assert_eq!(
+        listed(&app).len(),
+        app.document().unwrap().project.levels().count()
+    );
+    // A level of the other world from All worlds takes the focused tab there.
+    steps(
+        &mut app,
+        r#"[{ "ui": "levels", "all_worlds": true, "select": "level_1" }]"#,
+    )
+    .unwrap();
+    frames(&mut app, 2);
+    {
+        let st = &app.st;
+        let doc = st.doc.as_ref().unwrap();
+        assert_eq!(
+            doc.project.worlds[st.view.tab_world_ix(doc, ViewportId(1))].slug,
+            "dungeon"
+        );
+    }
+    // The bookmarks list is under the rows, in the pane.
+    steps(
+        &mut app,
+        r#"[{ "ui": "bookmark", "save": "hall" }, { "ui": "levels" }]"#,
+    )
+    .unwrap();
+    frames(&mut app, 3);
+    let pane = app.st.pane_rects[&Pane::Levels];
+    let marked = |k: &str| worlds_editor::app::fields::marked(&ctx, k);
+    let head = marked("levels:bookmarks").expect("drawn");
+    let hall = marked("bookmark:hall").expect("listed");
+    assert!(
+        pane.contains(head.center()) && pane.contains(hall.center()),
+        "{pane:?} {head:?} {hall:?}"
+    );
+    let row = marked("levels:row:level_1").expect("row");
+    assert!(row.bottom() <= head.top() + 1.0, "{row:?} above {head:?}");
+}

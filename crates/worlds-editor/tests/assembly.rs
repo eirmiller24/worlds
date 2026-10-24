@@ -1,7 +1,8 @@
 //! Assemblies and transforms in the editor without a GPU: the paste
 //! ghost's X, Y and R, the tile stamp's, the selection transforms,
 //! arranging levels, level-edge snapping, the Library's rows, the save
-//! dialog and the thumbnails, through the same functions the keys, menus
+//! dialog and the thumbnails, world layouts' lattice and strips under
+//! those, grouping a placed assembly, through the same functions the keys, menus
 //! and `--script` use. On a temp copy of `worlds-core`'s `mini.worlds`
 //! (crevasse at (0, 0), 20 x 5 cells of 16; shaft at (320, 80), 6 x 8).
 
@@ -587,5 +588,111 @@ fn the_history_lists_a_placed_assembly_with_its_file() {
             .any(|f| f.ends_with("assemblies/doorway.json")),
         "{:?}",
         saved.files
+    );
+}
+
+fn set_layout(r: &mut Rig, mode: worlds_core::LayoutMode, cell: Option<[u32; 2]>) {
+    r.apply(Command::SetWorldLayout {
+        world: slug("main"),
+        layout: worlds_core::WorldLayout {
+            mode,
+            gap: None,
+            cell,
+        },
+        restore: false,
+    })
+    .unwrap();
+}
+
+#[test]
+fn the_lattice_wins_over_edge_snaps_and_strips_refuse_arranging() {
+    use worlds_core::LayoutMode;
+    let mut r = Rig::new();
+    let shaft = r.doc.level_ix("shaft").unwrap();
+    let crev = r.doc.level_ix("crevasse").unwrap();
+    // Free: 5 px down snaps the shaft's top back onto crevasse's bottom (80).
+    let (d, hits) = worlds_editor::annot::drag_delta(&r.doc, &r.view, &[shaft], [0.0, 5.0], true);
+    assert_eq!(d, [0, 0]);
+    assert!(hits.iter().any(|h| h.axis == 1 && h.at == 80), "{hits:?}");
+    // Grid vania 64 px: the edge snap's 80 isn't a lattice point; the
+    // lattice step comes last and puts the top on 64, dropping that hit.
+    set_layout(&mut r, LayoutMode::GridVania, Some([64, 64]));
+    let (d, hits) = worlds_editor::annot::drag_delta(&r.doc, &r.view, &[shaft], [0.0, 5.0], true);
+    assert_eq!(d, [0, -16]);
+    assert!(hits.iter().all(|h| h.axis != 1), "{hits:?}");
+    assert!(worlds_editor::annot::strip_refusal(&r.doc, shaft).is_none());
+    // Arranging in grid vania lands on the lattice.
+    r.view.selection.set([
+        SelItem::Level(r.doc.ids[crev].clone()),
+        SelItem::Level(r.doc.ids[shaft].clone()),
+    ]);
+    let cmd = worlds_editor::arrange::plan_arrange(&r.doc, &r.view, ArrangeOp::AlignTop).unwrap();
+    r.apply(cmd).unwrap();
+    assert_eq!(r.doc.project.level("shaft").unwrap().world_px, [320, 0]);
+    // A strip: drags refused, arranging refused with the reason.
+    set_layout(&mut r, LayoutMode::Horizontal, None);
+    assert!(worlds_editor::annot::strip_refusal(&r.doc, shaft).is_some());
+    let e =
+        worlds_editor::arrange::plan_arrange(&r.doc, &r.view, ArrangeOp::AlignLeft).unwrap_err();
+    assert!(e.contains("horizontal layout"), "{e}");
+}
+
+#[test]
+fn a_placed_assembly_can_be_grouped() {
+    let mut r = Rig::new();
+    r.view.selection.set(pair());
+    let c = worlds_editor::clipboard::copy_selection(&r.doc, &r.view).unwrap();
+    let a = Assembly::new(
+        AssemblyInfo {
+            slug: slug("doorway"),
+            name: "Doorway".into(),
+            category: None,
+            tags: vec![],
+            doc: None,
+        },
+        c.fragment,
+    );
+    r.apply(Command::SetAssembly {
+        assembly: a.clone(),
+    })
+    .unwrap();
+    let before: Vec<Id> = r
+        .doc
+        .project
+        .level("crevasse")
+        .unwrap()
+        .all_entities()
+        .map(|e| e.id.clone())
+        .collect();
+    let g = PasteGhost::assembly(slug("doorway"), a.fragment());
+    let crev = r.doc.level_ix("crevasse").unwrap();
+    r.apply(g.plan(&r.doc, crev, [2, 1]).unwrap().command())
+        .unwrap();
+    let placed: Vec<Id> = r
+        .doc
+        .project
+        .level("crevasse")
+        .unwrap()
+        .all_entities()
+        .map(|e| e.id.clone())
+        .filter(|i| !before.contains(i))
+        .collect();
+    assert_eq!(placed.len(), 2);
+    // The placed copies plus one of the originals: one group.
+    let mut sel: Vec<SelItem> = placed.iter().cloned().map(SelItem::Entity).collect();
+    sel.push(SelItem::Entity(id("btncrev222")));
+    r.view.selection.set(sel);
+    let cmd = worlds_editor::app::groups::group_command(&r.doc, &r.view).unwrap();
+    r.apply(cmd).unwrap();
+    let l = r.doc.project.level("crevasse").unwrap();
+    assert_eq!(l.groups.len(), 1);
+    assert_eq!(l.groups[0].members.len(), 3);
+    assert!(placed.iter().all(|i| l.groups[0].members.contains(i)));
+    assert!(
+        worlds_core::validate(&r.doc.project)
+            .iter()
+            .all(|p| !p.path.starts_with("groups")),
+        "{:?}",
+        worlds_core::validate(&r.doc.project)
     );
 }

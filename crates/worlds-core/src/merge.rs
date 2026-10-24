@@ -8,8 +8,9 @@
 //! import as one `batch` labelled `Import from <name>` (`set_tileset_def`,
 //! `set_enum_def`, `set_macro`, `set_layer_def`, `set_rule_group`,
 //! `set_stamp`, `set_level_field_def`, `set_entity_def`,
-//! `set_project_setting`, `create_world`, `set_guide_group`,
-//! `create_level`, `replace_level`, `add_note`), so it is one undo entry
+//! `set_project_setting`, `create_world`, `set_world_layout`,
+//! `set_guide_group`, `create_level`, `replace_level`, `reorder_levels`,
+//! `add_note`), so it is one undo entry
 //! and the editor, the API and the MCP server apply it like any other
 //! command. The files it copies ([`Plan::assets`], [`copy_assets`]) are
 //! the one thing outside the batch: copy them first, then apply.
@@ -1580,6 +1581,8 @@ impl<'a> Planner<'a> {
 
         // ---- worlds ----
         let mut world_items = Vec::new();
+        // New worlds whose level order follows their source world's.
+        let mut keep_order: Vec<(Slug, Slug)> = Vec::new();
         let mut needed: BTreeSet<Slug> = BTreeSet::new();
         for it in &levels {
             if self.decided[it].action != Action::Overwrite
@@ -1626,13 +1629,40 @@ impl<'a> Planner<'a> {
                 PlacementMode::Keep => self.src.world(t.as_str()).and_then(|w| w.name.clone()),
                 _ => Some(self.src.name.clone()).filter(|n| !n.is_empty()),
             };
-            let cmd = Command::CreateWorld {
+            let mut cmds = vec![Command::CreateWorld {
                 slug: t.clone(),
                 name,
+            }];
+            // A new world made of one source world keeps its layout (and,
+            // once its levels are in, its level order).
+            let sources: Vec<&Slug> = self
+                .targets
+                .iter()
+                .filter(|(_, to)| **to == t)
+                .map(|(from, _)| from)
+                .collect();
+            let only = match sources[..] {
+                [one] => self.s.world(one.as_str()),
+                _ => None,
             };
-            let (action, reason) = match try_apply(&mut d, &mut out, vec![cmd]) {
+            if let Some(sw) = only {
+                if !sw.layout.is_default() {
+                    cmds.push(Command::SetWorldLayout {
+                        world: t.clone(),
+                        layout: sw.layout.clone(),
+                        restore: false,
+                    });
+                }
+                if !sw.level_order.is_empty() || sw.layout.is_strip() {
+                    keep_order.push((t.clone(), sw.slug.clone()));
+                }
+            }
+            let (action, reason) = match try_apply(&mut d, &mut out, cmds) {
                 Ok(()) => (Action::Add, None),
-                Err(e) => (Action::Refused, Some(e)),
+                Err(e) => {
+                    keep_order.retain(|(w, _)| *w != t);
+                    (Action::Refused, Some(e))
+                }
             };
             world_items.push(PlanItem {
                 kind: Kind::World,
@@ -1717,7 +1747,20 @@ impl<'a> Planner<'a> {
                 &mut dropped,
                 &mut assets,
             );
+            let old_entities: BTreeSet<Id> = content
+                .entities
+                .iter()
+                .flat_map(|el| el.entities.iter().map(|e| e.id.clone()))
+                .collect();
             self.remap_content(&mut content, &refs, &mut dropped, &mut assets);
+            remap_groups(
+                &mut meta,
+                &content,
+                &old_entities,
+                &refs,
+                &who,
+                &mut dropped,
+            );
             let mut fix_paths = BTreeMap::new();
             for a in assets {
                 if let Some(to) = self.asset(&a) {
@@ -1757,6 +1800,10 @@ impl<'a> Planner<'a> {
                     continue;
                 };
                 meta.world_px = [meta.world_px[0] + offset[0], meta.world_px[1] + offset[1]];
+                // Grid vania: onto the lattice (a strip places it itself).
+                if let Some(w) = d.world(target.as_str()) {
+                    meta.world_px = w.layout.snap(d.grid_size, meta.world_px);
+                }
                 self.set_world(it, target.clone());
                 Command::CreateLevel {
                     world: target,
@@ -1768,6 +1815,30 @@ impl<'a> Planner<'a> {
             match try_apply(&mut d, &mut out, vec![cmd]) {
                 Ok(()) => self.dropped.extend(dropped),
                 Err(e) => self.refuse(it, e),
+            }
+        }
+
+        // ---- level order of new worlds ----
+        for (t, src) in keep_order {
+            let (Some(sw), Some(tw)) = (self.s.world(src.as_str()), d.world(t.as_str())) else {
+                continue;
+            };
+            let order: Vec<Slug> = sw
+                .levels
+                .iter()
+                .filter(|l| tw.level(l.slug.as_str()).is_some())
+                .map(|l| l.slug.clone())
+                .collect();
+            if order != tw.level_order {
+                let cmd = Command::ReorderLevels {
+                    world: t.clone(),
+                    order,
+                    restore: false,
+                };
+                if let Err(e) = try_apply(&mut d, &mut out, vec![cmd]) {
+                    self.problems
+                        .push(format!("world {t}: level order not carried over: {e}"));
+                }
             }
         }
 
@@ -2233,6 +2304,50 @@ fn remap_fields(
             _ => {}
         }
     }
+}
+
+/// Point a level's object groups at the remapped ids of their members
+/// (`old_entities`: the source ids of the level's entities; every other
+/// member is an annotation). A member left out of the import (a dropped
+/// connector) leaves its group, and a group left empty goes (reported).
+fn remap_groups(
+    meta: &mut Level,
+    content: &LevelContent,
+    old_entities: &BTreeSet<Id>,
+    refs: &Refs<'_>,
+    who: &str,
+    dropped: &mut Vec<String>,
+) {
+    if meta.groups.is_empty() {
+        return;
+    }
+    let here: BTreeSet<&Id> = content
+        .entities
+        .iter()
+        .flat_map(|el| el.entities.iter().map(|e| &e.id))
+        .chain(content.notes.iter().map(|n| &n.id))
+        .collect();
+    for g in &mut meta.groups {
+        g.members = std::mem::take(&mut g.members)
+            .into_iter()
+            .filter_map(|m| {
+                let map = if old_entities.contains(&m) {
+                    refs.emap
+                } else {
+                    refs.nmap
+                };
+                let to = map.get(&m).cloned().unwrap_or(m);
+                here.contains(&to).then_some(to)
+            })
+            .collect();
+    }
+    meta.groups.retain(|g| {
+        let keep = !g.members.is_empty();
+        if !keep {
+            dropped.push(format!("{who}: group {} has no member left; dropped", g.id));
+        }
+        keep
+    });
 }
 
 /// Rewrite an annotation's links and connector ends. False: a connector

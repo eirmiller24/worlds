@@ -530,3 +530,230 @@ fn layer_folders_round_trip_and_are_checked() {
     .unwrap();
     assert!(validate(&p).iter().any(|x| x.path.ends_with(".folder")));
 }
+
+fn rects(r: &[[u32; 4]]) -> Vec<command::Rect> {
+    r.iter().map(|&r| command::Rect::from(r)).collect()
+}
+
+fn void(level: &str, r: &[[u32; 4]]) -> Command {
+    Command::SetLevelVoid {
+        level: s(level),
+        void: rects(r),
+        restore: true,
+    }
+}
+
+fn gap_group() -> Command {
+    Command::SetGroup {
+        level: s("crevasse"),
+        group: ObjectGroup::new(
+            id("gapgroup22"),
+            "Gap",
+            vec![id("btncrev222"), id("notecrev22")],
+        ),
+        index: None,
+    }
+}
+
+#[test]
+fn arranging_is_refused_in_strips_and_snaps_in_grid_vania() {
+    use worlds_core::transform::{ArrangeOp, arrange_levels};
+    let mut p = common::fixture();
+    let both = [s("crevasse"), s("shaft")];
+    p.apply(layout(LayoutMode::Horizontal, None, None)).unwrap();
+    let e = arrange_levels(&p, &both, ArrangeOp::AlignTop).unwrap_err();
+    assert!(e.to_string().contains("horizontal layout"), "{e}");
+    // Grid vania: align top puts shaft at y 0, and x 330 snaps to 320.
+    p.apply(layout(LayoutMode::Free, None, None)).unwrap();
+    p.apply(Command::MoveLevel {
+        world: s("main"),
+        level: s("shaft"),
+        world_px: [330, 80],
+    })
+    .unwrap();
+    p.apply(layout(LayoutMode::GridVania, None, Some([64, 64])))
+        .unwrap();
+    let cmd = arrange_levels(&p, &both, ArrangeOp::AlignTop).unwrap();
+    check(&mut p, cmd);
+    assert_eq!(px(&p, "shaft"), [320, 0]);
+    assert_eq!(px(&p, "crevasse"), [0, 0]);
+}
+
+#[test]
+fn void_rects_are_held_to_the_lattice_and_strips_use_the_box() {
+    let mut p = common::fixture();
+    // crevasse 320x80 px: whole 64x16 cells. Void [16, 0, 4, 2] is
+    // 256,0 64x32: whole cells; [15, 0, 4, 2] starts at 240: not.
+    p.apply(layout(LayoutMode::GridVania, None, Some([64, 16])))
+        .unwrap();
+    p.apply(void("crevasse", &[[16, 0, 4, 2]])).unwrap();
+    let on_void = |p: &Project| {
+        validate(p)
+            .into_iter()
+            .filter(|x| x.path.starts_with("void[") && x.message.contains("grid vania"))
+            .map(|x| x.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(on_void(&p).is_empty(), "{:?}", on_void(&p));
+    p.apply(void("crevasse", &[[15, 0, 4, 2]])).unwrap();
+    assert_eq!(
+        on_void(&p),
+        [
+            "worlds/main/levels/crevasse/level.json: void[0]: grid vania, void rect in pixels from \
+          the level's corner: [240, 0] is not on the 64x16 px lattice (nearest point [256, 0])"
+        ]
+    );
+    // A strip places by the bounding box: the void changes nothing.
+    check(&mut p, layout(LayoutMode::Horizontal, Some(8), None));
+    assert_eq!(px(&p, "shaft"), [320 + 8, 0]);
+    assert!(on_void(&p).is_empty());
+}
+
+#[test]
+fn the_void_leaves_groups_alone_and_deleting_in_a_strip_undoes_exactly() {
+    let mut p = common::fixture();
+    p.apply(gap_group()).unwrap();
+    let groups = p.level("crevasse").unwrap().groups.clone();
+    check(
+        &mut p,
+        Command::SetLevelVoid {
+            level: s("crevasse"),
+            void: rects(&[[16, 0, 4, 2]]),
+            restore: false,
+        },
+    );
+    assert_eq!(p.level("crevasse").unwrap().groups, groups);
+    // A duplicate of a shaped, grouped level: groups on the copy's ids.
+    check(
+        &mut p,
+        Command::DuplicateLevel {
+            level: s("crevasse"),
+            slug: s("crevasse_b"),
+            name: None,
+            world: None,
+            world_px: None,
+        },
+    );
+    let copy = p.level("crevasse_b").unwrap();
+    assert_eq!(copy.void, rects(&[[16, 0, 4, 2]]));
+    let own: Vec<&Id> = copy
+        .all_entities()
+        .map(|e| &e.id)
+        .chain(copy.notes.iter().map(|n| &n.id))
+        .collect();
+    assert_eq!(copy.groups[0].members.len(), 2);
+    assert!(copy.groups[0].members.iter().all(|m| own.contains(&m)));
+    assert!(validate(&p).is_empty(), "{:?}", validate(&p));
+    // Delete the shaped level in a strip: the rest close up, undo puts
+    // everything back where it was (`keep_layout` on the inverse).
+    check(&mut p, layout(LayoutMode::Horizontal, None, None));
+    check(
+        &mut p,
+        Command::DeleteLevel {
+            world: s("main"),
+            level: s("crevasse"),
+            keep_layout: false,
+        },
+    );
+    assert_eq!(px(&p, "crevasse_b"), [0, 0]);
+    assert_eq!(px(&p, "shaft"), [320, 0]);
+}
+
+/// An empty project saved in `dir`.
+fn empty_project(dir: &std::path::Path) -> Project {
+    let mut p = Project::new("Sequel");
+    p.grid_size = 16;
+    p.seed = 1;
+    save(&mut p, dir).unwrap();
+    load(dir).unwrap()
+}
+
+fn apply_exact(dst: &mut Project, cmd: Command) {
+    let before = dst.clone();
+    let a = dst.apply(cmd).unwrap();
+    let mut undone = dst.clone();
+    undone.apply(a.inverse).unwrap();
+    assert!(undone == before, "undo of the import isn't exact");
+}
+
+#[test]
+fn an_imported_world_keeps_its_layout_and_level_order() {
+    use worlds_core::merge::{self, Policy, Preset, Selection};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut src = common::fixture();
+    src.apply(layout(LayoutMode::Horizontal, Some(8), None))
+        .unwrap();
+    src.apply(reorder(&["shaft", "crevasse"])).unwrap();
+    let mut dst = empty_project(&tmp.path().join("a.worlds"));
+    let plan = merge::plan(
+        &src,
+        &dst,
+        &Selection::preset(Preset::Everything),
+        &Policy::default(),
+    )
+    .unwrap();
+    apply_exact(&mut dst, plan.command());
+    let w = dst.world_of_level("shaft").unwrap();
+    assert_eq!(w.layout, src.worlds[0].layout);
+    assert_eq!(w.level_order, [s("shaft"), s("crevasse")]);
+    assert_eq!(px(&dst, "shaft"), [0, 0]);
+    assert_eq!(px(&dst, "crevasse"), [96 + 8, 0]);
+    assert!(validate(&dst).is_empty(), "{:?}", validate(&dst));
+}
+
+#[test]
+fn imported_levels_join_the_order_strip_and_lattice_with_their_groups() {
+    use worlds_core::merge::{self, Conflict, Placement, PlacementMode, Policy, Selection};
+    let mut src = common::fixture();
+    src.apply(gap_group()).unwrap();
+    let sel = Selection {
+        levels: vec![s("crevasse")],
+        ..Selection::default()
+    };
+    let into_main = |offset| Policy {
+        on_conflict: Conflict::Rename,
+        placement: Placement {
+            mode: PlacementMode::World,
+            world: Some(s("main")),
+            offset,
+        },
+        ..Policy::default()
+    };
+    // A vertical strip: crevasse_2 goes last in the order and the strip.
+    let mut dst = common::fixture();
+    dst.apply(layout(LayoutMode::Vertical, None, None)).unwrap();
+    let plan = merge::plan(&src, &dst, &sel, &into_main([0, 0])).unwrap();
+    apply_exact(&mut dst, plan.command());
+    assert_eq!(
+        dst.worlds[0].level_order,
+        [s("crevasse"), s("shaft"), s("crevasse_2")]
+    );
+    assert_eq!(px(&dst, "crevasse_2"), [0, 80 + 128]);
+    // Every id collided: the group follows the re-rolled ones.
+    let new_id = |old: &str| {
+        plan.ids
+            .iter()
+            .find(|c| c.from.as_str() == old)
+            .map(|c| c.to.clone())
+            .unwrap()
+    };
+    let l = dst.level("crevasse_2").unwrap();
+    assert_eq!(
+        l.groups[0].members,
+        [new_id("btncrev222"), new_id("notecrev22")]
+    );
+    assert!(
+        validate(&dst).iter().all(|x| !x.path.starts_with("groups")
+            && x.path != "world_px"
+            && !x.file.ends_with("world.json")),
+        "{:?}",
+        validate(&dst)
+    );
+    // Grid vania: the offset position snaps to the lattice.
+    let mut dst = common::fixture();
+    dst.apply(layout(LayoutMode::GridVania, None, Some([32, 32])))
+        .unwrap();
+    let plan = merge::plan(&src, &dst, &sel, &into_main([20, 3])).unwrap();
+    apply_exact(&mut dst, plan.command());
+    assert_eq!(px(&dst, "crevasse_2"), [32, 0]);
+}
