@@ -87,9 +87,30 @@ pub(crate) fn find(project: &Project, method: &str, p: Value) -> Result<Value, R
     Ok(json!({ "tiles": tiles, "total": total }))
 }
 
-/// `tiles.set` → `set_tiles`.
-pub(crate) fn set(_: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
-    Ok(Write::one(params::command(method, "set_tiles", p)?))
+/// `tiles.set` → `set_tiles`, without placements in the level's void.
+pub(crate) fn set(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
+    let mut cmd = params::command(method, "set_tiles", p)?;
+    if let Command::SetTiles {
+        level,
+        layer,
+        tiles,
+        ..
+    } = &mut cmd
+    {
+        clip_void(project, level, layer, tiles);
+    }
+    Ok(Write::one(cmd))
+}
+
+/// Drop placements whose cell is in the level's void (a non-rectangular
+/// level's cut-out cells), as the editor's tools clip there. Unknown levels
+/// and layers are left for the command to refuse.
+fn clip_void(project: &Project, level: &Slug, layer: &Slug, tiles: &mut Vec<TilePlacement>) {
+    if let (Some(l), Some(def)) = (project.level(level.as_str()), project.layer(layer.as_str()))
+        && l.has_void()
+    {
+        tiles.retain(|t| !project.layer_cell_void(def, l, t.cell[0] as i64, t.cell[1] as i64));
+    }
 }
 
 /// `tiles.clear_rect` → `clear_tiles`.
@@ -138,6 +159,7 @@ pub(crate) fn stamp(project: &Project, method: &str, p: Value) -> Result<Write, 
             });
         }
     }
+    clip_void(project, &p.level, &p.layer, &mut tiles);
     Ok(Write::one(Command::SetTiles {
         level: p.level,
         layer: p.layer,

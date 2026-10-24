@@ -91,6 +91,13 @@ struct LevelFile<'a> {
     /// The level's tags; left out when there are none.
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     tags: &'a [String],
+    /// A non-rectangular level's void rects (project cells); left out, with
+    /// `outline`, for a rectangular level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    void: Option<Vec<[u32; 4]>>,
+    /// A non-rectangular level's outline in world pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outline: Option<Vec<[i64; 2]>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bg_color: Option<&'a str>,
     /// Every level field, defaults filled in.
@@ -241,6 +248,11 @@ struct LevelIndex<'a> {
     /// The level's tags; left out when there are none.
     #[serde(skip_serializing_if = "<[String]>::is_empty")]
     tags: &'a [String],
+    /// As in the level file: left out for a rectangular level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    void: Option<Vec<[u32; 4]>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outline: Option<Vec<[i64; 2]>>,
     /// Levels of the same world sharing a stretch of this level's border.
     touching: Vec<Touch<'a>>,
     /// Per edge, runs of border cells that aren't blocking in the collision grid,
@@ -258,14 +270,22 @@ struct Touch<'a> {
     edge: &'static str,
     /// The shared stretch along that edge, `[start, end)` in world pixels.
     span: [i64; 2],
+    /// The coordinate of the edge line in world pixels (x for `left` and
+    /// `right`, y for `top` and `bottom`). Only when one of the two levels
+    /// is non-rectangular: a rectangle's edge line follows from its `rect`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    at: Option<i64>,
 }
 
+/// Runs of open border cells per edge direction: `[first, end)` along the
+/// edge, plus, on a non-rectangular level, the edge line `at` (in cells of
+/// the collision layer from the level's top-left: `[first, end, at]`).
 #[derive(Serialize)]
 struct Edges {
-    left: Vec<[u32; 2]>,
-    right: Vec<[u32; 2]>,
-    top: Vec<[u32; 2]>,
-    bottom: Vec<[u32; 2]>,
+    left: Vec<Vec<u32>>,
+    right: Vec<Vec<u32>>,
+    top: Vec<Vec<u32>>,
+    bottom: Vec<Vec<u32>>,
 }
 
 fn is_one(x: &f64) -> bool {
@@ -432,6 +452,8 @@ fn level_json_with(
         grid_size: g,
         depth: level.depth,
         tags: &level.tags,
+        void: shape_void(level),
+        outline: shape_outline(level, g),
         bg_color: level
             .bg_color
             .as_ref()
@@ -721,16 +743,35 @@ pub fn world_json(project: &Project) -> String {
                     rect: rect(l),
                     depth: l.depth,
                     tags: &l.tags,
+                    void: shape_void(l),
+                    outline: shape_outline(l, project.grid_size),
                     touching: w
                         .levels
                         .iter()
                         .filter(|o| o.slug != l.slug)
-                        .filter_map(|o| {
-                            touch(rect(l), rect(o)).map(|(edge, span)| Touch {
-                                level: &o.slug,
-                                edge,
-                                span,
-                            })
+                        .flat_map(|o| {
+                            if l.has_void() || o.has_void() {
+                                // Non-rectangular: along the outlines.
+                                shaped_touch(l, o, project.grid_size)
+                                    .into_iter()
+                                    .map(|(edge, span, at)| Touch {
+                                        level: &o.slug,
+                                        edge,
+                                        span,
+                                        at: Some(at),
+                                    })
+                                    .collect::<Vec<_>>()
+                            } else {
+                                touch(rect(l), rect(o))
+                                    .map(|(edge, span)| Touch {
+                                        level: &o.slug,
+                                        edge,
+                                        span,
+                                        at: None,
+                                    })
+                                    .into_iter()
+                                    .collect()
+                            }
                         })
                         .collect(),
                     open_edges: collision.map(|c| open_edges(project, l, c, &blocking)),
@@ -811,6 +852,83 @@ fn touch(a: [i64; 4], b: [i64; 4]) -> Option<(&'static str, [i64; 2])> {
     }
 }
 
+/// `level.void` for the export: `None` for a rectangular level.
+fn shape_void(level: &Level) -> Option<Vec<[u32; 4]>> {
+    level
+        .has_void()
+        .then(|| level.void.iter().map(|&r| r.into()).collect())
+}
+
+/// `level.outline` for the export: `None` for a rectangular level.
+fn shape_outline(level: &Level, grid: u32) -> Option<Vec<[i64; 2]>> {
+    level.has_void().then(|| level.outline(grid))
+}
+
+/// The boundary of a level's cells as maximal straight runs, per edge
+/// direction (`left`, `right`, `top`, `bottom`: the side of the level's
+/// cells the run lies on): `(line, start, end)` in world pixels, the line
+/// being x for `left`/`right` and y for `top`/`bottom`, `[start, end)`
+/// along it. Sorted by line, then start.
+fn boundary(level: &Level, grid: u32) -> [Vec<(i64, i64, i64)>; 4] {
+    let g = grid as i64;
+    let [ox, oy] = level.world_px;
+    let [w, h] = [level.size[0] as i64, level.size[1] as i64];
+    let mask = level.cell_mask();
+    let inside = |x: i64, y: i64| x >= 0 && y >= 0 && x < w && y < h && mask[(y * w + x) as usize];
+    let mut out: [Vec<(i64, i64, i64)>; 4] = Default::default();
+    // (direction index, neighbour offset, whether runs go along x).
+    for (d, (dx, dy)) in [(-1, 0), (1, 0), (0, -1), (0, 1)].into_iter().enumerate() {
+        let horizontal = dy != 0;
+        let (outer, inner) = if horizontal { (h, w) } else { (w, h) };
+        for a in 0..outer {
+            let mut b = 0;
+            while b < inner {
+                let (x, y) = if horizontal { (b, a) } else { (a, b) };
+                if !inside(x, y) || inside(x + dx, y + dy) {
+                    b += 1;
+                    continue;
+                }
+                let start = b;
+                while b < inner && {
+                    let (x, y) = if horizontal { (b, a) } else { (a, b) };
+                    inside(x, y) && !inside(x + dx, y + dy)
+                } {
+                    b += 1;
+                }
+                let line = a + i64::from(dx > 0 || dy > 0);
+                out[d].push(if horizontal {
+                    (oy + line * g, ox + start * g, ox + b * g)
+                } else {
+                    (ox + line * g, oy + start * g, oy + b * g)
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Where non-rectangular `a` touches `b` (either may be a rectangle): for
+/// each of `a`'s boundary runs lying on one of `b`'s facing the other way,
+/// the shared stretch, as `(a's edge, [start, end), line)` in world pixels,
+/// in edge order (left, right, top, bottom), then by line and start.
+fn shaped_touch(a: &Level, b: &Level, grid: u32) -> Vec<(&'static str, [i64; 2], i64)> {
+    const NAMES: [&str; 4] = ["left", "right", "top", "bottom"];
+    let (ea, eb) = (boundary(a, grid), boundary(b, grid));
+    let mut out = Vec::new();
+    for d in 0..4 {
+        let facing = d ^ 1;
+        for &(line, s0, e0) in &ea[d] {
+            for &(line_b, s1, e1) in &eb[facing] {
+                let (s, e) = (s0.max(s1), e0.min(e1));
+                if line == line_b && s < e {
+                    out.push((NAMES[d], [s, e], line));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Runs of border cells whose value isn't blocking (empty included), in
 /// cells of `layer`'s grid. `blocking` holds value indices. `None` when the
 /// level has no collision content at all: an unpainted level says nothing
@@ -826,6 +944,9 @@ fn open_edges(
         .int_grid(layer.slug.as_str())
         .filter(|g| !g.is_empty())?;
     let empty = |x: u32, y: u32| !blocking.contains(&grid.index_at(x, y).unwrap_or(0));
+    if let Some(void) = project.layer_void(layer, level) {
+        return Some(shaped_open_edges(&void, [w, h], &empty));
+    }
     let runs = |n: u32, at: &dyn Fn(u32) -> bool| {
         let mut out = Vec::new();
         let mut start = None;
@@ -841,12 +962,57 @@ fn open_edges(
         }
         out
     };
+    let v = |r: Vec<[u32; 2]>| r.into_iter().map(|r| r.to_vec()).collect();
     Some(Edges {
-        left: runs(h, &|y| empty(0, y)),
-        right: runs(h, &|y| empty(w.saturating_sub(1), y)),
-        top: runs(w, &|x| empty(x, 0)),
-        bottom: runs(w, &|x| empty(x, h.saturating_sub(1))),
+        left: v(runs(h, &|y| empty(0, y))),
+        right: v(runs(h, &|y| empty(w.saturating_sub(1), y))),
+        top: v(runs(w, &|x| empty(x, 0))),
+        bottom: v(runs(w, &|x| empty(x, h.saturating_sub(1)))),
     })
+}
+
+/// [`open_edges`] of a non-rectangular level, `void` being its void in
+/// cells of the collision layer (`[w, h]` of them). A border cell is a
+/// level cell whose neighbour on that side is void or past the box; each
+/// run is `[first, end, at]`: `[first, end)` along the edge (x for `top`
+/// and `bottom`, y for `left` and `right`) and `at` the edge line (the cell
+/// boundary: `y` for a top edge of row `y`, `y + 1` for a bottom edge,
+/// likewise in x), all in cells from the level's top-left. Runs are sorted
+/// by `at`, then `first`.
+fn shaped_open_edges(void: &[bool], [w, h]: [u32; 2], empty: &dyn Fn(u32, u32) -> bool) -> Edges {
+    let (w, h) = (w as i64, h as i64);
+    let inside = |x: i64, y: i64| x >= 0 && y >= 0 && x < w && y < h && !void[(y * w + x) as usize];
+    let side = |dx: i64, dy: i64| -> Vec<Vec<u32>> {
+        let horizontal = dy != 0;
+        let (outer, inner) = if horizontal { (h, w) } else { (w, h) };
+        let mut out = Vec::new();
+        for a in 0..outer {
+            let at = a + i64::from(dx > 0 || dy > 0);
+            let open = |b: i64| {
+                let (x, y) = if horizontal { (b, a) } else { (a, b) };
+                inside(x, y) && !inside(x + dx, y + dy) && empty(x as u32, y as u32)
+            };
+            let mut b = 0;
+            while b < inner {
+                if !open(b) {
+                    b += 1;
+                    continue;
+                }
+                let start = b;
+                while b < inner && open(b) {
+                    b += 1;
+                }
+                out.push(vec![start as u32, b as u32, at as u32]);
+            }
+        }
+        out
+    };
+    Edges {
+        left: side(-1, 0),
+        right: side(1, 0),
+        top: side(0, -1),
+        bottom: side(0, 1),
+    }
 }
 
 // ---- writing ----

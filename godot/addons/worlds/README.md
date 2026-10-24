@@ -39,7 +39,8 @@ Settings to see them):
 
 ```
 crevasse (Node2D at the level's top-left, in world pixels)
-├── Background      ColorRect in the level's color, when it has one
+├── Background      ColorRect in the level's color, when it has one (a
+│                   Polygon2D of its outline for a non-rectangular level)
 ├── Tiles
 │   ├── DecorBack   one Node2D per tile layer, bottom first, named after it
 │   │   └── tiles#0 TileMapLayer(s)
@@ -66,8 +67,16 @@ crevasse (Node2D at the level's top-left, in world pixels)
   is a `@tool` script.
 - **Metadata**: levels carry `worlds_slug`, `worlds_id`, `worlds_name`,
   `worlds_fields`, `worlds_fields_set`, `worlds_tags`, `worlds_size_px`,
-  `worlds_touching`, `worlds_open_edges`, `worlds_int_grids` and
-  `worlds_notes`. Entities carry `worlds_id`, `worlds_type`,
+  `worlds_touching`, `worlds_open_edges`, `worlds_int_grids`,
+  `worlds_notes`, `worlds_outline` and `worlds_void`. `worlds_outline` is the
+  room's shape as a `PackedVector2Array` in the level's own pixels (from its
+  top-left, clockwise): the export's `outline` for a non-rectangular level
+  (one with `void`), the box's four corners otherwise, so a game can set
+  camera limits or room bounds from it either way; `worlds_void` is the
+  export's `void` (rects of project cells, `[]` for a rectangle). On a shaped
+  level, `worlds_touching` entries and `worlds_open_edges` runs carry the
+  edge line `at` ([format.md](../../../docs/format.md#non-rectangular-levels-in-the-export)).
+  Collision is built from the cells, so the void needs nothing more. Entities carry `worlds_id`, `worlds_type`,
   `worlds_fields`, `worlds_fields_set` and `worlds_size`. Each world scene
   has its world notes in `worlds_notes`. Fields and notes are as in the
   export (`docs/format.md`); notes are in world pixels.

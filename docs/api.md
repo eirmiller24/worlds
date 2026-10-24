@@ -2350,6 +2350,57 @@ A plan made before the project changed is refused; plan again:
   "data": { "expected": 67, "current": 68 } } }
 ```
 
+### non-rectangular levels
+
+A level can be any shape built from its box: `level.json` `void` lists rects `[x, y, width, height]` of project-grid cells cut out of it ([format.md](format.md#non-rectangular-levels-void)). `project.describe`, `level.list`, `level.find` and `level.get` report `void` when a level has one (`level.get`'s `level` is `level.json`, so `void` is there; the text view adds `, void [...]` to the size line and draws void cells as `*`, listed last in each legend as `* void`).
+
+| Write | Params | Command |
+| --- | --- | --- |
+| `level.set_void` | `{ level, void }`; `void` replaces the level's rects, `[]` makes it a rectangle | `set_level_void`: clears the grid cells, overrides and tiles that fall in the new void; refused (`command_error` `invalid`) while an entity sits there, for a rect that is empty or reaches outside the box, and when no cell would be left. Reports `level_meta` part `void`, then a `grid` or `tiles` per layer it cleared |
+
+The void reads as outside the level for every write: `grid.set_cells` and `grid.line` drop their non-empty cells there (clearing a void cell is allowed, to clean up a file), as do `tiles.set` and `tiles.stamp` with their placements; `grid.fill_rect` fills only the level's cells of its rect, `grid.flood_fill` doesn't cross the void and `grid.replace_value` leaves it alone; `entity.add` and `entity.move` refuse a void cell (`invalid`); `level.resize` and `level.crop` move and clip the rects with the content (a crop that would leave only void is refused); `level.duplicate` and `level.move_to_world` keep them; `edit.paste` leaves out grid cells and tiles that land in the void (one problem counts them) and refuses entities there, as outside the level; `level.create` and `level.replace` take `void` in `level` (as in `level.json`), checked like `level.set_void`'s, with grid cells and tiles in it dropped and entities there refused. `rules.regions` treats the void as the level's border.
+
+Cutting the top-right corner out of `crevasse`, which clears the walls there:
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "method": "level.set_void", "params": { "level": "crevasse", "void": [[16, 0, 4, 2]] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 153, "result": { "rev": 75, "status": "applied", "label": "claude-code: Shape level crevasse",
+  "changes": [
+    { "change": "level_meta", "world": "main", "level": "crevasse", "part": "void" },
+    { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [16, 0, 4, 2] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "method": "level.get", "params": { "level": "crevasse", "layers": ["collision"], "format": "text", "notes": "none" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 154, "result": { "rev": 75, "text": "level crevasse \"Crevasse\" world main id crevasse22 tags [\"forest\"]\nsize 20x5 cells of 16 px, world_px [0, 0], depth 0, bg #202020, void [[16, 0, 4, 2]]\nfields: biome = [\"flooded\"]\nrule state main_tiling: seed 9 optional_groups [flooded_decor, pillars]\n\nint_grid collision (20x5 cells of 16 px)\nlegend: . empty, # solid, f fortified, o oneway, ~ water, L ramp_l, * void\n  0         1\n  01234567890123456789\n0 ################****\n1 #..#ooo#.....~~~****\n2 #.~~~.#..###.#.#...#\n3 #L..~~##......######\n4 ####################\n\nentities: 3\n  doorcrev22 locked_door in objects at [18, 3] size [1, 2] fields {\"exit_to\": \"doorshaft2\", \"facing\": \"east\", \"key_item\": \"brass_key\", \"script\": \"scripts/door.gd\", \"speed\": 2, \"sprite\": {\"tile\": [4, 4], \"tileset\": \"castle_main\"}, \"tint\": \"#ff8080\", \"waypoints\": [[1, 1], [2, 1]]}\n  75rk7gzrhn floor_button in objects at [2, 1] fields {\"target\": \"5w6isso7ut\"}\n  5w6isso7ut locked_door in objects at [8, 1] fields {\"exit_to\": \"doorshaft2\"}\n" } }
+```
+
+A fill across the corner fills only the level's cells, and an entity can't go there:
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "method": "grid.fill_rect", "params": { "level": "crevasse", "layer": "collision", "rect": [12, 1, 8, 1], "value": "solid" } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 155, "result": { "rev": 76, "status": "applied", "label": "claude-code: Fill rectangle on collision",
+  "changes": [ { "change": "grid", "world": "main", "level": "crevasse", "layer": "collision", "rect": [12, 1, 4, 1] } ] } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "method": "entity.add", "params": { "level": "crevasse", "entity": { "type": "floor_button", "cell": [18, 0] } } }
+```
+
+```json
+{ "jsonrpc": "2.0", "id": 156, "error": { "code": -32004, "message": "cell [18, 0] of layer objects is in the void of level crevasse (cut out of its shape); pick a cell of the level",
+  "data": { "kind": "invalid", "message": "cell [18, 0] of layer objects is in the void of level crevasse (cut out of its shape); pick a cell of the level" } } }
+```
+
 ### assemblies and transforms
 
 An **assembly** is a named, reusable fragment kept in the project (`assemblies/<slug>.json`, [format.md](format.md#assembliesslugjson)); it is read and edited like any definition with [`defs.*`](#defs) kind `assembly`. `edit.save_assembly` makes one out of a selection, `edit.place_assembly` pastes one. `edit.transform` mirrors or rotates a selection in place and `level.arrange` aligns levels; both are worked out by `worlds_core::transform` ([commands.md](commands.md#transforms)) as one batch of existing commands, one undo entry.
@@ -2364,23 +2415,23 @@ An **assembly** is a named, reusable fragment kept in the project (`assemblies/<
 Save the button and door pasted above as an assembly:
 
 ```json
-{ "jsonrpc": "2.0", "id": 153, "method": "edit.save_assembly", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] },
+{ "jsonrpc": "2.0", "id": 157, "method": "edit.save_assembly", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] },
   "slug": "doorway", "name": "Doorway", "category": "Puzzle/Doors", "tags": ["door"] } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 153, "result": { "rev": 75, "status": "applied", "label": "claude-code: Set assembly doorway", "items": 2, "size": [7, 1],
+{ "jsonrpc": "2.0", "id": 157, "result": { "rev": 77, "status": "applied", "label": "claude-code: Set assembly doorway", "items": 2, "size": [7, 1],
   "changes": [ { "change": "def", "kind": "assembly", "slug": "doorway" } ] } }
 ```
 
 Place it mirrored, so the door is on the left:
 
 ```json
-{ "jsonrpc": "2.0", "id": 154, "method": "edit.place_assembly", "params": { "level": "crevasse", "slug": "doorway", "origin": [2, 2], "flip": "x" } }
+{ "jsonrpc": "2.0", "id": 158, "method": "edit.place_assembly", "params": { "level": "crevasse", "slug": "doorway", "origin": [2, 2], "flip": "x" } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 154, "result": { "rev": 76, "status": "applied", "label": "claude-code: Place assembly doorway",
+{ "jsonrpc": "2.0", "id": 158, "result": { "rev": 78, "status": "applied", "label": "claude-code: Place assembly doorway",
   "items": 2, "ids": { "5w6isso7ut": "ijajfkenuk", "75rk7gzrhn": "h7wkgcgyut" }, "entities": ["h7wkgcgyut", "ijajfkenuk"], "notes": [], "problems": [],
   "changes": [
     { "change": "entity", "world": "main", "level": "crevasse", "id": "h7wkgcgyut" },
@@ -2390,11 +2441,11 @@ Place it mirrored, so the door is on the left:
 Mirror the pasted pair in place:
 
 ```json
-{ "jsonrpc": "2.0", "id": 155, "method": "edit.transform", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] }, "op": "mirror_x" } }
+{ "jsonrpc": "2.0", "id": 159, "method": "edit.transform", "params": { "selection": { "entities": ["75rk7gzrhn", "5w6isso7ut"] }, "op": "mirror_x" } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 155, "result": { "rev": 77, "status": "applied", "label": "claude-code: Mirror 2 items left-right",
+{ "jsonrpc": "2.0", "id": 159, "result": { "rev": 79, "status": "applied", "label": "claude-code: Mirror 2 items left-right",
   "notes": ["Fields aren't changed by a transform: check locked_door.facing (looks like a direction)"], "rect": [2, -1, 7, 3],
   "changes": [
     { "change": "entity", "world": "main", "level": "crevasse", "id": "75rk7gzrhn" },
@@ -2404,11 +2455,11 @@ Mirror the pasted pair in place:
 Line the shaft up with the top of `crevasse`:
 
 ```json
-{ "jsonrpc": "2.0", "id": 156, "method": "level.arrange", "params": { "levels": ["crevasse", "shaft"], "op": "align_top" } }
+{ "jsonrpc": "2.0", "id": 160, "method": "level.arrange", "params": { "levels": ["crevasse", "shaft"], "op": "align_top" } }
 ```
 
 ```json
-{ "jsonrpc": "2.0", "id": 156, "result": { "rev": 78, "status": "applied", "label": "claude-code: Align 2 levels top",
+{ "jsonrpc": "2.0", "id": 160, "result": { "rev": 80, "status": "applied", "label": "claude-code: Align 2 levels top",
   "changes": [ { "change": "level_meta", "world": "main", "level": "shaft", "part": "position" } ] } }
 ```
 

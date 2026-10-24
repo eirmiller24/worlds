@@ -151,6 +151,17 @@ impl Project {
                 "level {level} has no content to crop to"
             )));
         };
+        // Non-rectangular levels: the resizes move the void rects with the
+        // content and clip them; refused here when only void would be left
+        // (content a file put in the void).
+        if l.has_void() {
+            let void = super::shift_void(&l.void, [-(x as i64), -(y as i64)], [w, h]);
+            if !crate::model::cell_mask_of([w, h], &void).contains(&true) {
+                return Err(CommandError::Invalid(format!(
+                    "cropping level {level} to its content leaves only void"
+                )));
+            }
+        }
         let mut commands = Vec::new();
         let mut size = l.size;
         if x > 0 || y > 0 {

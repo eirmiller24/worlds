@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 
+use egui::Color32;
 use worlds_core::command::{Command, GridValue, Rect};
 use worlds_core::fragment::{self, CopySelection, Fragment, PasteOptions, PastePlan};
 use worlds_core::{Flip, Id, Project, Slug};
@@ -194,9 +195,43 @@ impl PasteGhost {
                 g
             }
         };
+        g.fills.extend(
+            void_under(doc, &frag, at.0, at.1)
+                .into_iter()
+                .map(|r| (r, VOID_TINT)),
+        );
         g.outlines.push(fragment_rect(doc, &frag, at.0, at.1));
         self.ghost = Some((at, g));
     }
+}
+
+/// Fill of the paste ghost's cells that can't land: the level's void.
+pub const VOID_TINT: Color32 = Color32::from_rgb(230, 80, 80);
+
+/// The world rects of a non-rectangular level's void under a fragment with
+/// its origin at `origin` in `ix` (nothing lands there: the paste drops
+/// those cells, tiles and entities).
+pub fn void_under(doc: &Document, frag: &Fragment, ix: LevelIx, origin: [i64; 2]) -> Vec<WRect> {
+    let l = doc.level(ix);
+    let g = doc.project.grid_size as f64;
+    let (fx0, fy0) = (origin[0], origin[1]);
+    let (fx1, fy1) = (fx0 + frag.size[0] as i64, fy0 + frag.size[1] as i64);
+    l.void
+        .iter()
+        .filter_map(|r| {
+            let x0 = (r.x as i64).max(fx0);
+            let y0 = (r.y as i64).max(fy0);
+            let x1 = ((r.x + r.w).min(l.size[0]) as i64).min(fx1);
+            let y1 = ((r.y + r.h).min(l.size[1]) as i64).min(fy1);
+            (x0 < x1 && y0 < y1).then(|| {
+                let o = [l.world_px[0] as f64, l.world_px[1] as f64];
+                WRect::new(
+                    [o[0] + x0 as f64 * g, o[1] + y0 as f64 * g],
+                    [o[0] + x1 as f64 * g, o[1] + y1 as f64 * g],
+                )
+            })
+        })
+        .collect()
 }
 
 /// The world rect a fragment covers with its origin at `origin` in `ix`.

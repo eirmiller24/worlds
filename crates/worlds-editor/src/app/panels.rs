@@ -993,6 +993,7 @@ pub fn level_inspector(ui: &mut egui::Ui, st: &mut EditorState) {
         }
     });
     level_resize(ui, doc, view, pending, bufs, ix);
+    super::shape_inspector::shape_section(ui, doc, view, pending, bufs, actions, ix);
 
     if !doc.project.level_fields.is_empty() {
         ui.add_space(8.0);

@@ -336,6 +336,7 @@ impl Engine {
             "save_assembly" => self.save_assembly(a),
             "place_assembly" => self.place_assembly(a),
             "arrange_levels" => self.arrange_levels(a),
+            "shape_level" => self.shape_level(a),
             other => Err(format!(
                 "there is no tool {other:?}; the tools are {}",
                 crate::catalog::TOOLS

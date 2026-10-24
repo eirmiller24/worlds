@@ -676,6 +676,21 @@ pub enum Command {
         slug: Slug,
         new_slug: Slug,
     },
+    // ---- level shape ----
+    /// Replace a level's `void` (rects of project-grid cells cut out of its
+    /// box; `[]` makes it rectangular again). Grid cells, derived overrides
+    /// and tiles that fall in the new void are cleared; the inverse puts the
+    /// old void and that content back. Refused when an entity's cell would
+    /// be void, a rect is empty or reaches outside the box, or no cell would
+    /// be left (unless `restore`).
+    SetLevelVoid {
+        level: Slug,
+        void: Vec<Rect>,
+        /// Accept the rects as given (what the project held before;
+        /// `validate` reports them). Inverses set it; edits leave it off.
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -792,6 +807,10 @@ impl Command {
             RenameMacro { kind, from, to } => format!("Rename {kind} {from} to {to}"),
             SetStamp { layer, stamp, .. } => format!("Set stamp {stamp} on {layer}"),
             RemoveStamp { layer, stamp, .. } => format!("Remove stamp {stamp} from {layer}"),
+            SetLevelVoid { level, void, .. } if void.is_empty() => {
+                format!("Clear the void of level {level}")
+            }
+            SetLevelVoid { level, .. } => format!("Shape level {level}"),
             Batch { label, commands } if label.is_empty() => {
                 format!("{} edits", commands.len())
             }
@@ -1399,6 +1418,9 @@ pub enum LevelPart {
     Tags,
     /// Everything (`replace_level`).
     All,
+    /// `void` (the level's shape; layer content in the new void was
+    /// cleared, reported as its own changes).
+    Void,
 }
 
 impl LevelPart {
@@ -1406,7 +1428,11 @@ impl LevelPart {
     pub fn affects_bake(self) -> bool {
         matches!(
             self,
-            LevelPart::Size | LevelPart::Fields | LevelPart::Tags | LevelPart::All
+            LevelPart::Size
+                | LevelPart::Fields
+                | LevelPart::Tags
+                | LevelPart::All
+                | LevelPart::Void
         )
     }
 }

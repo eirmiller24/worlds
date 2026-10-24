@@ -788,6 +788,8 @@ pub fn paste(
     let mut items = 0;
     let mut tiles_out: BTreeMap<Slug, Vec<[u32; 2]>> = BTreeMap::new();
     let mut clipped = 0usize;
+    // Cells (and tile stacks) that fell in a non-rectangular level's void.
+    let mut voided = 0usize;
 
     // ---- grids ----
     for (src, fg) in &frag.grids {
@@ -837,6 +839,10 @@ pub fn paste(
                     clipped += 1;
                     continue;
                 }
+                if project.layer_cell_void(def, level, cx, cy) {
+                    voided += 1;
+                    continue;
+                }
                 cells.push(CellValue::new(cx as u32, cy as u32, GridValue::from(value)));
             }
         }
@@ -880,6 +886,7 @@ pub fn paste(
         let mut missing: BTreeSet<&Slug> = BTreeSet::new();
         let mut stacks: BTreeSet<[u32; 2]> = BTreeSet::new();
         let mut clipped_stacks: BTreeSet<[u32; 2]> = BTreeSet::new();
+        let mut void_stacks: BTreeSet<[u32; 2]> = BTreeSet::new();
         for p in placements {
             if project.tileset(p.tileset.as_str()).is_none() {
                 missing.insert(&p.tileset);
@@ -890,12 +897,17 @@ pub fn paste(
                 clipped_stacks.insert(p.cell);
                 continue;
             }
+            if project.layer_cell_void(def, level, cx, cy) {
+                void_stacks.insert(p.cell);
+                continue;
+            }
             let mut p = p.clone();
             p.cell = [cx as u32, cy as u32];
             stacks.insert(p.cell);
             out.push(p);
         }
         clipped += clipped_stacks.len();
+        voided += void_stacks.len();
         if !missing.is_empty() {
             problems.push(format!(
                 "layer {layer}: no tileset {}; those tiles were skipped",
@@ -927,6 +939,14 @@ pub fn paste(
             if clipped == 1 { "" } else { "s" },
             level.slug,
             if clipped == 1 { "was" } else { "were" }
+        ));
+    }
+    if voided > 0 {
+        problems.push(format!(
+            "{voided} cell{} fell in the void of level {} (cut out of its shape) and {} dropped",
+            if voided == 1 { "" } else { "s" },
+            level.slug,
+            if voided == 1 { "was" } else { "were" }
         ));
     }
 
@@ -981,6 +1001,13 @@ pub fn paste(
         if cell[0] < 0 || cell[1] < 0 || cell[0] >= size[0] as i64 || cell[1] >= size[1] as i64 {
             problems.push(format!(
                 "entity {} ({}) would land outside level {} at [{}, {}]; not pasted",
+                e.id, e.ty, level.slug, cell[0], cell[1]
+            ));
+            continue;
+        }
+        if project.layer_cell_void(def, level, cell[0], cell[1]) {
+            problems.push(format!(
+                "entity {} ({}) would land in the void of level {} at [{}, {}]; not pasted",
                 e.id, e.ty, level.slug, cell[0], cell[1]
             ));
             continue;

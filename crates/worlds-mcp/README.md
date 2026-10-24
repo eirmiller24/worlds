@@ -1,6 +1,6 @@
 # worlds-mcp
 
-An MCP server (stdio, `rmcp`) that lets an agent such as Claude Code read and edit a Worlds project: 42 coarse tools (`describe_project`, `read_level`, `create_level`, `paint`, ...) and `worlds://` resources. [`docs/mcp.md`](../../docs/mcp.md) is the contract: tool names, descriptions and input schemas there are exactly what the binary publishes (`tests/docs.rs` checks it).
+An MCP server (stdio, `rmcp`) that lets an agent such as Claude Code read and edit a Worlds project: 43 coarse tools (`describe_project`, `read_level`, `create_level`, `paint`, ...) and `worlds://` resources. [`docs/mcp.md`](../../docs/mcp.md) is the contract: tool names, descriptions and input schemas there are exactly what the binary publishes (`tests/docs.rs` checks it).
 
 ```
 worlds-mcp [--project <dir>] [--headless] [--name <client>]
@@ -54,4 +54,5 @@ Careful: in headless mode write tools save to that directory; try writes on a co
 - `tests/settings.rs`: project settings, rule state and replacing a level: `edit_definitions` `set_project` (one undo entry, after `set_layers` so a new layer can be the collision layer, a refusal cancelling the call), `edit_rules` `set_level_states` (set, `null` removes, refusals), `create_level` with `content`, and with `replace` (`confirm` naming what would go, id, background, fields and rule state kept, undo, a `read_level` json round trip changing nothing).
 - `tests/editor.rs`: against `worlds_server::headless::run` through `server.json` (one history entry labelled `Agent: ...`, notices about other clients' edits, falling back when the server goes away or `server.json` is stale, a tool error and no disk write when a live editor refuses the connection), and against a stand-in editor in approval mode (a multi-write call waits for Apply; one that fails part-way submits nothing).
 - Derived layers and region rules through the tools: `edit_definitions` `set_layers`/`remove_layers` (the `confirm` path, one undo), `edit_rules` with passes, a region rule writing a derived layer and an occupying stamp, `find_regions`, `preview_rule` (`pass`, `regions`, `write`, `occupied`, the effective picture), `paint` with `"!"` (and its refusal on collision), `read_level` derived grids, `bake_and_validate` warnings.
+- `tests/void.rs`: non-rectangular levels: `shape_level` (what it clears, the label, refusals), `read_level` drawing the void, `paint` and `place_entity` at the void, `create_level` with `void` (and `replace` keeping it).
 - `tests/stdio.rs`: the built binary over stdio (`initialize`, `tools/list`, `tools/call`, resources, the headless screenshot failure path, the client name reaching the editor's history through `initialize` and through request `_meta` after `server/discover`).

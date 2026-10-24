@@ -224,13 +224,18 @@ fn levels(project: &Project) -> Value {
                 }
             }
             let (open, done) = notes_count(l.notes.iter());
-            out.push(json!({
+            let mut v = json!({
                 "slug": l.slug, "name": l.name, "id": l.id, "world": w.slug,
                 "world_px": l.world_px, "size": l.size,
                 "size_px": [l.size[0] as u64 * g as u64, l.size[1] as u64 * g as u64],
                 "depth": l.depth, "tags": l.tags, "content": content,
                 "notes": { "open": open, "done": done },
-            }));
+            });
+            // A non-rectangular level: its void rects (left out otherwise).
+            if l.has_void() {
+                v["void"] = json!(l.void);
+            }
+            out.push(v);
         }
     }
     Value::Array(out)

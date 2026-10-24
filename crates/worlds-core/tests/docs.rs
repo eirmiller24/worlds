@@ -156,6 +156,7 @@ fn commands_md_examples_apply_in_order() {
         "set_assembly",
         "rename_assembly",
         "remove_assembly",
+        "set_level_void",
     ];
     let missing: Vec<&str> = all.iter().copied().filter(|o| !ops.contains(*o)).collect();
     assert!(missing.is_empty(), "no example for {missing:?}");

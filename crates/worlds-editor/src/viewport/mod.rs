@@ -548,7 +548,15 @@ impl Viewport {
                 // Flat mode: a bit lighter so small levels read on the dark bg.
                 fill = fill.lerp_to_gamma(Color32::from_gray(120), 0.25);
             }
-            painter.rect_filled(to_srect(&lr), 0.0, fill);
+            if level.has_void() {
+                // A non-rectangular level fills only its cells: the void
+                // is transparent (a neighbour may sit in the notch).
+                for r in level_cell_rects(doc, ix) {
+                    painter.rect_filled(to_srect(&r), 0.0, fill);
+                }
+            } else {
+                painter.rect_filled(to_srect(&lr), 0.0, fill);
+            }
         }
 
         // ---- tiles via the GPU ----
@@ -742,31 +750,39 @@ impl Viewport {
             }
         }
         let outline = Stroke::new(1.0, Color32::from_black_alpha(160));
-        for &ix in &scene.draw_order {
-            let lr = scene.levels[ix].rect;
-            if lr.intersects(&view) && Some(ix) != active {
-                painter.rect_stroke(to_srect(&lr), 0.0, outline, StrokeKind::Outside);
-            }
-        }
-        if let Some(ix) = active {
-            let lr = scene.levels[ix].rect;
-            painter.rect_stroke(
-                to_srect(&lr),
-                0.0,
-                Stroke::new(2.0, cx.accent),
-                StrokeKind::Outside,
-            );
-        }
-        // Selected levels: a thick accent rect; selected tile stacks: their
-        // cell outlined.
-        for id in cx.view.selection.levels() {
-            if let Some(ix) = doc.level_ix_by_id(id) {
+        // A level's outline: its box, or the polygon of a non-rectangular
+        // level's cells.
+        let stroke_level = |ix: LevelIx, stroke: Stroke| {
+            if doc.level(ix).has_void() {
+                let pts: Vec<Pos2> = level_outline(doc, ix).into_iter().map(to_screen).collect();
+                painter.add(egui::Shape::closed_line(pts, stroke));
+            } else {
                 painter.rect_stroke(
                     to_srect(&level_wrect(doc, ix)),
                     0.0,
-                    Stroke::new(4.0, cx.accent),
+                    stroke,
                     StrokeKind::Outside,
                 );
+            }
+        };
+        for &ix in &scene.draw_order {
+            let lr = scene.levels[ix].rect;
+            if lr.intersects(&view) && Some(ix) != active {
+                stroke_level(ix, outline);
+            }
+        }
+        if let Some(ix) = active {
+            // The active level's void is hatched, so its shape reads.
+            if doc.level(ix).has_void() && scene.levels[ix].rect.intersects(&view) {
+                hatch_void(&painter, doc, ix, &to_srect, cx.accent);
+            }
+            stroke_level(ix, Stroke::new(2.0, cx.accent));
+        }
+        // Selected levels: a thick accent outline; selected tile stacks:
+        // their cell outlined.
+        for id in cx.view.selection.levels() {
+            if let Some(ix) = doc.level_ix_by_id(id) {
+                stroke_level(ix, Stroke::new(4.0, cx.accent));
             }
         }
         for (lid, layer, cell) in cx.view.selection.tiles() {
@@ -823,13 +839,15 @@ impl Viewport {
         }
 
         // ---- hover and tool gestures ----
+        // A non-rectangular level is under the pointer only on its cells:
+        // in its notch, the level sitting there (or nothing) is.
         let level_under = pointer_world.and_then(|wp| {
             scene
                 .draw_order
                 .iter()
                 .rev()
                 .copied()
-                .find(|&i| scene.levels[i].rect.contains(wp))
+                .find(|&i| scene.levels[i].rect.contains(wp) && in_level_px(doc, i, wp))
         });
         let hit_in = |ix: LevelIx, layer: usize, wp: [f64; 2]| -> CellHit {
             if ix >= doc.levels.len() {
@@ -842,7 +860,7 @@ impl Viewport {
                     world_px: wp,
                 };
             }
-            let (g, cells) = crate::tools::hit_grid(doc, layer, ix);
+            let (g, _) = crate::tools::hit_grid(doc, layer, ix);
             let g = g as f64;
             let lr = level_wrect(doc, ix);
             let cell = [
@@ -853,10 +871,7 @@ impl Viewport {
                 level: ix,
                 layer,
                 cell,
-                inside: cell[0] >= 0
-                    && cell[1] >= 0
-                    && (cell[0] as u32) < cells[0]
-                    && (cell[1] as u32) < cells[1],
+                inside: crate::tools::cell_in_level(doc, layer, ix, cell),
                 world_px: wp,
             }
         };
@@ -1062,7 +1077,19 @@ impl Viewport {
                 (at, at, grab)
             };
             let add = crate::tools::pixel_mod(modifiers);
-            if tool == Tool::Select {
+            if tool == Tool::Shape {
+                // The active level when the press is in its box, void
+                // included (that is where a fill starts), else the level
+                // under the pointer; cells of the project grid.
+                let target = active
+                    .filter(|&a| pointer_world.is_some_and(|wp| level_wrect(doc, a).contains(wp)))
+                    .or(level_under);
+                if let (Some(ix), Some(wp)) = (target, pointer_world) {
+                    cx.view.active_level = Some(ix);
+                    let at = hit_in(ix, crate::tools::NO_LAYER, wp);
+                    self.gesture = Some(begin(at, Grab::None, cx.events));
+                }
+            } else if tool == Tool::Select {
                 if let Some(wp) = pointer_world {
                     let layer = hit_layer;
                     self.gesture = select_press_alt(
@@ -1169,7 +1196,12 @@ impl Viewport {
         }
 
         let hover_ix = active
-            .filter(|&a| pointer_world.is_some_and(|wp| level_wrect(doc, a).contains(wp)))
+            .filter(|&a| {
+                pointer_world.is_some_and(|wp| {
+                    level_wrect(doc, a).contains(wp)
+                        && (tool == Tool::Shape || in_level_px(doc, a, wp))
+                })
+            })
             .or(level_under);
         let hover_hit = match (hover_ix, tool_layer, pointer_world) {
             (Some(ix), Some(l), Some(wp)) if resp.hovered() || self.gesture.is_some() => {
@@ -1294,6 +1326,61 @@ impl Viewport {
             }
         }
 
+        // Shape: the rect a release cuts out (red) or fills back in (green,
+        // Shift), and the hovered cell.
+        if tool == Tool::Shape {
+            let cut = Color32::from_rgb(230, 80, 80);
+            let fill = Color32::from_rgb(90, 200, 120);
+            let col = if modifiers.shift { fill } else { cut };
+            let cells_rect = |ix: LevelIx, a: [i32; 2], b: [i32; 2]| -> Option<Rect> {
+                let l = doc.level(ix);
+                let r = crate::tools::clip_rect(cell_rect(a, b), l.size);
+                (r[0] < r[2] && r[1] < r[3]).then(|| {
+                    let o = [l.world_px[0] as f64, l.world_px[1] as f64];
+                    to_srect(&WRect::new(
+                        [o[0] + r[0] as f64 * grid, o[1] + r[1] as f64 * grid],
+                        [o[0] + r[2] as f64 * grid, o[1] + r[3] as f64 * grid],
+                    ))
+                })
+            };
+            match (self.gesture, hover_ix, pointer_world) {
+                (Some((start, at, _)), _, _) if start.level < doc.levels.len() => {
+                    if let Some(r) = cells_rect(start.level, start.cell, at.cell) {
+                        painter.rect_filled(r, 0.0, col.gamma_multiply(0.3));
+                        painter.rect_stroke(r, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
+                        let l = doc.level(start.level);
+                        let c = crate::tools::clip_rect(cell_rect(start.cell, at.cell), l.size);
+                        painter.text(
+                            r.center_bottom() + egui::vec2(0.0, 4.0),
+                            Align2::CENTER_TOP,
+                            format!(
+                                "{} {} x {}",
+                                if modifiers.shift {
+                                    "fill in"
+                                } else {
+                                    "cut out"
+                                },
+                                c[2] - c[0],
+                                c[3] - c[1]
+                            ),
+                            FontId::proportional(12.0),
+                            Color32::WHITE,
+                        );
+                    }
+                }
+                (None, Some(ix), Some(wp)) if resp.hovered() => {
+                    let c = hit_in(ix, crate::tools::NO_LAYER, wp).cell;
+                    if let Some(r) = cells_rect(ix, c, c) {
+                        painter.rect_stroke(r, 0.0, Stroke::new(1.5, col), StrokeKind::Inside);
+                    }
+                }
+                _ => {}
+            }
+            if escape && self.gesture.is_none() {
+                cx.actions.push(Action::SetTool(Tool::Select));
+            }
+        }
+
         // Cursor.
         if resp.hovered() || self.gesture.is_some() {
             let icon = if resp.dragged_by(egui::PointerButton::Middle)
@@ -1307,7 +1394,10 @@ impl Viewport {
             {
                 CursorIcon::NotAllowed
             } else if tool.paints()
-                || matches!(tool, Tool::Entity | Tool::Note | Tool::Measure)
+                || matches!(
+                    tool,
+                    Tool::Entity | Tool::Note | Tool::Measure | Tool::Shape
+                )
                 || cx.view.pick.is_some()
             {
                 CursorIcon::Crosshair
@@ -1558,6 +1648,9 @@ impl Viewport {
         if tool == Tool::Note && cx.focused {
             note_strip(ui.ctx(), rect, cx.view);
         }
+        if tool == Tool::Shape {
+            shape_strip(ui.ctx(), rect, doc, active, cx.actions);
+        }
         self.paint_strip = (tool.is_paint_mode() && cx.focused)
             .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions, doc, cx.view));
 
@@ -1585,6 +1678,22 @@ impl Viewport {
                 }
                 if ui.button(format!("Duplicate {slug}")).clicked() {
                     cx.actions.push(Action::DuplicateLevel(ix));
+                    ui.close();
+                }
+                if ui
+                    .button(format!("Shape {slug}…"))
+                    .on_hover_text("Cut rectangles out of the level (or fill them back in)")
+                    .clicked()
+                {
+                    cx.view.active_level = Some(ix);
+                    cx.actions.push(Action::SetTool(Tool::Shape));
+                    cx.view.set_status(
+                        format!(
+                            "Shape {slug}: drag to cut cells out, Shift-drag to fill them back \
+                             in; Escape when done"
+                        ),
+                        false,
+                    );
                     ui.close();
                 }
                 if ui.button(format!("Delete {slug}…")).clicked() {
@@ -1662,7 +1771,10 @@ impl Viewport {
                 .bg_color
                 .as_ref()
                 .map_or(project_bg, |c| parse_color(c.as_str()));
-            painter.rect_filled(to_srect(&lr), 0.0, Color32::from_rgb(bg[0], bg[1], bg[2]));
+            // Only a non-rectangular level's cells (the void is transparent).
+            for r in level_cell_rects(doc, ix) {
+                painter.rect_filled(to_srect(&r), 0.0, Color32::from_rgb(bg[0], bg[1], bg[2]));
+            }
         }
         let vs: &ViewState = cx.view;
         scene.collect_visible(
@@ -2300,11 +2412,163 @@ pub fn level_under(doc: &Document, wp: [f64; 2]) -> Option<LevelIx> {
     order
         .into_iter()
         .rev()
-        .find(|&i| level_wrect(doc, i).contains(wp))
+        .find(|&i| level_wrect(doc, i).contains(wp) && in_level_px(doc, i, wp))
 }
 
-/// The topmost level of world `world` whose rect holds world pixel `wp`
-/// (draw order: depth, then index).
+/// Whether world pixel `wp` is on a cell of level `ix`: inside its box
+/// and, for a non-rectangular level, in none of its void rects.
+pub fn in_level_px(doc: &Document, ix: LevelIx, wp: [f64; 2]) -> bool {
+    let l = doc.level(ix);
+    let g = doc.project.grid_size.max(1) as f64;
+    let x = ((wp[0] - l.world_px[0] as f64) / g).floor() as i64;
+    let y = ((wp[1] - l.world_px[1] as f64) / g).floor() as i64;
+    l.in_level(x, y)
+}
+
+/// World rects covering exactly the cells of level `ix`: its box, or for a
+/// non-rectangular level its runs of cells, row runs merged downwards
+/// while they repeat.
+pub fn level_cell_rects(doc: &Document, ix: LevelIx) -> Vec<WRect> {
+    let l = doc.level(ix);
+    if !l.has_void() {
+        return vec![level_wrect(doc, ix)];
+    }
+    let g = doc.project.grid_size.max(1) as f64;
+    let [w, h] = [l.size[0] as usize, l.size[1] as usize];
+    let mask = l.cell_mask();
+    let o = [l.world_px[0] as f64, l.world_px[1] as f64];
+    // Open rects by their run `(x0, x1)`: the row they started on.
+    let mut open: Vec<(usize, usize, usize)> = Vec::new();
+    let mut out = Vec::new();
+    let close = |(x0, x1, y0): (usize, usize, usize), y1: usize, out: &mut Vec<WRect>| {
+        out.push(WRect::new(
+            [o[0] + x0 as f64 * g, o[1] + y0 as f64 * g],
+            [o[0] + x1 as f64 * g, o[1] + y1 as f64 * g],
+        ));
+    };
+    for y in 0..=h {
+        let mut runs = Vec::new();
+        if y < h {
+            let mut x = 0;
+            while x < w {
+                if mask[y * w + x] {
+                    let s = x;
+                    while x < w && mask[y * w + x] {
+                        x += 1;
+                    }
+                    runs.push((s, x));
+                } else {
+                    x += 1;
+                }
+            }
+        }
+        let mut next = Vec::new();
+        for r in open.drain(..) {
+            if runs.contains(&(r.0, r.1)) {
+                next.push(r);
+            } else {
+                close(r, y, &mut out);
+            }
+        }
+        for (x0, x1) in runs {
+            if !next.iter().any(|r| (r.0, r.1) == (x0, x1)) {
+                next.push((x0, x1, y));
+            }
+        }
+        open = next;
+    }
+    out
+}
+
+/// A non-rectangular level's outline in world pixels (its box's corners
+/// for a rectangle), as `worlds_core::Level::outline`.
+pub fn level_outline(doc: &Document, ix: LevelIx) -> Vec<[f64; 2]> {
+    doc.level(ix)
+        .outline(doc.project.grid_size)
+        .into_iter()
+        .map(|[x, y]| [x as f64, y as f64])
+        .collect()
+}
+
+/// Hatch the void of level `ix` (its cut-out cells): diagonal strokes over
+/// each void rect, clipped to it.
+fn hatch_void(
+    painter: &egui::Painter,
+    doc: &Document,
+    ix: LevelIx,
+    to_srect: &dyn Fn(&WRect) -> Rect,
+    accent: Color32,
+) {
+    let l = doc.level(ix);
+    let g = doc.project.grid_size.max(1) as f64;
+    let o = [l.world_px[0] as f64, l.world_px[1] as f64];
+    let stroke = Stroke::new(1.0, accent.gamma_multiply(0.45));
+    for r in &l.void {
+        let x1 = (r.x + r.w).min(l.size[0]);
+        let y1 = (r.y + r.h).min(l.size[1]);
+        if r.x >= x1 || r.y >= y1 {
+            continue;
+        }
+        let sr = to_srect(&WRect::new(
+            [o[0] + r.x as f64 * g, o[1] + r.y as f64 * g],
+            [o[0] + x1 as f64 * g, o[1] + y1 as f64 * g],
+        ));
+        let p = painter.with_clip_rect(sr.intersect(painter.clip_rect()));
+        p.rect_filled(sr, 0.0, Color32::from_black_alpha(40));
+        let step = 8.0;
+        let span = sr.width() + sr.height();
+        let mut d = 0.0;
+        while d < span {
+            let a = pos2(sr.min.x + d, sr.min.y);
+            let b = pos2(sr.min.x + d - sr.height(), sr.max.y);
+            p.line_segment([a, b], stroke);
+            d += step;
+        }
+    }
+}
+
+/// The Shape tool's strip: what a drag does, Make rectangular, Done.
+fn shape_strip(
+    ctx: &egui::Context,
+    map: Rect,
+    doc: &Document,
+    active: Option<LevelIx>,
+    actions: &mut Vec<Action>,
+) {
+    egui::Area::new(egui::Id::new("shape tool strip"))
+        .fixed_pos(map.min + STRIP_OFFSET)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let level = active.map(|ix| doc.level(ix));
+                    ui.weak(match level {
+                        Some(l) => format!("Shape {}", l.slug),
+                        None => "Shape".into(),
+                    });
+                    ui.label("drag: cut out · Shift-drag: fill in");
+                    if let Some(l) = level.filter(|l| l.has_void())
+                        && ui.button("Make rectangular").clicked()
+                    {
+                        actions.push(Action::Apply(Box::new(
+                            worlds_core::Command::SetLevelVoid {
+                                level: l.slug.clone(),
+                                void: Vec::new(),
+                                restore: false,
+                            },
+                        )));
+                    }
+                    if ui.button("Done").on_hover_text("Escape").clicked() {
+                        actions.push(Action::SetTool(Tool::Select));
+                    }
+                });
+            });
+        });
+}
+
+/// The topmost level of world `world` with a cell under world pixel `wp`
+/// (draw order: depth, then index): a non-rectangular level's void isn't
+/// part of it.
 pub fn level_under_in(doc: &Document, world: usize, wp: [f64; 2]) -> Option<LevelIx> {
     let mut order: Vec<LevelIx> = (0..doc.levels.len())
         .filter(|&i| doc.levels[i].world == world)
@@ -2313,7 +2577,7 @@ pub fn level_under_in(doc: &Document, world: usize, wp: [f64; 2]) -> Option<Leve
     order
         .into_iter()
         .rev()
-        .find(|&i| level_wrect(doc, i).contains(wp))
+        .find(|&i| level_wrect(doc, i).contains(wp) && in_level_px(doc, i, wp))
 }
 
 /// What a Select click at `wp` picks, topmost first: a note or pin (card,
@@ -2764,6 +3028,8 @@ pub fn tool_strip_rect(ctx: &egui::Context, map: Rect, tool: Tool) -> Option<Rec
         ("note tool strip", egui::vec2(420.0, 40.0))
     } else if tool.is_paint_mode() {
         ("paint tool strip", egui::vec2(280.0, 40.0))
+    } else if tool == Tool::Shape {
+        ("shape tool strip", egui::vec2(420.0, 40.0))
     } else {
         return None;
     };

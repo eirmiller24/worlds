@@ -16,6 +16,7 @@ mod expand;
 mod layer;
 mod reference;
 mod rules;
+pub(crate) mod void;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -27,7 +28,7 @@ pub use annotation::{
     Annotation, ConnectorStyle, Endpoint, GuideGroup, Link, NoteStatus, Shape, bbox_of, parse_link,
 };
 pub use common::{Color, Flip, TileRef};
-pub use connector::{Anchor, connector_polyline, nearest_edge_point};
+pub use connector::{Anchor, connector_polyline, nearest_edge_point, nearest_outline_point};
 pub use defs::{EnumDef, EnumValue, TilesetDef};
 pub use derived::DerivedCycle;
 pub use entity::{
@@ -49,6 +50,7 @@ pub use rules::{
     Symmetry, Template, TemplateOutput, TemplateRef, TemplateRule, TemplateTilesOutput, TileAlt,
     TileMode, TilesOutput, Write,
 };
+pub use void::{VOID_GLYPH, cell_mask_of};
 
 use crate::id::{Id, Slug};
 
@@ -575,6 +577,11 @@ pub struct Level {
     /// first. Never exported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<Reference>,
+    /// Rectangles `[x, y, w, h]` in cells of the project grid cut out of the
+    /// level's box: a cell is in the level when it is inside `size` and in
+    /// no void rect. Empty for a rectangular level.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub void: Vec<crate::command::Rect>,
 
     /// `<layer>.json` for (non-derived) int_grid layers, sorted by layer
     /// slug. A layer with no entry is all empty.
@@ -610,6 +617,7 @@ impl Level {
             fields: BTreeMap::new(),
             layers: BTreeMap::new(),
             references: Vec::new(),
+            void: Vec::new(),
             int_grids: Vec::new(),
             overrides: Vec::new(),
             tiles: Vec::new(),
@@ -680,6 +688,7 @@ impl Level {
             fields,
             layers,
             references,
+            void,
             int_grids,
             overrides,
             tiles,
@@ -699,6 +708,7 @@ impl Level {
             fields: fields.clone(),
             layers: layers.clone(),
             references: references.clone(),
+            void: void.clone(),
             int_grids: int_grids
                 .iter()
                 .filter(|g| file(&g.layer))

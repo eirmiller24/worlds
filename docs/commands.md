@@ -268,6 +268,23 @@ Copy a level under a new `slug`: its `level.json` (fields, tags, per-layer rule 
 - **Inverse:** `delete_level` of the copy.
 - **Changes:** `level_created`.
 
+### set_level_void
+
+Give a level a non-rectangular shape: replace its `void`, the rectangles `[x, y, width, height]` (cells of the project grid) cut out of its box ([format.md](format.md#non-rectangular-levels-void)). `[]` makes it a rectangle again. Grid cells, derived overrides and tiles that fall in the new void are cleared; an entity whose cell would be void refuses the command (move or remove it first), as does a rect that is empty or reaches outside the box, and a void that leaves no cell. A layer cell is void when every project cell it covers is, so a coarse layer keeps a cell the void only nicks.
+
+`restore: true` (default `false`) takes the rects as given and clears nothing: inverses set it to put back an old void exactly (whatever it held), edits leave it off.
+
+```json
+{ "op": "set_level_void", "level": "wing", "void": [[6, 0, 2, 2]] }
+```
+
+This cuts the top-right 2x2 cells out of `wing` (8x4 here), turning it into an L, and clears the three wall cells of its collision layer that were there.
+
+- **Inverse:** a `batch` putting the cleared content back (`paint_cells`, `set_tiles`), then `set_level_void` with the old void and `restore: true`; just that `set_level_void` when nothing was cleared.
+- **Changes:** `level_meta` part `void` (every `auto` layer of the level rebakes), then a `grid` or `tiles` per layer it cleared cells of.
+
+Void cells read as outside the level for the other commands too. `fill_rect`, `flood_fill` and `replace_value` leave them out when they write a value (clearing them is allowed, so content a file put there can be removed), and a flood doesn't cross them; `add_entity` and `move_entity` refuse a void cell (unless `allow_outside`, which inverses set); `resize_level` moves the rects with the content and clips them to the new box, refusing a size that would leave only void; `Project::crop_level` (two `resize_level`s) does the same and refuses a crop that would leave only void; `duplicate_level` and `move_level_to_world` keep `void` (and the level's `references`, which the void doesn't touch); a project import (`worlds_core::merge`) creates levels with their `void` through `create_level`, so it drops grid cells and tiles there and refuses a level with an entity there; the layer operations keep the void as they are (a merge down or a tile move stays on one grid, so nothing lands in it, and an entity a file put there moves to its new layer as it is); `create_level` and `replace_level` take `void` in `level`, check it as above (unless `restore`), drop grid cells and tiles in it and refuse entities there. `paint_cells` and `set_tiles` write exactly the cells they name, void or not (they are what undo uses); the editor's tools and the live API's grid and tile writes drop void cells before building them, as they clip at the level's edge, and `validate` reports content in a void cell.
+
 ## Entity commands
 
 Entities are found by id anywhere in the project.
@@ -914,7 +931,7 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | --- | --- | --- |
 | `grid` | `world`, `level`, `layer`, `rect` | `worlds/<world>/levels/<level>/<layer>.json` |
 | `tiles` | `world`, `level`, `layer`, `rect` | same |
-| `level_meta` | `world`, `level`, `part`: `position`, `size`, `name`, `depth`, `bg_color`, `fields`, `tags` or `all` | `.../<level>/level.json` |
+| `level_meta` | `world`, `level`, `part`: `position`, `size`, `name`, `depth`, `bg_color`, `fields`, `tags`, `all` or `void` | `.../<level>/level.json` |
 | `level_created` | `world`, `level` | the directory `.../levels/<level>` (every file in it) |
 | `level_deleted` | `world`, `level` | the directory (saving deletes its files) |
 | `level_renamed` | `world`, `from`, `to` | both directories (`change.files()` lists them) |

@@ -39,6 +39,16 @@
       },
       "type": "object"
     },
+    "Rect": {
+      "description": "[x, y, width, height] in cells.",
+      "items": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "maxItems": 4,
+      "minItems": 4,
+      "type": "array"
+    },
     "Reference": {
       "additionalProperties": false,
       "description": "One entry of `references` in `level.json` or `world.json`.",
@@ -169,6 +179,13 @@
       "description": "Free tags (`forest`), the same vocabulary as annotation tags.\nNon-empty, no repeats (validation).",
       "items": {
         "type": "string"
+      },
+      "type": "array"
+    },
+    "void": {
+      "description": "Rectangles `[x, y, w, h]` in cells of the project grid cut out of the\nlevel's box: a cell is in the level when it is inside `size` and in\nno void rect. Empty for a rectangular level.",
+      "items": {
+        "$ref": "#/$defs/Rect"
       },
       "type": "array"
     },

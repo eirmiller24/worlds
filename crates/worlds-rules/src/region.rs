@@ -122,6 +122,20 @@ pub fn regions(
     values: &IntGridLayer,
     cells: &CellMatch,
 ) -> Result<Regions> {
+    regions_in(project, grid, values, cells, None)
+}
+
+/// [`regions`] in a non-rectangular level: `void` marks the cells (of the
+/// grid, row-major) cut out of the level, which no region holds and which
+/// count as the level's border (an edge run stops at them), as for the
+/// region rules. `None` is a rectangular level.
+pub fn regions_in(
+    project: &Project,
+    grid: &str,
+    values: &IntGridLayer,
+    cells: &CellMatch,
+    void: Option<&[bool]>,
+) -> Result<Regions> {
     let def = project
         .layer(grid)
         .filter(|l| l.is_int_grid())
@@ -134,21 +148,30 @@ pub fn regions(
     let [w, h] = values.size();
     let unknown = def.values().len() as u16 + 1;
     let vals: Vec<u16> = values.cells().iter().map(|&c| c.min(unknown)).collect();
-    let mut r = label(&vals, w as i32, h as i32, &table);
+    let void = void.filter(|v| v.len() == vals.len());
+    let mut r = label(&vals, w as i32, h as i32, &table, void);
     for e in [Edge::Floor, Edge::Ceiling, Edge::WallLeft, Edge::WallRight] {
-        edge_runs(&mut r, &vals, e, None);
+        edge_runs(&mut r, &vals, e, None, void);
     }
     Ok(r)
 }
 
-/// Components of cells whose value passes `table`, edges left empty.
-pub(crate) fn label(values: &[u16], w: i32, h: i32, table: &[bool]) -> Regions {
+/// Components of cells whose value passes `table`, edges left empty. Cells
+/// `void` marks (a non-rectangular level's) are in no region.
+pub(crate) fn label(
+    values: &[u16],
+    w: i32,
+    h: i32,
+    table: &[bool],
+    void: Option<&[bool]>,
+) -> Regions {
+    let in_void = |i: usize| void.is_some_and(|v| v[i]);
     let n = (w * h).max(0) as usize;
     let mut labels = vec![0u32; n];
     let mut regions = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
     for start in 0..n {
-        if labels[start] != 0 || !table[values[start] as usize] {
+        if labels[start] != 0 || !table[values[start] as usize] || in_void(start) {
             continue;
         }
         let id = regions.len() as u32;
@@ -165,7 +188,7 @@ pub(crate) fn label(values: &[u16], w: i32, h: i32, table: &[bool]) -> Regions {
             x1 = x1.max(x);
             y1 = y1.max(y);
             let mut visit = |j: usize| {
-                if labels[j] == 0 && table[values[j] as usize] {
+                if labels[j] == 0 && table[values[j] as usize] && !in_void(j) {
                     labels[j] = l;
                     stack.push(j);
                 }
@@ -208,9 +231,16 @@ fn edge_offset(e: Edge) -> (i32, i32) {
 }
 
 /// Fill one edge kind's runs of every region. A region cell is on the edge
-/// when its neighbour on that side is inside the grid, isn't a region cell
-/// and (with `against`) passes `against`.
-pub(crate) fn edge_runs(r: &mut Regions, values: &[u16], e: Edge, against: Option<&[bool]>) {
+/// when its neighbour on that side is inside the grid, isn't a region cell,
+/// isn't marked in `void` (the void is the level's border, like the grid's
+/// edge) and (with `against`) passes `against`.
+pub(crate) fn edge_runs(
+    r: &mut Regions,
+    values: &[u16],
+    e: Edge,
+    against: Option<&[bool]>,
+    void: Option<&[bool]>,
+) {
     let [w, h] = r.size;
     let (dx, dy) = edge_offset(e);
     let on = |x: i32, y: i32| -> bool {
@@ -223,7 +253,9 @@ pub(crate) fn edge_runs(r: &mut Regions, values: &[u16], e: Edge, against: Optio
             return false;
         }
         let j = (ny * w + nx) as usize;
-        r.labels[j] == 0 && against.is_none_or(|t| t[values[j] as usize])
+        r.labels[j] == 0
+            && !void.is_some_and(|v| v[j])
+            && against.is_none_or(|t| t[values[j] as usize])
     };
     let mut runs: Vec<(u32, EdgeRun)> = Vec::new();
     match e {
@@ -565,9 +597,9 @@ mod tests {
             .flat_map(|r| r.bytes().map(|b| (b - b'0') as u16))
             .collect();
         let table = vec![true, false, false];
-        let mut r = label(&vals, w, 5, &table);
-        edge_runs(&mut r, &vals, Edge::Floor, None);
-        edge_runs(&mut r, &vals, Edge::WallLeft, None);
+        let mut r = label(&vals, w, 5, &table, None);
+        edge_runs(&mut r, &vals, Edge::Floor, None, None);
+        edge_runs(&mut r, &vals, Edge::WallLeft, None, None);
         assert_eq!(r.regions.len(), 2);
         assert_eq!(r.regions[0].bbox, [1, 1, 4, 3]);
         assert_eq!(r.regions[0].area, 11);

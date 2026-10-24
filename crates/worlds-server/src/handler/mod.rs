@@ -236,6 +236,7 @@ pub fn is_write(method: &str) -> bool {
             | "edit.save_assembly"
             | "edit.transform"
             | "level.arrange"
+            | "level.set_void"
     )
 }
 
@@ -509,6 +510,7 @@ fn write_builder(method: &str) -> Option<Builder> {
         "edit.save_assembly" => edit::save_assembly,
         "edit.transform" => edit::transform,
         "level.arrange" => edit::arrange,
+        "level.set_void" => level::set_void,
         _ => return None,
     })
 }

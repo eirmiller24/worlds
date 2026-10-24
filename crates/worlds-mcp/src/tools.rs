@@ -62,6 +62,7 @@ struct CreateLevel {
     tags: Option<Vec<String>>,
     world: Option<String>,
     content: Option<Map<String, Value>>,
+    void: Option<Vec<[u32; 4]>>,
     #[serde(default)]
     replace: bool,
     #[serde(default)]
@@ -317,6 +318,14 @@ struct SetGuideGroup {
     #[serde(default)]
     remove: bool,
     world: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShapeLevel {
+    level: String,
+    void: Vec<[u32; 4]>,
     label: Option<String>,
 }
 
@@ -989,6 +998,7 @@ impl Engine {
                 "world_px": a.world_px, "depth": a.depth.unwrap_or(0) });
             put(&mut level, "fields", &a.fields);
             put(&mut level, "tags", &a.tags);
+            put(&mut level, "void", &a.void);
             let mut p = json!({ "level": level });
             put(&mut p, "world", &a.world);
             put(&mut p, "content", &a.content);
@@ -1009,6 +1019,7 @@ impl Engine {
             put(&mut level, "depth", &a.depth);
             put(&mut level, "fields", &a.fields);
             put(&mut level, "tags", &a.tags);
+            put(&mut level, "void", &a.void);
             let mut p = json!({ "level": level });
             put(&mut p, "world", &a.world);
             put(&mut p, "content", &a.content);
@@ -1476,6 +1487,19 @@ impl Engine {
         let mut p = json!({ "level": a.level });
         put(&mut p, "world", &a.world);
         let r = self.write(&label, |_| Ok(vec![("level.crop", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn shape_level(&mut self, a: Value) -> ToolResult {
+        let a: ShapeLevel = args("shape_level", a)?;
+        let summary = if a.void.is_empty() {
+            format!("{} as a rectangle", a.level)
+        } else {
+            a.level.clone()
+        };
+        let label = Self::label("shape_level", a.label.as_deref(), &summary);
+        let p = json!({ "level": a.level, "void": a.void });
+        let r = self.write(&label, |_| Ok(vec![("level.set_void", p.clone())]))?;
         Ok(vec![json_block(&r)])
     }
 

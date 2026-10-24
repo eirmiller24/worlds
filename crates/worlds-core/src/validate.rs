@@ -21,7 +21,7 @@ use crate::model::{
     RuleEntry, RuleOutput, RuleSet, Select, Shape, Spacing, Symmetry, TemplateOutput, TemplateRef,
     TileMode, TileRef, World, Write, glyph_problem,
 };
-use crate::model::{Endpoint, Link, parse_link};
+use crate::model::{Endpoint, Link, Override, parse_link};
 
 /// One problem found by [`validate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2282,6 +2282,124 @@ impl<'a> Validator<'a> {
         let f = format!("{dir}/notes.json");
         for n in &l.notes {
             self.annotation(&f, &format!("notes[{}]", n.id), n, Some(l));
+        }
+        if l.has_void() {
+            self.level_shape(dir, l);
+        }
+    }
+
+    /// A non-rectangular level: its void rects fit the box and leave one
+    /// 4-connected piece, and no content sits in the void.
+    fn level_shape(&mut self, dir: &str, l: &'a Level) {
+        let p = self.p;
+        let f = format!("{dir}/level.json");
+        let [w, h] = l.size;
+        for (i, r) in l.void.iter().enumerate() {
+            let shown = [r.x, r.y, r.w, r.h];
+            if r.is_empty() {
+                self.push(&f, format!("void[{i}]"), format!("{shown:?} is empty"));
+            } else if r.x as u64 + r.w as u64 > w as u64 || r.y as u64 + r.h as u64 > h as u64 {
+                self.push(
+                    &f,
+                    format!("void[{i}]"),
+                    format!("{shown:?} reaches outside the level ({w}x{h})"),
+                );
+            }
+        }
+        let pieces = l.pieces();
+        match pieces.len() {
+            0 => self.push(
+                &f,
+                "void",
+                "the void covers the whole level; no cell is left",
+            ),
+            1 => {}
+            n => {
+                let firsts: Vec<String> = pieces
+                    .iter()
+                    .map(|c| format!("[{}, {}]", c[0] as u32 % w, c[0] as u32 / w))
+                    .collect();
+                self.push(
+                    &f,
+                    "void",
+                    format!(
+                        "the void splits the level into {n} pieces that don't touch (starting \
+                         at {}); a level is one 4-connected room",
+                        firsts.join(", ")
+                    ),
+                );
+            }
+        }
+        let planes = l
+            .int_grids
+            .iter()
+            .map(|g| (&g.layer, g.size(), g.cells().to_vec()))
+            .chain(l.overrides.iter().map(|o| {
+                (
+                    &o.layer,
+                    o.size(),
+                    o.cells()
+                        .map(|c| c != Override::None)
+                        .map(u16::from)
+                        .collect(),
+                )
+            }));
+        for (layer, size, codes) in planes {
+            let Some(def) = p.layer(layer.as_str()) else {
+                continue;
+            };
+            if size != p.layer_cells(def, l) {
+                continue;
+            }
+            let Some(mask) = p.layer_void(def, l) else {
+                continue;
+            };
+            let mut hits = codes
+                .iter()
+                .enumerate()
+                .filter(|&(i, &c)| c != 0 && mask[i])
+                .map(|(i, _)| i as u32);
+            if let Some(first) = hits.next() {
+                let n = 1 + hits.count();
+                let (x, y) = (first % size[0], first / size[0]);
+                self.push(
+                    &format!("{dir}/{layer}.json"),
+                    format!("rows[{y}]"),
+                    format!(
+                        "{n} cell(s) in the level's void hold content (first [{x}, {y}]); clear \
+                         them or change the void"
+                    ),
+                );
+            }
+        }
+        for t in &l.tiles {
+            let Some(def) = p.layer(t.layer.as_str()) else {
+                continue;
+            };
+            for tp in &t.tiles {
+                if p.layer_cell_void(def, l, tp.cell[0] as i64, tp.cell[1] as i64) {
+                    self.push(
+                        &format!("{dir}/{}.json", t.layer),
+                        format!("tiles[{},{}]", tp.cell[0], tp.cell[1]),
+                        format!("[{}, {}] is in the level's void", tp.cell[0], tp.cell[1]),
+                    );
+                }
+            }
+        }
+        let f = format!("{dir}/entities.json");
+        for el in &l.entities {
+            let Some(def) = p.layer(el.layer.as_str()) else {
+                continue;
+            };
+            for e in &el.entities {
+                if p.layer_cell_void(def, l, e.cell[0] as i64, e.cell[1] as i64) {
+                    self.push(
+                        &f,
+                        format!("layers[{}].entities[{}].cell", el.layer, e.id),
+                        format!("[{}, {}] is in the level's void", e.cell[0], e.cell[1]),
+                    );
+                }
+            }
         }
     }
 

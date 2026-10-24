@@ -16,7 +16,7 @@ fn initialize_list_and_describe() {
     assert!(init["result"]["capabilities"]["resources"].is_object());
     let list = p.request(2, "tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 42);
+    assert_eq!(tools.len(), 43);
     let ed = tools
         .iter()
         .find(|t| t["name"] == "edit_definitions")
