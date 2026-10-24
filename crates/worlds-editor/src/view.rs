@@ -94,6 +94,14 @@ pub struct ViewState {
     pub grid_marquee: Option<crate::clipboard::GridMarquee>,
     /// Reference images: the pseudo-layer, the selected one, a drag.
     pub references: crate::viewport::references::RefsView,
+    /// The tile stamp's brush transform (X, Y, R; shown in the Paint
+    /// strip): `t` first, then `x`, `y`, as a tile's flip. A paste ghost
+    /// keeps its own ([`crate::clipboard::PasteGhost::transform`]).
+    pub brush_flip: Option<worlds_core::Flip>,
+    /// The Palette pane's Library (assemblies): shown instead of the active
+    /// layer's palette, favorites, collapsed categories (`ui.json`
+    /// `library`).
+    pub library: crate::library::LibraryView,
 }
 
 impl Default for ViewState {
@@ -122,6 +130,8 @@ impl Default for ViewState {
             paste: None,
             grid_marquee: None,
             references: Default::default(),
+            brush_flip: None,
+            library: Default::default(),
         }
     }
 }

@@ -8,6 +8,7 @@
 
 pub mod actions;
 pub mod agent;
+mod assembly_ui;
 pub mod defs;
 pub mod entities;
 pub mod fields;
@@ -257,6 +258,9 @@ struct UiFile {
     /// The References pseudo-layer's eye and lock.
     #[serde(default)]
     references: crate::viewport::references::RefsUi,
+    /// The Palette's Library: shown or not, favorites, collapsed parts.
+    #[serde(default)]
+    library: crate::library::LibraryView,
 }
 
 fn default_paint_mode() -> Tool {
@@ -374,6 +378,8 @@ pub struct EditorState {
     pub history: history::HistoryState,
     /// "Add reference image…": the file dialog, while it is open.
     pub ref_picker: Option<references::Picker>,
+    /// The Library (assemblies) and the Save as assembly dialog.
+    pub library: crate::library::LibraryState,
 }
 
 impl Default for EditorState {
@@ -406,6 +412,7 @@ impl Default for EditorState {
             find: find::FindState::default(),
             history: history::HistoryState::default(),
             ref_picker: None,
+            library: crate::library::LibraryState::default(),
         }
     }
 }
@@ -1151,6 +1158,11 @@ impl EditorApp {
             UiStep::Find(f) => self.find_step(f),
             UiStep::History(h) => self.history_step(h),
             UiStep::Reference(r) => self.reference_step(r),
+            UiStep::Turn(t) => self.turn_step(t),
+            UiStep::Transform(t) => self.transform_step(t),
+            UiStep::Arrange(a) => self.arrange_step(a),
+            UiStep::SaveAssembly(s) => self.save_assembly_step(s),
+            UiStep::Library(l) => self.library_step(l),
         }
     }
 
@@ -2138,6 +2150,7 @@ impl EditorApp {
             .and_then(|s| Slug::new(s).ok())
             .filter(|s| doc.project.world(s.as_str()).is_some());
         self.st.view.references.ui = f.references;
+        self.st.view.library = f.library;
         self.last_ui_json = text;
         true
     }
@@ -2195,6 +2208,7 @@ impl EditorApp {
                 .get(self.st.view.world_ix(doc))
                 .map(|w| w.slug.to_string()),
             references: self.st.view.references.ui,
+            library: self.st.view.library.clone(),
         };
         let Ok(json) = serde_json::to_string_pretty(&f) else {
             return;
@@ -2287,6 +2301,7 @@ impl EditorApp {
         self.open_prompt(&ctx);
         self.new_level_dialog(&ctx);
         self.world_dialog(&ctx);
+        crate::library::save_dialog(&ctx, &mut self.st);
         self.confirm(&ctx);
         self.toasts(&ctx);
         self.pending_panel(&ctx);
@@ -2885,14 +2900,14 @@ impl EditorApp {
         let Some(doc) = self.st.doc.as_ref().filter(|d| ix < d.levels.len()) else {
             return;
         };
-        let frag = match frag {
-            Some(f) => f,
-            None => match &self.st.view.paste {
-                Some(p) => p.fragment().into_owned(),
-                None => return,
-            },
+        let planned = match (&frag, &self.st.view.paste) {
+            (Some(f), _) => crate::clipboard::paste_plan(doc, f, ix, origin),
+            // The armed ghost, turned as it is (an assembly's is labelled
+            // "Place assembly <slug>").
+            (None, Some(p)) => p.plan(doc, ix, origin),
+            (None, None) => return,
         };
-        let plan = match crate::clipboard::paste_plan(doc, &frag, ix, origin) {
+        let plan = match planned {
             Ok(p) => p,
             Err(e) => {
                 self.st.view.set_status(e, true);
@@ -3114,6 +3129,8 @@ impl EditorApp {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         use egui::{Key, Modifiers};
         let mut acts = Vec::new();
+        let on_map = !ctx.egui_wants_keyboard_input() && !self.palette.open;
+        let turnable = self.turnable().is_some();
         ctx.input_mut(|i| {
             let cmd = Modifiers::COMMAND;
             if i.consume_key(cmd, Key::P) {
@@ -3124,6 +3141,10 @@ impl EditorApp {
             }
             if i.consume_key(cmd, Key::R) || i.consume_key(Modifiers::NONE, Key::F5) {
                 acts.push(Action::Reload);
+            }
+            // Before Ctrl+S, which a held Shift would also match.
+            if on_map && i.consume_key(cmd | Modifiers::SHIFT, Key::S) {
+                acts.push(Action::OpenSaveAssembly);
             }
             if i.consume_key(cmd, Key::S) {
                 acts.push(Action::Save);
@@ -3144,6 +3165,20 @@ impl EditorApp {
         if !ctx.egui_wants_keyboard_input() && !self.palette.open {
             ctx.input_mut(|i| {
                 use egui::Modifiers as M;
+                // With a paste ghost or a tile stamp to turn, X and Y
+                // mirror it and R rotates it (instead of the Rectangle
+                // mode).
+                if turnable {
+                    for (key, op) in [
+                        (Key::X, worlds_core::Flip::X),
+                        (Key::Y, worlds_core::Flip::Y),
+                        (Key::R, worlds_core::Flip::XT),
+                    ] {
+                        if i.consume_key(M::NONE, key) {
+                            acts.push(Action::Turn(op));
+                        }
+                    }
+                }
                 for t in Tool::ALL {
                     if i.consume_key(M::NONE, t.key()) {
                         acts.push(Action::SetTool(t));
@@ -3352,6 +3387,13 @@ impl EditorApp {
             }
             Action::Paste { text, in_place } => self.paste(text, in_place),
             Action::PasteAt { level, origin } => self.paste_at(None, level, origin),
+            Action::Turn(op) => self.turn_brush(op),
+            Action::TransformSelection(op) => self.transform_selection(op),
+            Action::ArrangeLevels(op) => self.arrange_levels(op),
+            Action::OpenSaveAssembly => self.open_save_assembly(),
+            Action::SaveAssembly { info, replace } => self.save_assembly(info, replace),
+            Action::ArmAssembly(slug) => self.arm_assembly(&slug),
+            Action::ToggleLibrary => self.toggle_library(),
             Action::Nudge { d, pixel } => self.nudge_selection(d, pixel),
             Action::SelectAll => {
                 if let (Some(doc), Some(ix)) = (&self.st.doc, self.st.view.active_level)

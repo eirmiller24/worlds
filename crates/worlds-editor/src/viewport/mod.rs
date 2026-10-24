@@ -1008,6 +1008,15 @@ impl Viewport {
                         Color32::from_rgb(230, 80, 80),
                     );
                 }
+                // How it is turned (X, Y, R), at its bottom-left corner.
+                if let (Some(_), Some(r)) = (p.transform.flip, g.outlines.last()) {
+                    crate::arrange::ghost_badge(
+                        &painter,
+                        to_screen([r.min[0], r.max[1]]),
+                        p.transform.describe(),
+                        cx.accent,
+                    );
+                }
             }
         }
 
@@ -1458,6 +1467,7 @@ impl Viewport {
                     });
                 }
             }
+            crate::arrange::context_menu(ui, doc, cx.view, cx.actions);
         });
     }
 }
@@ -1772,6 +1782,7 @@ fn paint_strip(
                             );
                         crate::app::fields::mark(ui, "paint:density", r.rect);
                         view.palette.density = d;
+                        crate::arrange::turn_buttons(ui, view.brush_flip, actions);
                     }
                 });
             });
