@@ -3417,10 +3417,6 @@ impl EditorApp {
         let mut acts = Vec::new();
         let on_map = !ctx.egui_wants_keyboard_input() && !self.palette.open;
         let turnable = self.turnable().is_some();
-        // Ctrl+G groups a selection of entities or annotations, else (as
-        // before groups) toggles the grid.
-        let groupable = self.st.view.selection.entities().next().is_some()
-            || self.st.view.selection.notes().next().is_some();
         ctx.input_mut(|i| {
             let cmd = Modifiers::COMMAND;
             if i.consume_key(cmd, Key::P) {
@@ -3448,12 +3444,13 @@ impl EditorApp {
             if i.consume_key(cmd | Modifiers::SHIFT, Key::G) {
                 acts.push(Action::UngroupSelection);
             }
+            // Ctrl+G groups (as in Figma or Illustrator); the grid toggle
+            // is Ctrl+M (m for map), so one key never means two things.
             if i.consume_key(cmd, Key::G) {
-                acts.push(if groupable {
-                    Action::GroupSelection
-                } else {
-                    Action::ToggleGrid
-                });
+                acts.push(Action::GroupSelection);
+            }
+            if i.consume_key(cmd, Key::M) {
+                acts.push(Action::ToggleGrid);
             }
             if i.consume_key(cmd, Key::F) {
                 acts.push(Action::ShowFind);

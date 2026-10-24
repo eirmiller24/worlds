@@ -169,7 +169,8 @@ Tests and local runs write reference shots to `crates/worlds-editor/screenshots/
 | Ctrl+L | the Levels pane in front, its search box focused (see "The Levels pane") |
 | Ctrl+P | command palette (fuzzy), including New level, Delete level, Crop level to content, New world…, Rename world…, Delete world…, New / Duplicate / Close viewport, Link cameras, Bookmark this view… and every bookmark |
 | Ctrl+O, Ctrl+R (F5) | open, reload |
-| Ctrl+G, Ctrl+Shift+G | group the selected entities and annotations (one level's) as one object group / ungroup the selection's groups (see "Object groups"); Ctrl+G with no entity or annotation selected toggles the grid, as before |
+| Ctrl+G, Ctrl+Shift+G | group the selected entities and annotations (one level's) as one object group / ungroup the selection's groups (see "Object groups") |
+| Ctrl+M | toggle the grid |
 | Ctrl+Shift+1..9 | jump to camera bookmark 1..9 in the focused map tab (see "Map tabs and bookmarks") |
 | Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, Ctrl+S | undo, redo (the toolbar tooltips name the entry: "Undo Paint collision"), save |
 
