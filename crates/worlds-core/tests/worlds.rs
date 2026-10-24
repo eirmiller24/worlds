@@ -236,6 +236,7 @@ fn move_level_to_world_keeps_the_level_and_its_links() {
             level: s("crevasse"),
             world: s("dungeon"),
             world_px: Some([64, 32]),
+            keep_layout: false,
         },
     );
     assert_eq!(
@@ -270,6 +271,7 @@ fn move_level_to_world_keeps_the_level_and_its_links() {
             level: s("crevasse"),
             world: s("dungeon"),
             world_px: Some([0, 0]),
+            keep_layout: false,
         },
     );
     assert!(matches!(changes[..], [Change::LevelMeta { .. }]));
@@ -278,6 +280,7 @@ fn move_level_to_world_keeps_the_level_and_its_links() {
             level: s("crevasse"),
             world: s("dungeon"),
             world_px: None,
+            keep_layout: false,
         })
         .unwrap()
         .changes
@@ -304,6 +307,7 @@ fn saving_moves_world_directories_and_old_projects_stay_byte_for_byte() {
         level: s("shaft"),
         world: s("dungeon"),
         world_px: None,
+        keep_layout: false,
     })
     .unwrap();
     save_dirty(&mut p, dir).unwrap();
@@ -410,6 +414,7 @@ fn duplicate_level_into_another_world() {
         level: s("shaft"),
         world: s("dungeon"),
         world_px: None,
+        keep_layout: false,
     })
     .unwrap();
     let src = p.level("crevasse").unwrap().clone();

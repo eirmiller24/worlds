@@ -536,6 +536,7 @@ fn duplicate_and_move_to_another_world_keep_the_void() {
             level: s("crevasse_b"),
             world: s("caves"),
             world_px: Some([0, 0]),
+            keep_layout: false,
         },
     );
     let w = p.world("caves").unwrap();

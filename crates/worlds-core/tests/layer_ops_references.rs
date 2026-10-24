@@ -472,6 +472,7 @@ fn references_move_with_the_content_on_a_resize_and_survive_delete() {
         .apply(Command::DeleteLevel {
             world: s("main"),
             level: s("crevasse"),
+            keep_layout: false,
         })
         .unwrap();
     p.apply(a.inverse).unwrap();
@@ -716,6 +717,7 @@ fn duplicate_layer_copies_into_every_world() {
         level: s("crevasse"),
         world: s("caves"),
         world_px: None,
+        keep_layout: false,
     })
     .unwrap();
     check(

@@ -13,10 +13,12 @@ pub mod defs;
 pub mod entities;
 pub mod fields;
 pub mod find;
+pub mod groups;
 pub mod history;
 pub mod import;
 pub mod inspector;
 mod layer_actions;
+pub mod levels;
 pub mod note_inspector;
 pub mod notes;
 pub mod panels;
@@ -81,6 +83,9 @@ pub enum Pane {
     Find,
     /// The undo log ([`history`]): click an entry to go back to it.
     History,
+    /// The levels of the world shown ([`levels`]): thumbnails, search,
+    /// sort, drag to reorder. Tab "Levels", next to the Layers pane.
+    Levels,
 }
 
 /// Default layout. Split fractions are the share of the first (left or
@@ -90,7 +95,7 @@ pub enum Pane {
 pub fn default_dock() -> DockState<Pane> {
     let mut dock = DockState::new(vec![Pane::Viewport(ViewportId::FIRST)]);
     let s = dock.main_surface_mut();
-    let [center, _left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
+    let [center, _left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers, Pane::Levels]);
     let [_layers, _palette] = s.split_below(_left, 0.45, vec![Pane::Palette]);
     let [center, right] = s.split_right(
         center,
@@ -250,6 +255,26 @@ fn parse_ui_file(text: &str) -> serde_json::Result<UiFile> {
     serde_json::from_value(v)
 }
 
+/// Give a layout saved before the Levels pane existed one: a tab next to
+/// the Layers pane, else the Palette, else a split left of the map.
+pub fn add_levels_pane(dock: &mut DockState<Pane>) {
+    if dock.find_tab(&Pane::Levels).is_some() {
+        return;
+    }
+    for next_to in [Pane::Layers, Pane::Palette] {
+        if let Some(p) = dock.find_tab(&next_to)
+            && let Ok(leaf) = dock.leaf_mut(p.node_path())
+        {
+            leaf.append_tab(Pane::Levels);
+            return;
+        }
+    }
+    if let Some((node, _)) = main_viewport(dock) {
+        dock.main_surface_mut()
+            .split_left(node, 0.2, vec![Pane::Levels]);
+    }
+}
+
 /// Bring `pane` to the front of its tab group.
 pub fn show_pane(dock: &mut DockState<Pane>, pane: Pane) {
     if let Some(p) = dock.find_tab(&pane) {
@@ -310,6 +335,9 @@ struct UiFile {
     /// The Palette's Library: shown or not, favorites, collapsed parts.
     #[serde(default)]
     library: crate::library::LibraryView,
+    /// Layer folders' eye, lock, opacity and fold, by folder path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    folders: BTreeMap<String, crate::view::FolderView>,
 }
 
 /// The map tabs of `f`: one per map tab in the dock (`docked`), with the
@@ -493,6 +521,8 @@ pub struct EditorState {
     pub bookmark_focus: bool,
     /// The Library (assemblies) and the Save as assembly dialog.
     pub library: crate::library::LibraryState,
+    /// The Levels pane.
+    pub levels: levels::LevelsState,
 }
 
 impl Default for EditorState {
@@ -529,6 +559,7 @@ impl Default for EditorState {
             bookmark_name: String::new(),
             bookmark_focus: false,
             library: crate::library::LibraryState::default(),
+            levels: levels::LevelsState::default(),
         }
     }
 }
@@ -665,6 +696,7 @@ impl Confirm {
                 Command::DeleteLevel {
                     world: world.clone(),
                     level: level.clone(),
+                    keep_layout: false,
                 },
             ),
             Confirm::DeleteSelection {
@@ -1301,7 +1333,35 @@ impl EditorApp {
             UiStep::Arrange(a) => self.arrange_step(a),
             UiStep::SaveAssembly(s) => self.save_assembly_step(s),
             UiStep::Library(l) => self.library_step(l),
+            UiStep::Levels(l) => self.levels_step(l),
         }
+    }
+
+    /// `"ui": "levels"`: see [`crate::script::LevelsStep`].
+    fn levels_step(&mut self, l: &crate::script::LevelsStep) -> Result<(), String> {
+        let sort = match l.sort.as_deref() {
+            None => levels::Sort::Order,
+            Some(s) => levels::Sort::parse(s)
+                .ok_or_else(|| format!("sort {s:?}: order, name or position"))?,
+        };
+        self.st.levels.search = l.search.clone().unwrap_or_default();
+        self.st.levels.sort = sort;
+        self.st.levels.all_worlds = l.all_worlds.unwrap_or(false);
+        show_pane(&mut self.dock, Pane::Levels);
+        for (slug, frame) in [(&l.select, false), (&l.frame, true)] {
+            let Some(slug) = slug else {
+                continue;
+            };
+            let doc = self.st.doc.as_ref().ok_or("no project open")?;
+            let ix = doc
+                .level_ix(slug)
+                .ok_or_else(|| format!("no level {slug:?}"))?;
+            levels::select(&mut self.st.view, doc, ix);
+            if frame {
+                self.run(Action::FitLevel);
+            }
+        }
+        Ok(())
     }
 
     /// `"ui": "find"`: see [`crate::script::FindStep`].
@@ -2278,6 +2338,7 @@ impl EditorApp {
         add_project_pane(&mut self.dock);
         add_find_pane(&mut self.dock);
         add_history_pane(&mut self.dock);
+        add_levels_pane(&mut self.dock);
         self.restore_viewports(doc, &f);
         if let Some(i) = f
             .active_layer
@@ -2303,6 +2364,7 @@ impl EditorApp {
         self.st.view.references.ui = f.references;
         self.st.view.bookmarks = f.bookmarks;
         self.st.view.library = f.library;
+        self.st.view.folders = f.folders;
         self.last_ui_json = text;
         true
     }
@@ -2404,6 +2466,22 @@ impl EditorApp {
             linked_viewports: view.link,
             bookmarks: view.bookmarks.clone(),
             library: self.st.view.library.clone(),
+            // Only folders the layers still have, and not at their default.
+            folders: self
+                .st
+                .view
+                .folders
+                .iter()
+                .filter(|(p, v)| {
+                    **v != crate::view::FolderView::default()
+                        && doc.project.layers.iter().any(|l| {
+                            l.folder.as_deref().is_some_and(|f| {
+                                crate::view::folder_chain(f).any(|c| c == p.as_str())
+                            })
+                        })
+                })
+                .map(|(p, v)| (p.clone(), *v))
+                .collect(),
         };
         let Ok(json) = serde_json::to_string_pretty(&f) else {
             return;
@@ -2467,8 +2545,12 @@ impl EditorApp {
         entities::refresh(&mut self.st, rev, &ctx);
         self.st.notes.rev = rev;
         self.st.find.rev = rev;
+        self.st.levels.rev = rev;
         if std::mem::take(&mut self.st.find.focus) {
             show_pane(&mut self.dock, Pane::Find);
+        }
+        if std::mem::take(&mut self.st.levels.focus) {
+            show_pane(&mut self.dock, Pane::Levels);
         }
         history::refresh(
             &mut self.st.history,
@@ -3335,6 +3417,10 @@ impl EditorApp {
         let mut acts = Vec::new();
         let on_map = !ctx.egui_wants_keyboard_input() && !self.palette.open;
         let turnable = self.turnable().is_some();
+        // Ctrl+G groups a selection of entities or annotations, else (as
+        // before groups) toggles the grid.
+        let groupable = self.st.view.selection.entities().next().is_some()
+            || self.st.view.selection.notes().next().is_some();
         ctx.input_mut(|i| {
             let cmd = Modifiers::COMMAND;
             if i.consume_key(cmd, Key::P) {
@@ -3359,8 +3445,15 @@ impl EditorApp {
             if i.consume_key(cmd, Key::Z) {
                 acts.push(Action::Undo);
             }
+            if i.consume_key(cmd | Modifiers::SHIFT, Key::G) {
+                acts.push(Action::UngroupSelection);
+            }
             if i.consume_key(cmd, Key::G) {
-                acts.push(Action::ToggleGrid);
+                acts.push(if groupable {
+                    Action::GroupSelection
+                } else {
+                    Action::ToggleGrid
+                });
             }
             if i.consume_key(cmd, Key::F) {
                 acts.push(Action::ShowFind);
@@ -3382,6 +3475,9 @@ impl EditorApp {
                 if i.consume_key(cmd | Modifiers::SHIFT, k) {
                     acts.push(Action::JumpBookmark(n));
                 }
+            }
+            if i.consume_key(cmd, Key::L) {
+                acts.push(Action::ShowLevels);
             }
         });
         if !ctx.egui_wants_keyboard_input() && !self.palette.open {
@@ -3637,6 +3733,24 @@ impl EditorApp {
                         .view
                         .set_status(format!("Forgot bookmark {}", b.name), false);
                 }
+            }
+            Action::GroupSelection | Action::UngroupSelection => {
+                let Some(doc) = &self.st.doc else {
+                    return;
+                };
+                let cmd = if a == Action::GroupSelection {
+                    groups::group_command(doc, &self.st.view)
+                } else {
+                    groups::ungroup_command(doc, &self.st.view)
+                };
+                match cmd.and_then(|c| self.apply_command(c)) {
+                    Ok(()) => self.st.view.entered_group = None,
+                    Err(e) => self.st.view.set_status(e, true),
+                }
+            }
+            Action::ShowLevels => {
+                show_pane(&mut self.dock, Pane::Levels);
+                self.st.levels.focus_search = true;
             }
             Action::DeleteSelection => self.delete_selection(),
             Action::DuplicateSelection => self.duplicate_selection(),
@@ -4250,8 +4364,13 @@ impl EditorApp {
             vp.camera
                 .screen_to_world([vp.size_px[0] * 0.5, vp.size_px[1] * 0.5])
         });
-        let g = doc.project.grid_size.max(1) as f64;
-        let snap = |v: f64| ((v / g).floor() * g) as i64;
+        // On the project grid, or in a grid-vania world on the lattice
+        // cell under the point.
+        let w = &doc.project.worlds[self.st.view.world_ix(doc)];
+        let lattice = w.layout.lattice(doc.project.grid_size);
+        let gx = lattice.map_or(doc.project.grid_size, |c| c[0]).max(1) as f64;
+        let gy = lattice.map_or(doc.project.grid_size, |c| c[1]).max(1) as f64;
+        let snap = |v: f64, g: f64| ((v / g).floor() * g) as i64;
         let mut n = doc.levels.len() + 1;
         let slug = loop {
             let s = format!("level_{n}");
@@ -4262,7 +4381,7 @@ impl EditorApp {
         };
         self.new_level = Some(NewLevelDialog {
             world,
-            at: [snap(at[0]), snap(at[1])],
+            at: [snap(at[0], gx), snap(at[1], gy)],
             slug,
             error: None,
             just_opened: true,
@@ -4326,6 +4445,19 @@ impl EditorApp {
                 d.error = Some(e.to_string());
                 return;
             }
+        };
+        // A grid-vania world's levels are whole lattice cells.
+        let size = match doc
+            .project
+            .world(d.world.as_str())
+            .and_then(|w| w.layout.lattice(doc.project.grid_size))
+        {
+            Some(c) if c[0] % doc.project.grid_size == 0 && c[1] % doc.project.grid_size == 0 => {
+                let g = doc.project.grid_size.max(1);
+                let (cw, ch) = (c[0] / g, c[1] / g);
+                [size[0].div_ceil(cw) * cw, size[1].div_ceil(ch) * ch]
+            }
+            _ => size,
         };
         let mut level = Level::new(slug.clone(), slug.as_str(), size);
         level.world_px = d.at;
@@ -4583,6 +4715,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Project => "Project".into(),
             Pane::Find => "Find".into(),
             Pane::History => "History".into(),
+            Pane::Levels => "Levels".into(),
         }
     }
 
@@ -4637,6 +4770,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Project => project_pane::pane(ui, self.st),
             Pane::Find => find::pane(ui, self.st),
             Pane::History => history::pane(ui, self.st),
+            Pane::Levels => levels::pane(ui, self.st),
         }
     }
 
@@ -4970,6 +5104,37 @@ mod tests {
         assert_eq!(
             d.find_tab(&Pane::Find).unwrap().node_path(),
             d.find_tab(&Pane::Notes).unwrap().node_path()
+        );
+    }
+
+    #[test]
+    fn old_layouts_get_the_levels_pane_next_to_the_layers() {
+        let mut old = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
+        let s = old.main_surface_mut();
+        let [_, left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
+        s.split_below(left, 0.45, vec![Pane::Palette]);
+        add_levels_pane(&mut old);
+        let layers = old.find_tab(&Pane::Layers).unwrap();
+        let levels = old.find_tab(&Pane::Levels).unwrap();
+        assert_eq!(
+            layers.node_path(),
+            levels.node_path(),
+            "a tab next to Layers"
+        );
+        add_levels_pane(&mut old);
+        assert_eq!(
+            old.iter_all_tabs()
+                .filter(|(_, t)| **t == Pane::Levels)
+                .count(),
+            1
+        );
+        let mut bare = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
+        add_levels_pane(&mut bare);
+        assert!(bare.find_tab(&Pane::Levels).is_some());
+        let d = default_dock();
+        assert_eq!(
+            d.find_tab(&Pane::Levels).unwrap().node_path(),
+            d.find_tab(&Pane::Layers).unwrap().node_path()
         );
     }
 

@@ -52,6 +52,13 @@
 //! adds a reference image as "Add reference image…" does
 //! ([`ReferenceStep`]) and shows the History pane ([`HistoryStep`]).
 //!
+//! ```json
+//! { "ui": "levels", "search": "forest", "sort": "name", "all_worlds": true, "select": "crevasse" }
+//! ```
+//!
+//! shows the Levels pane with that search and sort and clicks a level
+//! ([`LevelsStep`]).
+//!
 //! An `entity` gesture places with the entity tool: `type` and `fields` set
 //! the brush first, `ctrl` holds Ctrl (pixel placement), `shift` resizes,
 //! `alt` samples:
@@ -265,6 +272,9 @@ pub enum UiStep {
     SaveAssembly(SaveAssemblyStep),
     /// `"ui": "library"`: the Palette's Library, and arming an assembly.
     Library(LibraryStep),
+    /// `"ui": "levels"`: the Levels pane with a search, a sort, every
+    /// world, a click on a level.
+    Levels(LevelsStep),
 }
 
 /// `{ "ui": "import_project", "source": dir, "selection"?, "policy"?,
@@ -287,6 +297,28 @@ pub struct ImportStep {
     pub search: Option<String>,
     #[serde(default)]
     pub apply: bool,
+}
+
+/// `{ "ui": "levels", "search"?: text, "sort"?: "order" | "name" |
+/// "position", "all_worlds"?: bool, "select"?: slug, "frame"?: slug }`: the
+/// Levels pane in front with that search (default none), sort (default
+/// order) and world grouping (default the focused map tab's world only);
+/// `select` clicks that level's row (it becomes active and selected),
+/// `frame` double clicks it (selects it and frames it in the focused map
+/// tab). An unknown sort or level is an error.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LevelsStep {
+    #[serde(default)]
+    pub search: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub all_worlds: Option<bool>,
+    #[serde(default)]
+    pub select: Option<String>,
+    #[serde(default)]
+    pub frame: Option<String>,
 }
 
 /// `{ "ui": "find", "query": "...", "kind"?: "all" | "entities" |

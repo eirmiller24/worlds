@@ -27,6 +27,9 @@ pub struct LayerDef {
     /// or be a multiple of the project grid. An `auto` layer always uses its
     /// source's grid (setting a different one is a validation problem).
     pub grid_size: Option<u32>,
+    /// The folder the Layers pane shows it in: a `/` path (`Decor/Back`),
+    /// like an entity category. Editor organisation; never exported.
+    pub folder: Option<String>,
     pub kind: LayerKind,
 }
 
@@ -104,6 +107,7 @@ impl LayerDef {
             doc: None,
             opacity: 1.0,
             grid_size: None,
+            folder: None,
             kind,
         }
     }
@@ -300,6 +304,9 @@ struct LayerDefRepr {
     /// multiple of the project grid; an auto layer uses its source's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     grid_size: Option<u32>,
+    /// The Layers pane folder, a `/` path (`Decor/Back`). Never exported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     // Kind-specific keys are `Option`s so a key that is present at its
     // default value still counts as present (see `present`).
     /// int_grid: the values cells can hold.
@@ -431,6 +438,7 @@ impl TryFrom<LayerDefRepr> for LayerDef {
             doc: r.doc,
             opacity: r.opacity,
             grid_size: r.grid_size,
+            folder: r.folder,
             kind,
         })
     }
@@ -445,6 +453,7 @@ impl From<LayerDef> for LayerDefRepr {
             doc: l.doc,
             opacity: l.opacity,
             grid_size: l.grid_size,
+            folder: l.folder,
             values: None,
             groups: None,
             derived: None,

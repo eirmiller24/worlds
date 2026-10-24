@@ -749,6 +749,21 @@ impl Viewport {
                 draw_grid(&painter, &level_wrect(doc, ix), &view, g, &to_screen);
             }
         }
+        // A grid-vania world: its lattice, from the world origin.
+        if let Some(cell) = doc
+            .project
+            .worlds
+            .get(cx.view.world_ix(doc))
+            .and_then(|w| w.layout.lattice(doc.project.grid_size))
+        {
+            draw_lattice(
+                &painter,
+                &view,
+                [cell[0] as f64, cell[1] as f64],
+                cam.zoom,
+                &to_screen,
+            );
+        }
         let outline = Stroke::new(1.0, Color32::from_black_alpha(160));
         // A level's outline: its box, or the polygon of a non-rectangular
         // level's cells.
@@ -1166,7 +1181,14 @@ impl Viewport {
             && cx.view.paste.is_none()
             && let Some(ix) = level_under
         {
-            self.pending_fit = Some(Fit::Level(ix));
+            // On a group member, a double click enters the group (the
+            // member alone selected); elsewhere it frames the level.
+            let member = pointer_world
+                .and_then(|wp| select_item_at(doc, cx.view, level_under, wp, cam.zoom))
+                .filter(|item| crate::app::groups::enter(doc, cx.view, item));
+            if member.is_none() {
+                self.pending_fit = Some(Fit::Level(ix));
+            }
         }
         // The paste ghost where a click would land it.
         if let Some(p) = cx.view.paste.as_mut() {
@@ -2754,10 +2776,14 @@ pub fn select_press_alt(
         }
         let was_selected = view.selection.contains(&item);
         if !was_selected {
+            // A group member brings its group (unless the group is entered).
+            let items = crate::app::groups::click_items(doc, view, item);
             if p.add {
-                view.selection.add(item);
+                for i in items {
+                    view.selection.add(i);
+                }
             } else {
-                view.selection.set([item]);
+                view.selection.set(items);
             }
         }
         return Some((level.unwrap_or(carrier), Grab::Selection { was_selected }));
@@ -3826,6 +3852,40 @@ fn draw_grid(
         y += g;
     }
 }
+
+/// A grid-vania world's lattice over the visible rect: lines every `cell`
+/// world px from the origin, every 2nd, 4th, ... when cells are under
+/// [`LATTICE_MIN_PX`] screen px apart.
+fn draw_lattice(
+    painter: &egui::Painter,
+    visible: &WRect,
+    cell: [f64; 2],
+    zoom: f64,
+    to_screen: &dyn Fn([f64; 2]) -> Pos2,
+) {
+    let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 170, 255, 70));
+    for (axis, &c) in cell.iter().enumerate() {
+        let mut step = c.max(1.0);
+        while step * zoom < LATTICE_MIN_PX {
+            step *= 2.0;
+        }
+        let (lo, hi) = (visible.min[axis], visible.max[axis]);
+        let (olo, ohi) = (visible.min[1 - axis], visible.max[1 - axis]);
+        let mut v = (lo / step).ceil() * step;
+        while v <= hi {
+            let (a, b) = if axis == 0 {
+                ([v, olo], [v, ohi])
+            } else {
+                ([olo, v], [ohi, v])
+            };
+            painter.line_segment([to_screen(a), to_screen(b)], stroke);
+            v += step;
+        }
+    }
+}
+
+/// The least screen distance between two lattice lines drawn.
+const LATTICE_MIN_PX: f64 = 12.0;
 
 #[cfg(test)]
 mod label_tests {

@@ -259,16 +259,19 @@ impl Project {
         level: Slug,
         world: Slug,
         world_px: Option<[i64; 2]>,
+        keep_layout: bool,
     ) -> Result<Applied> {
         let (from, li) = self.find_level(&level)?;
         let to = self.find_world(&world)?;
         let old_px = self.worlds[from].levels[li].world_px;
         let px = world_px.unwrap_or(old_px);
         let from_slug = self.worlds[from].slug.clone();
+        let strip = self.worlds[from].layout.is_strip() || self.worlds[to].layout.is_strip();
         let inverse = Command::MoveLevelToWorld {
             level: level.clone(),
             world: from_slug.clone(),
             world_px: Some(old_px),
+            keep_layout: strip,
         };
         if from == to {
             if px == old_px {
@@ -284,20 +287,33 @@ impl Project {
                 }],
             });
         }
+        let (old_from, old_to) = (
+            self.worlds[from].level_order.clone(),
+            self.worlds[to].level_order.clone(),
+        );
         let mut moved = self.worlds[from].levels.remove(li);
         moved.world_px = px;
-        let levels = &mut self.worlds[to].levels;
-        let i = levels.partition_point(|l| l.slug < level);
-        levels.insert(i, moved);
-        Ok(Applied {
-            inverse,
-            changes: vec![
-                Change::LevelDeleted {
-                    world: from_slug,
-                    level: level.clone(),
-                },
-                Change::LevelCreated { world, level },
-            ],
-        })
+        // Last in the destination's level order when it keeps one.
+        self.worlds[to].levels.push(moved);
+        let mut changes = vec![
+            Change::LevelDeleted {
+                world: from_slug.clone(),
+                level: level.clone(),
+            },
+            Change::LevelCreated {
+                world: world.clone(),
+                level,
+            },
+        ];
+        changes.extend(self.sync_level_order(from));
+        changes.extend(self.sync_level_order(to));
+        let inverse = self.with_level_order_restore(from, inverse, old_from);
+        let inverse = self.with_level_order_restore(to, inverse, old_to);
+        let applied = Applied { inverse, changes };
+        if keep_layout {
+            return Ok(applied);
+        }
+        let applied = self.relayout(&from_slug, applied)?;
+        self.relayout(&world, applied)
     }
 }

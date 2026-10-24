@@ -254,8 +254,9 @@ Replace a level's `tags` (stored as given, order kept; an empty list removes the
 { "op": "delete_level", "world": "main", "level": "shaft" }
 ```
 
-- **Inverse:** `create_level` with the full level, content included, and `restore: true`, so the level comes back byte for byte even if it held a validation problem a fresh `create_level` would refuse.
-- **Changes:** `level_deleted` (the whole level directory is dirty, and saving removes its files).
+- **Inverse:** `create_level` with the full level, content included, and `restore: true`, so the level comes back byte for byte even if it held a validation problem a fresh `create_level` would refuse; then `reorder_levels` with the old list (`restore: true`) when the world's [level order](#reorder_levels) changed.
+- **Changes:** `level_deleted` (the whole level directory is dirty, and saving removes its files), and `world_meta` when the level order changed.
+- In a [strip layout](#set_world_layout) the levels after it move up (see there). `keep_layout: true` leaves them where they are; inverses set it.
 
 ### duplicate_level
 
@@ -266,7 +267,8 @@ Copy a level under a new `slug`: its `level.json` (fields, tags, per-layer rule 
 ```
 
 - **Inverse:** `delete_level` of the copy.
-- **Changes:** `level_created`.
+- **Changes:** `level_created`, and `world_meta` when the world keeps a [level order](#reorder_levels) (the copy goes last in it).
+- [Object groups](#set_group) are copied with their ids, their members following the copies. In a strip layout the copy takes its place at the end of the strip.
 
 ### set_level_void
 
@@ -817,8 +819,9 @@ Move a level to another world. It keeps its slug, id and all its content; `world
 { "op": "move_level_to_world", "level": "wing", "world": "underdark", "world_px": [0, 0] }
 ```
 
-- **Inverse:** `move_level_to_world` back, with the old `world_px`.
-- **Changes:** `level_deleted` in the old world, then `level_created` in the new one (both level directories are dirty; saving moves the files). Within one world: `level_meta` part `position`.
+- **Inverse:** `move_level_to_world` back, with the old `world_px`, then `reorder_levels` (`restore: true`) for each world whose [level order](#reorder_levels) changed.
+- **Changes:** `level_deleted` in the old world, then `level_created` in the new one (both level directories are dirty; saving moves the files), and `world_meta` for a world whose level order changed (the level goes last in the new world's). Within one world: `level_meta` part `position`.
+- A strip layout in either world puts its levels back in their places (see [set_world_layout](#set_world_layout)); `keep_layout: true` leaves them, and inverses set it.
 
 ### rename_world
 
@@ -908,6 +911,58 @@ Replace a reference wholesale; `reference.id` must equal `id`.
 
 - **Inverse:** `add_reference` at the old scope and index. **Changes:** `reference`.
 
+## Level order, world layouts and object groups
+
+### reorder_levels
+
+A world's levels have an order: the Levels pane lists them in it, PgUp and PgDn step through it, the export writes them in it, and strip layouts lay them out in it. It is `world.json` `levels` (see [format.md](format.md#worldsltworldgtworldjson)); a world without the list has its levels in slug order. `order` lists every level of the world once. `[]` drops the list. `restore: true` takes the list as given, even one naming unknown levels or leaving some out (validation reports those), and moves nothing; edits leave it off, inverses set it.
+
+Once a world has a list (or a strip layout), the level commands keep it: `create_level`, `duplicate_level` and `move_level_to_world` put the new level last, `delete_level` and moving a level away take it out, `rename_level` renames it in place. A world without one stays without one, so old projects save byte for byte.
+
+```json
+{ "op": "reorder_levels", "world": "main", "order": ["crevasse_b", "crevasse"] }
+```
+
+- **Inverse:** `reorder_levels` with the old list, `restore: true` (behind the inverses of the moves, in a strip layout).
+- **Changes:** `world_meta`; in a strip layout also `level_meta` part `position` per level that moved.
+
+### set_world_layout
+
+How the tools place a world's levels (`world.json` `layout`, see [format.md](format.md#world-layouts)): `free` (they go where they are put), `horizontal` or `vertical` (a strip in the level order, `gap` pixels apart, from the world origin), or `grid_vania` (they snap to a lattice of `cell` pixels and must be whole cells). `world_px` stays the stored position in every mode; the game and the export never see the mode.
+
+In a strip layout, `reorder_levels`, `create_level`, `duplicate_level`, `resize_level`, `delete_level` and `move_level_to_world` end by moving every level of the world that isn't where the strip puts it: `move_level`s in the same command result, so one undo entry. Switching to a strip writes the world's level order when it has none (so renaming a level never reorders the strip) and moves the levels at once. Grid vania moves nothing: the editor snaps drags and new levels to the lattice, and validation reports a level off it. A `cell` of 0 is refused; one that isn't a whole number of project cells is left to validation. `restore: true` moves nothing and writes no order (inverses set it).
+
+```json
+{ "op": "set_world_layout", "world": "main", "layout": { "mode": "horizontal", "gap": 32 } }
+```
+
+- **Inverse:** `set_world_layout` with the old layout and `restore: true`, then `reorder_levels` (`restore: true`) when the level order was written; behind the inverses of the moves.
+- **Changes:** `world_meta`; `level_meta` part `position` per level that moved.
+
+### set_group
+
+An object group is a named set of a level's entities and annotations (`level.json` `groups`, see [format.md](format.md#object-groups)) that the editor selects and moves together: a puzzle, an encounter. Tile stacks have no id and are never members. `group` is the entry as in the file; one with an `id` the level has replaces it in place. `index` is the position of a new group, or where to move an existing one (default: the end, or where it is). Members aren't checked: a member the level doesn't have is a validation problem, never a refusal, so undo can always put a group back.
+
+Deleting a member doesn't change its group on its own. The editor's, the API's and the MCP server's deletes add the `set_group` (or `remove_group`, for a group left empty) that drops it, in the same batch: `worlds_core::command::groups::drop_members(project, ids)` builds them.
+
+```json
+{ "op": "set_group", "level": "crevasse",
+  "group": { "id": "gapgroup22", "name": "Gap puzzle", "members": ["btncrev222", "notecrev22"] } }
+```
+
+- **Inverse:** `remove_group` for a new group; `set_group` with the old entry and index otherwise.
+- **Changes:** `level_meta` part `groups`.
+
+### remove_group
+
+Remove a group; its members stay where they are. An unknown id is refused (`invalid`).
+
+```json
+{ "op": "remove_group", "level": "crevasse", "id": "gapgroup22" }
+```
+
+- **Inverse:** `set_group` with the entry at its old index. **Changes:** `level_meta` part `groups`.
+
 ## batch
 
 Apply several commands as one: all of them or none. If command `i` fails, the ones before it are undone in reverse and the error is `batch "<label>", command <i>: <why>`. Batches nest. Inverses are built to always apply to the state they came from, so the rollback can't fail in practice; if one is refused anyway, the rest are still applied, every file the batch touched is marked dirty, and the error is `rollback` (it names the batch error and the refused inverses). Treat the project as changed after a `rollback` error. An agent's request and an editor gesture are each one batch, and one undo entry.
@@ -931,7 +986,7 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | --- | --- | --- |
 | `grid` | `world`, `level`, `layer`, `rect` | `worlds/<world>/levels/<level>/<layer>.json` |
 | `tiles` | `world`, `level`, `layer`, `rect` | same |
-| `level_meta` | `world`, `level`, `part`: `position`, `size`, `name`, `depth`, `bg_color`, `fields`, `tags`, `all` or `void` | `.../<level>/level.json` |
+| `level_meta` | `world`, `level`, `part`: `position`, `size`, `name`, `depth`, `bg_color`, `fields`, `tags`, `all`, `void` or `groups` (object groups) | `.../<level>/level.json` |
 | `level_created` | `world`, `level` | the directory `.../levels/<level>` (every file in it) |
 | `level_deleted` | `world`, `level` | the directory (saving deletes its files) |
 | `level_renamed` | `world`, `from`, `to` | both directories (`change.files()` lists them) |
@@ -948,7 +1003,7 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | `world_created` | `world` | the directory `worlds/<world>` (every file in it) |
 | `world_removed` | `world` | the directory (saving deletes its files) |
 | `world_renamed` | `from`, `to` | both world directories (saving moves the files) |
-| `world_meta` | `world` | `worlds/<world>/world.json`; the world's name changed |
+| `world_meta` | `world` | `worlds/<world>/world.json`; the world's name, level order or layout changed |
 | `reference` | `world`, `level` (`null` at world scope), `id` | `worlds/<world>/world.json` or `.../<level>/level.json`; a reference image was added, replaced or removed |
 
 Rects are in cells of the layer's grid and cover the cells whose value or tile stack changed. A tile drawn from a cell can overhang it; the renderer knows tile sizes.
@@ -1054,4 +1109,4 @@ Mirroring and rotating are not commands either: `worlds_core::transform` works t
 
 - **`transform::fragment(project, fragment, flip)`** turns a fragment about its own box (the paste ghost, an assembly before it lands): grid cells and tile stacks move and each tile's flip composes with the turn; an entity moves so that its box (its size kept, not turned) is centered where the turned box's center lands; annotation geometry turns (a rect region stays a rect). Entity field values never change.
 - **`transform::selection(project, selection, flip)`** turns a [copy selection](api.md#clipboard-copy-and-paste) in place about its bounding box (around what a copy would take: grid cells, tiles (a tile bigger than its cell with its whole box), entity boxes and annotation geometry, rounded out to whole cells of the grid and tiles layers involved; entities and annotations alone turn about their exact box, so mirroring one entity leaves it where it is; a rotation keeps the box's center): one `batch` of a `paint_cells` per grid layer (the old cells emptied, then the turned ones written), a `set_tiles` per tiles layer (the old stacks in `clear`, the turned ones in `tiles`), a `move_entity` per entity (same id, size and fields) and an `update_note` per annotation, labelled like `Mirror 4 items left-right` or `Rotate 4 items a quarter turn`. Cells and stacks that would leave the level are dropped, and the plan's notes say how many; an entity that would leave it refuses the whole transform. **A transform never changes an entity's field values**: when a turned entity's type has an `enum` field with at least two values that look like directions (`left`, `right`, `up`, `down`, `north`, ..., also as a part of a slug like `facing_left`), the plan's notes say so, so the editor can point it out.
-- **`transform::arrange_levels(project, levels, op)`** arranges two or more levels of one world: one `batch` of `move_level`, labelled like `Align 3 levels left`, leaving out levels that don't move. `op` is `align_left`, `align_right`, `align_top`, `align_bottom` (onto the outermost edge), `align_center_x`, `align_center_y` (onto the first level's center), `distribute_x`, `distribute_y` (equal gaps between neighbours, the outer two stay), or `butt_left`, `butt_right`, `butt_up`, `butt_down` (close the gaps in that direction: the level furthest that way stays, each next one goes against the previous one). Positions that a center or a distribution puts between cells are rounded to the project grid.
+- **`transform::arrange_levels(project, levels, op)`** arranges two or more levels of one world: one `batch` of `move_level`, labelled like `Align 3 levels left`, leaving out levels that don't move. `op` is `align_left`, `align_right`, `align_top`, `align_bottom` (onto the outermost edge), `align_center_x`, `align_center_y` (onto the first level's center), `distribute_x`, `distribute_y` (equal gaps between neighbours, the outer two stay), or `butt_left`, `butt_right`, `butt_up`, `butt_down` (close the gaps in that direction: the level furthest that way stays, each next one goes against the previous one). Positions that a center or a distribution puts between cells are rounded to the project grid. In a `horizontal` or `vertical` world layout it is refused (the level order places those levels, see `reorder_levels`); in `grid_vania` every resulting position is snapped to the world's lattice.

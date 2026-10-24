@@ -87,7 +87,7 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `paste_fragment` | `edit.paste` |
 | `duplicate_level` | `level.duplicate` |
 | `create_world` | `world.create` |
-| `edit_worlds` | `world.rename` per rename, `world.reorder`, `world.remove` per world (`confirm` passed through), in that order (several in one batch) |
+| `edit_worlds` | `world.rename` per rename, `world.reorder`, `world.set_layout` per layout, `world.remove` per world (`confirm` passed through), in that order (several in one batch) |
 | `import_project` | `project.import_plan`; then, unless `dry_run`, `project.import` with its `plan_id` (on `stale_rev` the plan is made again) |
 | `move_level` | `level.move_to_world` when `world` is given, else `level.move` |
 | `add_reference` | `reference.add` |
@@ -98,6 +98,8 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `save_assembly` | `edit.save_assembly` (the copy arguments are its `selection`) |
 | `place_assembly` | `edit.place_assembly` (`cell` is its `origin`) |
 | `arrange_levels` | `level.arrange` |
+| `reorder_levels` | `level.reorder` |
+| `edit_groups` | `group.list` (for `add` and `remove_members`, the group as it is), then `group.create` per entry of `create`, `group.update` per entry of `update`, `add` and `remove_members`, `group.remove` for `remove`, in that order (several in one batch) |
 
 ### describe_project
 
@@ -763,7 +765,7 @@ Create a new, empty world: a separate map with its own levels, world notes and g
 ### edit_worlds
 
 ```text
-Rename, reorder or remove worlds, all in one undo entry, applied in this order: rename ([{ world, slug?, name? }]: a new slug moves the world's directory and every reference follows; a new display name, "" to remove it), order (every world's slug once, in the order the editor and describe_project list them), remove (world slugs). Removing a world removes its levels, world notes and guide groups with it, so it needs "confirm": true unless the world is empty; the last world can't be removed. To keep a level, move_level it to another world first.
+Rename, reorder, lay out or remove worlds, all in one undo entry, applied in this order: rename ([{ world, slug?, name? }]: a new slug moves the world's directory and every reference follows; a new display name, "" to remove it), order (every world's slug once, in the order the editor and describe_project list them), layout ([{ world, mode, gap?, cell? }]: how the world places its levels; mode "free" (anywhere, the default), "horizontal" or "vertical" (a strip: levels sit side by side in the world's level order from [0, 0], gap pixels apart, and move back into place whenever a level is reordered, created, duplicated, resized or deleted; reorder_levels changes the order), or "grid_vania" (levels snap to a lattice of cell [w, h] pixels, a multiple of the grid, default 16 cells; bake_and_validate reports a level off it)), remove (world slugs). Removing a world removes its levels, world notes and guide groups with it, so it needs "confirm": true unless the world is empty; the last world can't be removed. To keep a level, move_level it to another world first.
 ```
 
 ```json
@@ -773,6 +775,13 @@ Rename, reorder or remove worlds, all in one undo entry, applied in this order: 
       "properties": { "world": { "type": "string" }, "slug": { "type": "string" }, "name": { "type": "string" } },
       "required": ["world"], "additionalProperties": false } },
     "order": { "type": "array", "items": { "type": "string" }, "description": "Every world's slug, once each." },
+    "layout": { "type": "array", "items": { "type": "object",
+      "properties": {
+        "world": { "type": "string" },
+        "mode": { "type": "string", "enum": ["free", "horizontal", "vertical", "grid_vania"] },
+        "gap": { "type": "integer", "minimum": 0, "description": "Strips: pixels between neighbours. Default 0." },
+        "cell": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 2, "maxItems": 2, "description": "Grid vania: the lattice cell [w, h] in pixels." } },
+      "required": ["world", "mode"], "additionalProperties": false } },
     "remove": { "type": "array", "items": { "type": "string" } },
     "confirm": { "type": "boolean", "default": false, "description": "Needed to remove a world that has levels, notes or guide groups." },
     "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
@@ -1001,13 +1010,61 @@ Give a level a non-rectangular shape (an L, a T, a U, a corridor with a side roo
   "required": ["level", "void"], "additionalProperties": false }
 ```
 
+### reorder_levels
+
+```text
+Set the order of a world's levels, as one undo entry: order lists every level of the world once (describe_project lists each world's levels in their current order). The editor's Levels pane, its PgUp/PgDn and the game export follow this order, and in a world with a horizontal or vertical layout (edit_worlds) the levels move to their new places in the strip. world defaults to the world of the first level listed.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "order": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Every level slug of the world, once each, in the new order." },
+    "world": { "type": "string", "description": "World slug. Default: the first level's world." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["order"], "additionalProperties": false }
+```
+
+### edit_groups
+
+```text
+Create, change or remove object groups in a level, all in one undo entry. An object group is a named set of the level's entities and annotations (by id) that the user selects and moves together in the editor: a puzzle's button, door and hint note, an encounter. It changes nothing in the game. create: [{ members, name?, id? }] (members leave any group they were in: an object is in one group; returns the new ids). update: [{ id, name?, members? }] (members replaces the list). add: [{ id, members }] adds members to a group, remove_members: [{ id, members }] takes them out. remove: group ids (the members stay). Removing an entity or annotation with remove_entity or remove_note already takes it out of its group. read_level with format "json" shows a level's groups under level.groups.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "level": { "type": "string", "description": "Level slug." },
+    "create": { "type": "array", "items": { "type": "object",
+      "properties": {
+        "members": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "name": { "type": "string" },
+        "id": { "type": "string", "description": "A 10-character id. Default: a fresh one." } },
+      "required": ["members"], "additionalProperties": false } },
+    "update": { "type": "array", "items": { "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "members": { "type": "array", "items": { "type": "string" } } },
+      "required": ["id"], "additionalProperties": false } },
+    "add": { "type": "array", "items": { "type": "object",
+      "properties": { "id": { "type": "string" }, "members": { "type": "array", "items": { "type": "string" }, "minItems": 1 } },
+      "required": ["id", "members"], "additionalProperties": false } },
+    "remove_members": { "type": "array", "items": { "type": "object",
+      "properties": { "id": { "type": "string" }, "members": { "type": "array", "items": { "type": "string" }, "minItems": 1 } },
+      "required": ["id", "members"], "additionalProperties": false } },
+    "remove": { "type": "array", "items": { "type": "string" } },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level"], "additionalProperties": false }
+```
+
 ## Results by tool
 
 | Tool | Result |
 | --- | --- |
 | `describe_project` | the `project.describe` result. In headless mode only, when a Worlds editor session that ended without saving left an autosave, it adds `autosave: { unrecovered: true, pid, written, files, last_label, message }` (`files` the number of files with unsaved edits, `message` the warning in words; an unreadable manifest gives `files: 0` and nulls), looked up again on every call, and also given as a notice when the project is loaded. Not reported while an editor holds the project (its autosave is its own) |
 | `read_level` | text: the [text view](format.md#text-view) (done notes left out unless asked; derived layers drawn by their effective grids); json: the `level.get` result (with `derived`) |
-| write tools (`create_level`, `paint`, `place_tiles`, `clear_tiles`, `place_entity`, `update_entity`, `remove_entity`, `add_note`, `resolve_note`, `update_note`, `remove_note`, `set_guide_group`, `tag_levels`, `edit_rules`, `edit_definitions`, `resize_level`, `crop_level`, `create_world`, `edit_worlds`, `move_level`, `add_reference`, `update_reference`, `remove_reference`, `layer_operation`, `shape_level`) | the write result above; `create_level`, `place_entity`, `add_note` and `add_reference` add `id`. A reference image's change is `{ "change": "reference", "world", "level", "id" }` (`level` null at world scope). For `edit_definitions`, `changes` has a `def` per definition it wrote (`{ "change": "def", "kind": "entity", "slug": "locked_door" }`), `def_renamed` for a renamed type or enum, `project` key `level_fields` for level fields and the setting's key for each `set_project` setting, and an `entity` or `level_meta` change per stored value a rename or removal rewrote. For `edit_rules`, `set_level_states` adds a `layer_state` change per level. For `create_level` with `replace`, the `level.replace` changes (`level_meta` part `all`, then a change per layer, entity and note before or after). For `move_level` into another world, `level_deleted` in the old world and `level_created` in the new one; `create_world` and `edit_worlds` report `world_created`, `world_renamed`, `world_meta`, `world_removed` (after a `level_deleted` per level and a `note` per world note) and `project` key `worlds` (the order) |
+| write tools (`create_level`, `paint`, `place_tiles`, `clear_tiles`, `place_entity`, `update_entity`, `remove_entity`, `add_note`, `resolve_note`, `update_note`, `remove_note`, `set_guide_group`, `tag_levels`, `edit_rules`, `edit_definitions`, `resize_level`, `crop_level`, `create_world`, `edit_worlds`, `move_level`, `add_reference`, `update_reference`, `remove_reference`, `layer_operation`, `shape_level`, `reorder_levels`, `edit_groups`) | the write result above; `create_level`, `place_entity`, `add_note` and `add_reference` add `id`. A reference image's change is `{ "change": "reference", "world", "level", "id" }` (`level` null at world scope). For `edit_definitions`, `changes` has a `def` per definition it wrote (`{ "change": "def", "kind": "entity", "slug": "locked_door" }`), `def_renamed` for a renamed type or enum, `project` key `level_fields` for level fields and the setting's key for each `set_project` setting, and an `entity` or `level_meta` change per stored value a rename or removal rewrote. For `edit_rules`, `set_level_states` adds a `layer_state` change per level. For `create_level` with `replace`, the `level.replace` changes (`level_meta` part `all`, then a change per layer, entity and note before or after). For `move_level` into another world, `level_deleted` in the old world and `level_created` in the new one; `create_world` and `edit_worlds` report `world_created`, `world_renamed`, `world_meta`, `world_removed` (after a `level_deleted` per level and a `note` per world note) and `project` key `worlds` (the order). `reorder_levels` and an `edit_worlds` `layout` report `world_meta` and a `level_meta` part `position` per level a strip moved; `edit_groups` reports `level_meta` part `groups` and adds `ids` (the created groups' ids, in order) |
 | `find_entities` | `{ rev, entities }` |
 | `list_notes` | `{ rev, notes }`, each `{ scope, note }` as in `notes.list` |
 | `preview_rule` | `{ rev, rule, level, grid, pass, count, cells, matched_count, matched, occupied, picture, regions?, write?, other_grids?, rules?, truncated? }`: `grid` the int_grid layer the rule matched on (from `rules.preview`: a region rule's `region.grid`), `pass` the rule's pass (the first rule's for a reference), `cells` where it fires, `matched` where it matches but doesn't fire, `occupied` the part of `matched` skipped because the footprint was taken (`avoid_overlap`), and `picture` that layer's rows (effective values on a derived layer) with `@` where it fires and `?` where it is blocked (a cell where one rule of a reference fires and another is blocked reads `@`). A region rule adds `regions` and a write rule `write`, as `rules.preview` gives them. For a template reference, `count`, `cells`, `matched` and `occupied` cover all its rules and `rules` lists each one's `{ rule, pass, grid, count, matched_count }`; when its rules match on more than one layer, `picture` marks only the cells of the rules on `grid`, and `other_grids` is `[{ grid, picture }]` for each other layer, in rule order. An unknown `rule` is an error listing the layer's rules and references |

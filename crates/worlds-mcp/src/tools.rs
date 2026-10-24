@@ -2074,10 +2074,21 @@ struct RenameWorld {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WorldLayoutArg {
+    world: String,
+    mode: String,
+    gap: Option<u32>,
+    cell: Option<[u32; 2]>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EditWorlds {
     #[serde(default)]
     rename: Vec<RenameWorld>,
     order: Option<Vec<String>>,
+    #[serde(default)]
+    layout: Vec<WorldLayoutArg>,
     #[serde(default)]
     remove: Vec<String>,
     #[serde(default)]
@@ -2118,6 +2129,18 @@ fn plan_worlds(a: &EditWorlds) -> Result<(Vec<ApiWrite>, String), String> {
     if let Some(order) = &a.order {
         writes.push(("world.reorder", json!({ "order": order })));
     }
+    for l in &a.layout {
+        let mut layout = json!({ "mode": l.mode });
+        put(&mut layout, "gap", &l.gap);
+        put(&mut layout, "cell", &l.cell);
+        writes.push((
+            "world.set_layout",
+            json!({ "world": l.world, "layout": layout }),
+        ));
+        if !names.contains(&l.world.as_str()) {
+            names.push(&l.world);
+        }
+    }
     for w in &a.remove {
         let mut p = json!({ "world": w });
         if a.confirm {
@@ -2153,7 +2176,7 @@ impl Engine {
         let a: EditWorlds = args("edit_worlds", a)?;
         let (writes, summary) = plan_worlds(&a)?;
         if writes.is_empty() {
-            return Err("nothing to do: give rename, order or remove".into());
+            return Err("nothing to do: give rename, order, layout or remove".into());
         }
         let label = Self::label("edit_worlds", a.label.as_deref(), &summary);
         let r = self.write(&label, |_| Ok(writes.clone()))?;
@@ -2432,6 +2455,148 @@ impl Engine {
         };
         let label = Self::label("layer_operation", a.label.as_deref(), &summary);
         let r = self.write(&label, |_| Ok(vec![(method, p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReorderLevels {
+    order: Vec<String>,
+    world: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GroupCreate {
+    members: Vec<String>,
+    name: Option<String>,
+    id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GroupUpdate {
+    id: String,
+    name: Option<String>,
+    members: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GroupMembers {
+    id: String,
+    members: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditGroups {
+    level: String,
+    #[serde(default)]
+    create: Vec<GroupCreate>,
+    #[serde(default)]
+    update: Vec<GroupUpdate>,
+    #[serde(default)]
+    add: Vec<GroupMembers>,
+    #[serde(default)]
+    remove_members: Vec<GroupMembers>,
+    #[serde(default)]
+    remove: Vec<String>,
+    label: Option<String>,
+}
+
+impl Engine {
+    pub(crate) fn reorder_levels(&mut self, a: Value) -> ToolResult {
+        let a: ReorderLevels = args("reorder_levels", a)?;
+        if a.order.is_empty() {
+            return Err("order is empty: list every level of the world once".into());
+        }
+        let summary = a.world.clone().unwrap_or_else(|| a.order[0].clone());
+        let label = Self::label("reorder_levels", a.label.as_deref(), &summary);
+        let mut p = json!({ "order": a.order });
+        put(&mut p, "world", &a.world);
+        let r = self.write(&label, |_| Ok(vec![("level.reorder", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn edit_groups(&mut self, a: Value) -> ToolResult {
+        let a: EditGroups = args("edit_groups", a)?;
+        if a.create.is_empty()
+            && a.update.is_empty()
+            && a.add.is_empty()
+            && a.remove_members.is_empty()
+            && a.remove.is_empty()
+        {
+            return Err("nothing to do: give create, update, add, remove_members or remove".into());
+        }
+        // New groups get their ids here, so the result can name them.
+        let ids: Vec<String> = a
+            .create
+            .iter()
+            .map(|c| {
+                c.id.clone()
+                    .unwrap_or_else(|| worlds_core::Id::generate().to_string())
+            })
+            .collect();
+        let label = Self::label("edit_groups", a.label.as_deref(), &a.level);
+        let r = self.write(&label, |e| {
+            let mut w: Vec<ApiWrite> = Vec::new();
+            for (c, id) in a.create.iter().zip(&ids) {
+                let mut p = json!({ "level": a.level, "members": c.members, "id": id });
+                put(&mut p, "name", &c.name);
+                w.push(("group.create", p));
+            }
+            for u in &a.update {
+                let mut p = json!({ "level": a.level, "id": u.id });
+                put(&mut p, "name", &u.name);
+                put(&mut p, "members", &u.members);
+                w.push(("group.update", p));
+            }
+            if !a.add.is_empty() || !a.remove_members.is_empty() {
+                let listed = e.read("group.list", json!({ "level": a.level }))?;
+                let members_of = |id: &str| -> Result<Vec<String>, String> {
+                    listed["groups"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .find(|g| g["id"] == id)
+                        .and_then(|g| serde_json::from_value(g["members"].clone()).ok())
+                        .ok_or_else(|| format!("level {} has no group {id:?}", a.level))
+                };
+                for g in &a.add {
+                    let mut m = members_of(&g.id)?;
+                    for x in &g.members {
+                        if !m.contains(x) {
+                            m.push(x.clone());
+                        }
+                    }
+                    w.push((
+                        "group.update",
+                        json!({ "level": a.level, "id": g.id, "members": m }),
+                    ));
+                }
+                for g in &a.remove_members {
+                    let m: Vec<String> = members_of(&g.id)?
+                        .into_iter()
+                        .filter(|x| !g.members.contains(x))
+                        .collect();
+                    w.push((
+                        "group.update",
+                        json!({ "level": a.level, "id": g.id, "members": m }),
+                    ));
+                }
+            }
+            if !a.remove.is_empty() {
+                w.push(("group.remove", json!({ "level": a.level, "ids": a.remove })));
+            }
+            Ok(w)
+        })?;
+        let mut r = r;
+        if !ids.is_empty() {
+            r["ids"] = json!(ids);
+        }
         Ok(vec![json_block(&r)])
     }
 }

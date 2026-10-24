@@ -39,6 +39,32 @@
       },
       "type": "object"
     },
+    "ObjectGroup": {
+      "additionalProperties": false,
+      "description": "One entry of `level.json` `groups`.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": "Unique among the level's groups."
+        },
+        "members": {
+          "description": "Entity and level annotation ids, in the order they were added.",
+          "items": {
+            "$ref": "#/$defs/Id"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "members"
+      ],
+      "type": "object"
+    },
     "Rect": {
       "description": "[x, y, width, height] in cells.",
       "items": {
@@ -136,6 +162,13 @@
     "format": {
       "const": 1,
       "description": "File format version."
+    },
+    "groups": {
+      "description": "Object groups: named sets of the level's entities and annotations\nthat select and move together. Editor organisation; never exported.",
+      "items": {
+        "$ref": "#/$defs/ObjectGroup"
+      },
+      "type": "array"
     },
     "id": {
       "$ref": "#/$defs/Id"

@@ -37,7 +37,7 @@ Levels:
 dropped: note notecrev22: link note:pinstatue2 doesn't resolve here; dropped
 ```
 
-Applying is one batch of existing commands: `set_tileset_def`, `set_enum_def`, `set_macro`, `set_layer_def` (with its `rules` for a new auto layer; `set_rule_group`, `set_stamp`, `remove_rule_group` and `remove_stamp` when an auto layer is overwritten), `set_level_field_def`, `set_entity_def`, `set_project_setting`, `create_world`, `set_guide_group`, `create_level`, `replace_level` and `add_note`, in that order. So undo is one entry, and the live API needs nothing new to apply it. Each item's commands are tried on a copy of this project while the plan is made, so the batch applies to the project it was planned against; the API refuses a plan once the project changed since (`stale_rev`: plan again).
+Applying is one batch of existing commands: `set_tileset_def`, `set_enum_def`, `set_macro`, `set_layer_def` (with its `rules` for a new auto layer; `set_rule_group`, `set_stamp`, `remove_rule_group` and `remove_stamp` when an auto layer is overwritten), `set_level_field_def`, `set_entity_def`, `set_project_setting`, `create_world` (with `set_world_layout` for a carried layout), `set_guide_group`, `create_level`, `replace_level`, `reorder_levels` (a carried level order) and `add_note`, in that order. So undo is one entry, and the live API needs nothing new to apply it. Each item's commands are tried on a copy of this project while the plan is made, so the batch applies to the project it was planned against; the API refuses a plan once the project changed since (`stale_rev`: plan again).
 
 ## What to import
 
@@ -75,7 +75,7 @@ One special case: a project with no levels yet takes the source's `grid_size` (`
 
 ## Instance ids and references
 
-Level, entity and note ids are kept unless this project already uses them; a colliding id is re-rolled to an id derived from the old one (`Id::derived`), so the same import of the same projects gives the same ids. Every reference inside the imported set follows the new ids: `entity_ref` fields (entities and level fields), `entity:` and `note:` links, connector ends.
+Level, entity and note ids are kept unless this project already uses them; a colliding id is re-rolled to an id derived from the old one (`Id::derived`), so the same import of the same projects gives the same ids. Every reference inside the imported set follows the new ids: `entity_ref` fields (entities and level fields), `entity:` and `note:` links, connector ends, a level's [object groups](format.md#object-groups) (a member left out, a dropped connector, leaves its group; a group left empty goes, listed in `dropped`).
 
 A reference to something outside the imported set is kept when this project resolves it (a door's `exit_to` naming an entity id this project has, a `level:` link to a level of ours) and otherwise dropped and listed in `dropped`: an `entity_ref` becomes `null` (or leaves its array), a link is removed, and a connector whose end resolves to nothing is left out.
 
@@ -88,6 +88,8 @@ A reference to something outside the imported set is kept when this project reso
 | `keep` | `--keep-worlds` | the world with the slug of each level's own source world, made when missing |
 
 `--offset x,y` (`placement.offset`) adds world pixels to every imported level's position and every imported world note's geometry. Levels keep their own coordinates otherwise; guide groups keep their offset.
+
+Imported levels follow the destination world's [layout and level order](format.md#world-layouts): a world that keeps a level order gets them at its end, a `horizontal` or `vertical` world moves them to their place in its strip (in the same batch), and a `grid_vania` world snaps them to its lattice. A world the import makes out of exactly one source world takes that world's layout and level order; one made of several source worlds (the default `new_world` with a multi-world source) starts free, levels where they were.
 
 A level can only move between projects with the same grid size (level sizes and positions are in cells of it): a level from a project with another grid is `refused`, unless the import also takes `grid_size` into a project with no levels.
 

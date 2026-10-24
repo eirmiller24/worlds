@@ -331,7 +331,8 @@ pub(crate) fn resolve(project: &Project, method: &str, p: Value) -> Result<Write
     Ok(Write::one(Command::UpdateNote { id: p.id, note }))
 }
 
-/// `notes.remove { ids }` → `remove_note`s. Locked notes need `confirm`.
+/// `notes.remove { ids }` → `remove_note`s (and the `set_group`s that drop
+/// them from their object groups). Locked notes need `confirm`.
 pub(crate) fn remove(project: &Project, method: &str, p: Value) -> Result<Write, RpcError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -351,12 +352,15 @@ pub(crate) fn remove(project: &Project, method: &str, p: Value) -> Result<Write,
         .filter(|id| index.get(id).is_some_and(|n| n.note.locked))
         .collect();
     let confirm = locked_confirm(&locked, "removing");
+    let mut cmds: Vec<Command> = p
+        .ids
+        .iter()
+        .map(|id| Command::RemoveNote { id: id.clone() })
+        .collect();
+    // Members leave their object groups in the same write.
+    cmds.extend(worlds_core::command::groups::drop_members(project, &p.ids));
     Ok(Write::Commands {
-        cmds: p
-            .ids
-            .iter()
-            .map(|id| Command::RemoveNote { id: id.clone() })
-            .collect(),
+        cmds,
         id: None,
         confirm,
     })

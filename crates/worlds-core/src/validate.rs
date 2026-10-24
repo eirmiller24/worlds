@@ -318,6 +318,9 @@ impl<'a> Validator<'a> {
     }
 
     fn layer_def(&mut self, f: &str, at: &str, l: &LayerDef) {
+        if let Some(why) = l.folder.as_deref().and_then(category_problem) {
+            self.push(f, format!("{at}.folder"), why);
+        }
         // Every layer kind that owns a file must not collide with a fixed
         // file name: int_grid and tiles content is `<level>/<slug>.json`, an
         // auto layer's rules are `rules/<slug>.json` (next to `macros.json`).
@@ -1739,6 +1742,8 @@ impl<'a> Validator<'a> {
 
     fn world(&mut self, w: &'a World) {
         let f = format!("worlds/{}/world.json", w.slug);
+        self.level_order(&f, w);
+        self.layout(&f, w);
         self.dups(
             &f,
             "guide group",
@@ -1775,6 +1780,153 @@ impl<'a> Validator<'a> {
             let f = format!("worlds/{}/levels/{}/notes.json", w.slug, l.slug);
             for n in &l.notes {
                 self.connector_ends(&f, &format!("notes[{}]", n.id), n, w);
+            }
+        }
+    }
+
+    /// `world.json` `levels`: each slug a level of this world, once; when
+    /// the list is there, every level is in it.
+    fn level_order(&mut self, f: &str, w: &World) {
+        for (i, s) in w.level_order.iter().enumerate() {
+            let path = format!("levels[{i}]");
+            if w.level(s.as_str()).is_none() {
+                let msg = match self.p.world_of_level(s.as_str()) {
+                    Some(o) => format!("level {s:?} is in world {:?}", o.slug.as_str()),
+                    None => format!("no level {s:?}"),
+                };
+                self.push(f, path, msg);
+            } else if w.level_order[..i].contains(s) {
+                self.push(f, path, format!("level {s:?} is listed twice"));
+            }
+        }
+        if !w.level_order.is_empty() {
+            for l in w.levels.iter().filter(|l| !w.level_order.contains(&l.slug)) {
+                self.push(
+                    f,
+                    "levels",
+                    format!(
+                        "level {:?} isn't listed; it comes after the listed levels",
+                        l.slug.as_str()
+                    ),
+                );
+            }
+        }
+    }
+
+    /// `world.json` `layout`: a strip's levels where the strip puts them (by
+    /// their bounding box `size`, void or not); a grid vania's on the
+    /// lattice, whole cells, void rects whole cells, and the cell a whole
+    /// number of project cells.
+    fn layout(&mut self, f: &str, w: &World) {
+        let g = self.p.grid_size;
+        if let Some(places) = w.strip_positions(g) {
+            for (l, p) in w.levels.iter().zip(places) {
+                if l.world_px != p {
+                    self.push(
+                        &format!("worlds/{}/levels/{}/level.json", w.slug, l.slug),
+                        "world_px",
+                        format!(
+                            "the {} layout puts this level at [{}, {}]; reorder or re-set the \
+                             layout to move it there",
+                            w.layout.mode.name(),
+                            p[0],
+                            p[1]
+                        ),
+                    );
+                }
+            }
+        }
+        let Some(cell) = w.layout.lattice(g) else {
+            return;
+        };
+        if cell[0] % g != 0 || cell[1] % g != 0 {
+            self.push(
+                f,
+                "layout.cell",
+                format!(
+                    "{}x{} px is not a whole number of the project's {g} px cells",
+                    cell[0], cell[1]
+                ),
+            );
+        }
+        for l in &w.levels {
+            let gi = g as i64;
+            let rect = [
+                l.world_px[0],
+                l.world_px[1],
+                l.size[0] as i64 * gi,
+                l.size[1] as i64 * gi,
+            ];
+            if let Some(why) = crate::model::lattice_problem(cell, rect) {
+                let key = if crate::model::lattice_problem(cell, [rect[0], rect[1], 0, 0]).is_some()
+                {
+                    "world_px"
+                } else {
+                    "size"
+                };
+                self.push(
+                    &format!("worlds/{}/levels/{}/level.json", w.slug, l.slug),
+                    key,
+                    format!("grid vania: {why}"),
+                );
+            }
+            // Void rects cut whole lattice cells too, measured from the
+            // level's corner (which is on a lattice point when the level is).
+            for (i, r) in l.void.iter().enumerate() {
+                let vr = [
+                    r.x as i64 * gi,
+                    r.y as i64 * gi,
+                    r.w as i64 * gi,
+                    r.h as i64 * gi,
+                ];
+                if let Some(why) = crate::model::lattice_problem(cell, vr) {
+                    self.push(
+                        &format!("worlds/{}/levels/{}/level.json", w.slug, l.slug),
+                        format!("void[{i}]"),
+                        format!("grid vania, void rect in pixels from the level's corner: {why}"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// `level.json` `groups`: ids unique, members are the level's entities
+    /// and annotations, each in one group once.
+    fn groups(&mut self, f: &str, l: &Level) {
+        self.dups(
+            f,
+            "group id",
+            l.groups
+                .iter()
+                .enumerate()
+                .map(|(i, g)| (format!("groups[{i}].id"), g.id.as_str())),
+        );
+        let ids: BTreeSet<&Id> = l
+            .all_entities()
+            .map(|e| &e.id)
+            .chain(l.notes.iter().map(|n| &n.id))
+            .collect();
+        let mut owner: BTreeMap<&Id, &Id> = BTreeMap::new();
+        for g in &l.groups {
+            let at = format!("groups[{}]", g.id);
+            for (i, m) in g.members.iter().enumerate() {
+                let path = format!("{at}.members[{i}]");
+                if !ids.contains(m) {
+                    self.push(
+                        f,
+                        path,
+                        format!(
+                            "no entity or annotation {m} in this level; drop it from the group"
+                        ),
+                    );
+                } else if let Some(other) = owner.insert(m, &g.id) {
+                    let msg = if *other == g.id {
+                        format!("{m} is listed twice")
+                    } else {
+                        format!("{m} is also in group {other}; an object is in one group")
+                    };
+                    self.push(f, path, msg);
+                }
             }
         }
     }
@@ -2007,6 +2159,7 @@ impl<'a> Validator<'a> {
         if l.size[0] == 0 || l.size[1] == 0 {
             self.push(&f, "size", "must be at least 1x1");
         }
+        self.groups(&f, l);
         self.tags(&f, "", &l.tags);
         self.inherited_defaults(
             &f,

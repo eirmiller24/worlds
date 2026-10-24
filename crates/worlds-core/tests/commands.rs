@@ -543,6 +543,7 @@ fn create_delete_replace_level() {
         Command::DeleteLevel {
             world: s("main"),
             level: s("crevasse"),
+            keep_layout: false,
         },
     );
     assert!(p.level("crevasse").is_none());
@@ -1677,6 +1678,7 @@ fn batch_is_atomic_and_inverts_in_reverse() {
                 Command::DeleteLevel {
                     world: s("main"),
                     level: s("shaft"),
+                    keep_layout: false,
                 },
                 paint("crevasse", 99, 1, Some("solid")),
                 paint("crevasse", 6, 1, Some("solid")),
@@ -1881,6 +1883,7 @@ fn one_of_each() -> Vec<Command> {
         Command::DeleteLevel {
             world: s("main"),
             level: s("shaft"),
+            keep_layout: false,
         },
         Command::SetLayerDef {
             layer: s("hazards"),
@@ -2370,6 +2373,7 @@ fn files_written_before_a_failed_save_can_still_be_deleted() {
     p.apply(Command::DeleteLevel {
         world: s("main"),
         level: s("aaa"),
+        keep_layout: false,
     })
     .unwrap();
     save_dirty(&mut p, tmp.path()).unwrap();
@@ -2465,6 +2469,7 @@ fn incremental_save_matches_full_save() {
         Command::DeleteLevel {
             world: s("main"),
             level: s("wing"),
+            keep_layout: false,
         },
     ] {
         inverses.push(p.apply(c).unwrap().inverse);
@@ -2711,6 +2716,7 @@ fn undo_restores_a_level_with_validation_problems_verbatim() {
     q.apply(Command::DeleteLevel {
         world: s("main"),
         level: s("crevasse"),
+        keep_layout: false,
     })
     .unwrap();
     assert!(matches!(
@@ -2740,6 +2746,7 @@ fn undo_restores_a_level_with_validation_problems_verbatim() {
         Command::DeleteLevel {
             world: s("main"),
             level: s("crevasse"),
+            keep_layout: false,
         },
         Command::ResizeLevel {
             world: s("main"),

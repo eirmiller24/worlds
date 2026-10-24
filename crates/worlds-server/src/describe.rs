@@ -138,7 +138,7 @@ fn worlds(project: &Project) -> Value {
                     o
                 })
                 .collect();
-            json!({
+            let mut o = json!({
                 "slug": w.slug,
                 "name": w.name.clone().unwrap_or_else(|| title_case(w.slug.as_str())),
                 "levels": w.levels.iter().map(|l| &l.slug).collect::<Vec<_>>(),
@@ -147,7 +147,11 @@ fn worlds(project: &Project) -> Value {
                 "notes": w.notes.iter().filter(|n| !is_guide(n)).count(),
                 "guides": w.notes.iter().filter(|n| is_guide(n)).count(),
                 "guide_groups": groups,
-            })
+            });
+            if !w.layout.is_default() {
+                o["layout"] = json!(w.layout);
+            }
+            o
         })
         .collect()
 }
