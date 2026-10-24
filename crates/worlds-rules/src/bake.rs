@@ -514,6 +514,10 @@ pub(crate) struct WriteGrid {
 pub(crate) struct Baker<'p> {
     w: i32,
     h: i32,
+    /// A non-rectangular level's void in cells of the layer's grid,
+    /// row-major (`None`: a rectangle). Void cells read as out of bounds
+    /// and are never anchors.
+    void: Option<Vec<bool>>,
     grid_px: i32,
     seed: u64,
     pub(crate) grids: Vec<Vec<u16>>,
@@ -653,6 +657,7 @@ impl<'p> Baker<'p> {
         let mut baker = Baker {
             w: w as i32,
             h: h as i32,
+            void: project.layer_void(def, level),
             grid_px,
             seed,
             grids: Vec::new(),
@@ -1227,9 +1232,10 @@ impl<'p> Baker<'p> {
         let r = &self.rules[ri];
         let reg = r.region.as_ref().expect("a region rule");
         let values = &grids[reg.grid];
-        let mut regions = region::label(values, self.w, self.h, &reg.cells);
+        let void = self.void.as_deref();
+        let mut regions = region::label(values, self.w, self.h, &reg.cells, void);
         if let PlaceAt::Along(e) = reg.plan.at {
-            region::edge_runs(&mut regions, values, e, reg.against.as_deref());
+            region::edge_runs(&mut regions, values, e, reg.against.as_deref(), void);
         }
         let per = region::place(&reg.plan, &regions, self.seed, r.key);
         (regions, per)
@@ -1365,7 +1371,7 @@ impl<'p> Baker<'p> {
             for y in y0..y1 {
                 for x in x0..x1 {
                     let cell = (y * self.w + x) as usize;
-                    if out.locked[cell] || !r.modulo_ok(x, y) {
+                    if out.locked[cell] || !r.modulo_ok(x, y) || self.is_void(cell) {
                         continue;
                     }
                     // The anchor's own test is the same in every variant.
@@ -1374,11 +1380,11 @@ impl<'p> Baker<'p> {
                     {
                         continue;
                     }
-                    let (w, h) = (self.w, self.h);
+                    let (w, h, void) = (self.w, self.h, self.void.as_deref());
                     let mut matching = r
                         .variants
                         .iter()
-                        .filter(|v| r.matches(grids, w, h, x, y, v));
+                        .filter(|v| r.matches(grids, w, h, x, y, v, void));
                     let Some(first) = matching.next() else {
                         continue;
                     };
@@ -1416,10 +1422,11 @@ impl<'p> Baker<'p> {
         let r = &self.rules[ri];
         let grid = &grids[r.parts[0].grid];
         let bucket = &mut out.buckets[ri];
+        let void = self.void.as_deref();
         for y in min[1]..max[1] {
             for x in min[0]..max[0] {
                 let cell = (y * self.w + x) as usize;
-                if out.locked[cell] || !r.modulo_ok(x, y) {
+                if out.locked[cell] || !r.modulo_ok(x, y) || self.is_void(cell) {
                     continue;
                 }
                 // The anchor's own test is the same in every variant.
@@ -1432,7 +1439,7 @@ impl<'p> Baker<'p> {
                 let mut hit = false;
                 let mut gate: Option<bool> = None;
                 for v in &r.variants {
-                    if !r.matches(grids, self.w, self.h, x, y, v) {
+                    if !r.matches(grids, self.w, self.h, x, y, v, void) {
                         continue;
                     }
                     // chance and perlin don't depend on the variant.
@@ -1695,15 +1702,16 @@ impl<'p> Baker<'p> {
     pub(crate) fn pattern_matches(&self, ri: usize, grids: &[&[u16]]) -> Matches {
         let r = &self.rules[ri];
         let mut m = Matches::new();
+        let void = self.void.as_deref();
         for y in 0..self.h {
             for x in 0..self.w {
-                if !r.modulo_ok(x, y) {
+                if !r.modulo_ok(x, y) || self.is_void((y * self.w + x) as usize) {
                     continue;
                 }
                 let flips: Vec<Option<Flip>> = r
                     .variants
                     .iter()
-                    .filter(|v| r.matches(grids, self.w, self.h, x, y, v))
+                    .filter(|v| r.matches(grids, self.w, self.h, x, y, v, void))
                     .map(|v| v.flip)
                     .collect();
                 if !flips.is_empty() {
@@ -1712,6 +1720,12 @@ impl<'p> Baker<'p> {
             }
         }
         m
+    }
+
+    /// Whether row-major cell `cell` is in the level's void.
+    #[inline]
+    fn is_void(&self, cell: usize) -> bool {
+        self.void.as_ref().is_some_and(|v| v[cell])
     }
 
     /// `[w, h]` in cells of the layer's grid.
@@ -1999,10 +2013,23 @@ impl CompiledRule<'_> {
         ok_x && ok_y
     }
 
+    /// Whether variant `v` matches at anchor `(x, y)`. A cell off the level
+    /// (past its edge, or in its `void`) reads as the part's `oob` value, or
+    /// fails the match without one.
+    #[allow(clippy::too_many_arguments)]
     #[inline]
-    fn matches(&self, grids: &[&[u16]], w: i32, h: i32, x: i32, y: i32, v: &Variant) -> bool {
+    fn matches(
+        &self,
+        grids: &[&[u16]],
+        w: i32,
+        h: i32,
+        x: i32,
+        y: i32,
+        v: &Variant,
+        void: Option<&[bool]>,
+    ) -> bool {
         let [rx, ry] = self.radius;
-        if x >= rx && y >= ry && x + rx < w && y + ry < h {
+        if void.is_none() && x >= rx && y >= ry && x + rx < w && y + ry < h {
             let base = (y * w + x) as isize;
             if let [linear] = &v.linear[..] {
                 // No `require` (the common case): one grid, one loop.
@@ -2023,7 +2050,8 @@ impl CompiledRule<'_> {
             p.cells.iter().all(|c| {
                 let (dx, dy) = turn(v.bits, c.dx, c.dy);
                 let (sx, sy) = (x + dx, y + dy);
-                let value = if sx >= 0 && sy >= 0 && sx < w && sy < h {
+                let inside = sx >= 0 && sy >= 0 && sx < w && sy < h;
+                let value = if inside && !void.is_some_and(|m| m[(sy * w + sx) as usize]) {
                     grid[(sy * w + sx) as usize]
                 } else {
                     match p.oob {
