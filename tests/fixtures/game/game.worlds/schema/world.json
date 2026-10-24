@@ -656,6 +656,31 @@
       ],
       "type": "string"
     },
+    "LayoutMode": {
+      "description": "How a world places its levels.",
+      "oneOf": [
+        {
+          "const": "free",
+          "description": "Levels go where they are put.",
+          "type": "string"
+        },
+        {
+          "const": "horizontal",
+          "description": "Left to right in level order.",
+          "type": "string"
+        },
+        {
+          "const": "vertical",
+          "description": "Top to bottom in level order.",
+          "type": "string"
+        },
+        {
+          "const": "grid_vania",
+          "description": "Levels snap to a lattice and are whole lattice cells.",
+          "type": "string"
+        }
+      ]
+    },
     "NoteStatus": {
       "enum": [
         "open",
@@ -714,6 +739,42 @@
       "description": "snake_case name: a lowercase letter, then lowercase letters, digits or underscores.",
       "pattern": "^[a-z][a-z0-9_]*$",
       "type": "string"
+    },
+    "WorldLayout": {
+      "additionalProperties": false,
+      "description": "`world.json` `layout`. Left out of the file at its default (free, no\ngap, no cell).",
+      "properties": {
+        "cell": {
+          "description": "Grid vania: the lattice cell `[w, h]` in pixels, a multiple of the\nproject grid. Default 16 project cells each way.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "gap": {
+          "description": "Strip layouts: pixels between two neighbouring levels. Default 0.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/LayoutMode"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -732,6 +793,17 @@
       "description": "Named sets of guides, each with an offset, in insertion order.",
       "items": {
         "$ref": "#/$defs/GuideGroup"
+      },
+      "type": "array"
+    },
+    "layout": {
+      "$ref": "#/$defs/WorldLayout",
+      "description": "How the tools place the levels (free, a strip, a lattice). Left out\nat its default (free)."
+    },
+    "levels": {
+      "description": "`levels`: the level order, by slug (the Levels pane, PgUp/PgDn, the\nexport and strip layouts follow it). Optional: left out, levels are\nin slug order. A level it doesn't list comes after the listed ones\n(in slug order), and validation reports it; so does a listed slug\nwith no level. `reorder_levels` writes it.",
+      "items": {
+        "$ref": "#/$defs/Slug"
       },
       "type": "array"
     },

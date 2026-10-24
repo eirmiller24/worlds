@@ -514,6 +514,7 @@ fn edges_snap_only_within_the_shown_world_and_a_world_switch_drops_the_ghost() {
         level: slug("shaft"),
         world: slug("under"),
         world_px: None,
+        keep_layout: false,
     })
     .unwrap();
     let crev = r.doc.level_ix("crevasse").unwrap();

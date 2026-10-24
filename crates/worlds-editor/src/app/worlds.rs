@@ -292,6 +292,7 @@ impl EditorApp {
             level: level.clone(),
             world,
             world_px: None,
+            keep_layout: false,
         };
         if let Err(e) = self.apply_command(cmd) {
             self.st.toast(e, true);
@@ -417,6 +418,7 @@ mod tests {
                 level: s("shaft"),
                 world: s("dungeon"),
                 world_px: Some([0, 0]),
+                keep_layout: false,
             },
             Command::AddNote {
                 scope: worlds_core::command::NoteScope::World(s("dungeon")),

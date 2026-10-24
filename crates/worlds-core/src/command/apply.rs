@@ -8,6 +8,7 @@ mod defs;
 mod duplicate;
 mod fields;
 mod layer_ops;
+mod organize;
 mod references;
 mod resize;
 mod rules;
@@ -160,7 +161,11 @@ impl Project {
                 content,
                 restore,
             } => self.create_level(world, level, content, restore),
-            DeleteLevel { world, level } => self.delete_level(world, level),
+            DeleteLevel {
+                world,
+                level,
+                keep_layout,
+            } => self.delete_level(world, level, keep_layout),
             ReplaceLevel {
                 world,
                 level,
@@ -192,7 +197,10 @@ impl Project {
                 level,
                 size,
                 anchor,
-            } => self.resize_level(world, level, size, anchor),
+            } => {
+                let applied = self.resize_level(world.clone(), level, size, anchor)?;
+                self.relayout(&world, applied)
+            }
             RenameLevel {
                 world,
                 level,
@@ -562,7 +570,8 @@ impl Project {
                 level,
                 world,
                 world_px,
-            } => self.move_level_to_world(level, world, world_px),
+                keep_layout,
+            } => self.move_level_to_world(level, world, world_px, keep_layout),
             DuplicateLayer { layer, slug } => self.duplicate_layer(layer, slug),
             AddReference {
                 scope,
@@ -579,6 +588,22 @@ impl Project {
                 void,
                 restore,
             } => self.set_level_void(level, void, restore),
+            ReorderLevels {
+                world,
+                order,
+                restore,
+            } => self.reorder_levels(world, order, restore),
+            SetWorldLayout {
+                world,
+                layout,
+                restore,
+            } => self.set_world_layout(world, layout, restore),
+            SetGroup {
+                level,
+                group,
+                index,
+            } => self.set_group(level, group, index),
+            RemoveGroup { level, id } => self.remove_group(level, id),
         }
     }
 
@@ -1135,33 +1160,56 @@ impl Project {
         }
         let level = self.build_level(level, content, None, restore)?;
         let slug = level.slug.clone();
-        let levels = &mut self.worlds[wi].levels;
-        let i = levels.partition_point(|l| l.slug < slug);
-        levels.insert(i, level);
-        Ok(Applied {
+        // Last in the level order when the world keeps one, else by slug.
+        self.worlds[wi].levels.push(level);
+        let mut changes = vec![Change::LevelCreated {
+            world: world.clone(),
+            level: slug.clone(),
+        }];
+        changes.extend(self.sync_level_order(wi));
+        let applied = Applied {
             inverse: Command::DeleteLevel {
                 world: world.clone(),
-                level: slug.clone(),
+                level: slug,
+                keep_layout: self.worlds[wi].layout.is_strip(),
             },
-            changes: vec![Change::LevelCreated { world, level: slug }],
-        })
+            changes,
+        };
+        if restore {
+            Ok(applied)
+        } else {
+            self.relayout(&world, applied)
+        }
     }
 
-    fn delete_level(&mut self, world: Slug, level: Slug) -> Result<Applied> {
+    fn delete_level(&mut self, world: Slug, level: Slug, keep_layout: bool) -> Result<Applied> {
         let at = self.find_level_in(&world, &level)?;
         // Split a copy first: it can fail (an undefined value index), and
         // nothing may change on failure.
         let (meta, content) = self.split_level(self.level_at(at).clone())?;
+        let old_order = self.worlds[at.0].level_order.clone();
         self.worlds[at.0].levels.remove(at.1);
-        Ok(Applied {
-            inverse: Command::CreateLevel {
+        let mut changes = vec![Change::LevelDeleted {
+            world: world.clone(),
+            level,
+        }];
+        changes.extend(self.sync_level_order(at.0));
+        let inverse = self.with_level_order_restore(
+            at.0,
+            Command::CreateLevel {
                 world: world.clone(),
                 level: meta,
                 content,
                 restore: true,
             },
-            changes: vec![Change::LevelDeleted { world, level }],
-        })
+            old_order,
+        );
+        let applied = Applied { inverse, changes };
+        if keep_layout {
+            Ok(applied)
+        } else {
+            self.relayout(&world, applied)
+        }
     }
 
     fn replace_level(
@@ -1504,7 +1552,20 @@ impl Project {
                     }
                 }
             }
-            self.worlds[at.0].levels.sort_by(|a, b| a.slug.cmp(&b.slug));
+            let w = &mut self.worlds[at.0];
+            let mut listed = false;
+            for s in &mut w.level_order {
+                if *s == level {
+                    s.clone_from(&slug);
+                    listed = true;
+                }
+            }
+            w.sort_levels();
+            if listed {
+                changes.push(Change::WorldMeta {
+                    world: world.clone(),
+                });
+            }
         }
         if name != old_name {
             let at = self.find_level(&slug)?;

@@ -448,6 +448,7 @@ fn arranging_refuses_levels_of_two_worlds() {
         level: s("shaft"),
         world: s("under"),
         world_px: None,
+        keep_layout: false,
     })
     .unwrap();
     let err = transform::arrange_levels(&p, &[s("crevasse"), s("shaft")], ArrangeOp::AlignLeft)

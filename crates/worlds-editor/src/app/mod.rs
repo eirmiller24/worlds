@@ -665,6 +665,7 @@ impl Confirm {
                 Command::DeleteLevel {
                     world: world.clone(),
                     level: level.clone(),
+                    keep_layout: false,
                 },
             ),
             Confirm::DeleteSelection {

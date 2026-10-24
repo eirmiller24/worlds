@@ -623,6 +623,7 @@ fn undo_prunes_the_selection_of_every_kind() {
     r.apply(Command::DeleteLevel {
         world: Slug::new("main").unwrap(),
         level: shaft,
+        keep_layout: false,
     })
     .unwrap();
     assert!(r.view.selection.is_empty());
@@ -974,6 +975,7 @@ fn world_notes_are_selectable_with_no_level() {
         r.apply(Command::DeleteLevel {
             world: w.clone(),
             level: Slug::new(l).unwrap(),
+            keep_layout: false,
         })
         .unwrap();
     }

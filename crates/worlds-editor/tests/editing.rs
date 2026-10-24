@@ -1212,6 +1212,7 @@ fn level_operations_reindex_and_undo() {
         worlds_core::Command::DeleteLevel {
             world: Slug::new("main").unwrap(),
             level: Slug::new("well").unwrap(),
+            keep_layout: false,
         },
     )
     .unwrap();

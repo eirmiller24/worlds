@@ -43,6 +43,7 @@
 
 mod apply;
 mod error_serde;
+pub mod groups;
 mod history;
 pub mod layer_ops;
 
@@ -58,7 +59,8 @@ use crate::assembly::Assembly;
 use crate::format::IntGridFile;
 use crate::id::{Id, Slug};
 use crate::model::{
-    Annotation, Color, EntitiesLayer, EntityInstance, GuideGroup, Level, Reference, TilePlacement,
+    Annotation, Color, EntitiesLayer, EntityInstance, GuideGroup, Level, ObjectGroup, Reference,
+    TilePlacement, WorldLayout,
 };
 use crate::model::{CellMatch, RuleEntry, Stamp, Template};
 use crate::model::{EntityDef, EnumDef, FieldDef, LayerDef, RuleGroup, RuleSet, TilesetDef};
@@ -149,6 +151,10 @@ pub enum Command {
     DeleteLevel {
         world: Slug,
         level: Slug,
+        /// Leave the world's strip layout as it is (don't move the levels
+        /// after it). Inverses set it; edits leave it off.
+        #[serde(default, skip_serializing_if = "is_false")]
+        keep_layout: bool,
     },
     /// Replace a level (found by `level.slug`) wholesale: metadata and all
     /// content. The inverse of `resize_level`.
@@ -629,6 +635,10 @@ pub enum Command {
         world: Slug,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         world_px: Option<[i64; 2]>,
+        /// Leave both worlds' strip layouts as they are. Inverses set it;
+        /// edits leave it off.
+        #[serde(default, skip_serializing_if = "is_false")]
+        keep_layout: bool,
     },
 
     // ---- layer operations ----
@@ -690,6 +700,44 @@ pub enum Command {
         /// `validate` reports them). Inverses set it; edits leave it off.
         #[serde(default, skip_serializing_if = "is_false")]
         restore: bool,
+    },
+    // ---- level order and world layouts ----
+    /// Set a world's level order (`world.json` `levels`): every level of
+    /// the world once. `[]` drops the list (slug order). `restore` takes the
+    /// list as given (unknown or missing slugs) and leaves a strip layout
+    /// as it is; inverses set it. In a strip layout the levels move to
+    /// their new places, in the same undo entry.
+    ReorderLevels {
+        world: Slug,
+        order: Vec<Slug>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
+    /// Set a world's layout (`world.json` `layout`). Switching to a strip
+    /// writes the level order (if the world has none) and moves every level
+    /// to its place in the strip; `restore` (inverses) moves nothing.
+    SetWorldLayout {
+        world: Slug,
+        layout: WorldLayout,
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
+
+    // ---- object groups ----
+    /// Add an object group to a level, or replace the one with this id in
+    /// place. `index`: position for a new group, or where to move an
+    /// existing one (default: the end / where it is). Members are not
+    /// checked (validation reports a member the level doesn't have).
+    SetGroup {
+        level: Slug,
+        group: ObjectGroup,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+    },
+    /// Remove an object group (its members stay).
+    RemoveGroup {
+        level: Slug,
+        id: Id,
     },
 }
 
@@ -835,6 +883,12 @@ impl Command {
             SetAssembly { assembly } => format!("Set assembly {}", assembly.slug),
             RemoveAssembly { slug } => format!("Remove assembly {slug}"),
             RenameAssembly { slug, new_slug } => format!("Rename assembly {slug} to {new_slug}"),
+            ReorderLevels { world, .. } => format!("Reorder levels of {world}"),
+            SetWorldLayout { world, layout, .. } => {
+                format!("Set layout of {world} to {}", layout.mode.label())
+            }
+            SetGroup { group, .. } => format!("Set group {}", group.name),
+            RemoveGroup { id, .. } => format!("Remove group {id}"),
         }
     }
 }
@@ -1421,6 +1475,8 @@ pub enum LevelPart {
     /// `void` (the level's shape; layer content in the new void was
     /// cleared, reported as its own changes).
     Void,
+    /// `groups` (object groups; editor organisation only).
+    Groups,
 }
 
 impl LevelPart {
@@ -1549,7 +1605,8 @@ pub enum Change {
         from: Slug,
         to: Slug,
     },
-    /// A world's `world.json` name changed.
+    /// A world's `world.json` name, level order (`levels`) or `layout`
+    /// changed.
     WorldMeta {
         world: Slug,
     },

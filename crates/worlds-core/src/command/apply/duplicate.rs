@@ -100,6 +100,15 @@ impl Project {
                 &mut problems,
             );
         }
+        // Object groups keep their ids (unique per level) and follow their
+        // members to the copies.
+        for g in &mut meta.groups {
+            for m in &mut g.members {
+                if let Some(new) = entity_map.get(m).or_else(|| note_map.get(m)) {
+                    m.clone_from(new);
+                }
+            }
+        }
         // Reference images (in `level.json`) get new ids too: they are
         // unique across the project.
         let mut taken: HashSet<Id> = self

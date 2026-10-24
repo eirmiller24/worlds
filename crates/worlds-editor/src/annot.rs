@@ -1456,6 +1456,7 @@ pub fn plan_delete(doc: &Document, view: &ViewState) -> DeletePlan {
         commands.push(Command::DeleteLevel {
             world: doc.project.worlds[world_of(doc, ix)].slug.clone(),
             level: l.slug.clone(),
+            keep_layout: false,
         });
     }
     let counts = [

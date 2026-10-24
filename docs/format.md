@@ -169,6 +169,7 @@ Layer keys:
 | `kind` | string | yes | all | See above |
 | `doc` | string | no | all | Free text for humans and agents |
 | `opacity` | number 0..1 | no, default 1 | all | Display opacity |
+| `folder` | string | no | all | The folder the editor's Layers pane shows the layer in: a `/` path of non-empty segments (`Decor/Back`), like an entity `category`. The folder's visibility, lock and opacity apply to every layer in it (editor state, in `.worlds/ui.json`). Never exported |
 | `grid_size` | integer | no, default the project's | all but `auto` | This layer's cell size in pixels. Must divide or be a multiple of the project grid. An `auto` layer always uses its source's grid; giving it a different one is a validation problem |
 | `values` | array | no | `int_grid` | The values a cell can hold (below) |
 | `groups` | array | no | `int_grid` | Named groups of values: `{ "slug", "name", "color"?, "glyph"? }`. Rule patterns can test "any value in this group". A group `glyph` means that group in patterns without a legend entry; it never appears in grid rows |
@@ -820,6 +821,8 @@ The rules are named `m<mask>`, where the mask adds up the filled neighbours: N 1
   "format": 1,
   "slug": "main",
   "name": "Main",
+  "layout": { "mode": "grid_vania", "cell": [320, 160] },
+  "levels": ["crevasse", "shaft"],
   "guide_groups": [
     { "slug": "ruined", "name": "Ruined wing", "offset": [0, 769], "color": "#c08040" }
   ],
@@ -834,6 +837,8 @@ The rules are named `m<mask>`, where the mask adds up the filled neighbours: N 1
 | --- | --- | --- | --- |
 | `slug` | slug | yes | Must match the directory name |
 | `name` | string | no | Display name |
+| `layout` | object | no | How the editor places the levels: free (the default), a strip or a lattice. See [World layouts](#world-layouts) |
+| `levels` | array of slugs | no | The level order: the editor's Levels pane, PgUp/PgDn, the export's level lists and strip layouts follow it. Left out, levels are in slug order. A level it doesn't list comes after the listed ones, in slug order (a validation problem); so is a slug that names no level of this world, or one given twice. `reorder_levels` writes it, and once it is there the level commands keep it up to date |
 | `guide_groups` | array | no | Named sets of guides, each with an offset, in the order they were added (below) |
 | `notes` | array | no | World-scope annotations, coordinates in world pixels, in the order they were added. See [Annotations](#notesjson-and-annotations) |
 | `references` | array | no | World-scope reference images, world pixels, bottom first. See [Reference images](#reference-images) |
@@ -850,6 +855,22 @@ A guide group (`guide_groups[]`) lets a set of guides be shown where it is built
 Guides store their points as designed. The editor draws a grouped guide at `points + offset` ("as built"), which is also where levels snap to and where the text view counts it; a view toggle shows the designed position as well. The offset is a translation only.
 
 Levels are the subdirectories of `levels/`. Level placement lives in each `level.json`, not here.
+
+### World layouts
+
+`layout` says how the tools place the world's levels. `world_px` in each `level.json` stays the stored position in every mode: the export and the game never need to know the mode. Files without `layout` load as free, and a free layout with nothing set is left out when written.
+
+```json
+{ "mode": "horizontal", "gap": 32 }
+```
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `mode` | string | required | `free`: levels go where they are put. `horizontal` / `vertical`: a strip; levels sit in the level order, left to right (top to bottom), the first at the world origin, top (left) edges at 0, `gap` pixels apart. Reordering, creating, duplicating, resizing, deleting or moving a level to another world moves the levels to their places, in the same undo entry. `grid_vania`: levels snap to a lattice of `cell` pixels (from the world origin) while dragged and placed, and must be whole cells |
+| `gap` | integer px | `0` | Strips: the space between two neighbours |
+| `cell` | `[w, h]` px | 16 project cells each way | Grid vania: the lattice cell. A whole number of project cells |
+
+Validation reports, in a strip, a level that isn't where the strip puts it (`level.json` `world_px`: hand edits; reorder or set the layout again to fix it), and in grid vania a level whose corner isn't on a lattice point (`world_px`) or whose size isn't a whole number of cells (`size`), and a `cell` that isn't a whole number of project cells (`world.json` `layout.cell`). Switching modes never loses a setting: `gap` and `cell` are kept while another mode is on.
 
 A project can hold several worlds (`worlds/main/`, `worlds/underdark/`, ...). Each is its own map: its own coordinate space, levels, world-scope annotations and guide groups. Everything else is project-wide: the grid, layers, tilesets, entity types, enums and rules. Level slugs are unique across all worlds, so a `level:` link never needs to say which world. `project.json` `worlds` gives their display order.
 
@@ -888,6 +909,7 @@ A project can hold several worlds (`worlds/main/`, `worlds/underdark/`, ...). Ea
 | `layers` | object | no | Per-layer rule state, by `auto` layer slug (below). An entry for any other layer is a validation problem |
 | `references` | array | no | Reference images drawn under the level's layers, level pixels, bottom first (below) |
 | `void` | array of `[x, y, w, h]` | no | Rectangles of project-grid cells cut out of the level's box, making it non-rectangular ([below](#non-rectangular-levels-void)). Left out (or `[]`) for a rectangle |
+| `groups` | array | no | Object groups: named sets of the level's entities and annotations that the editor selects and moves together (below) |
 
 Per-layer rule state (`layers.<auto layer slug>`), all optional:
 
@@ -953,7 +975,35 @@ An L-, T- or U-shaped room is its bounding box with rectangles cut out: `void` l
 - Validation reports content in a void cell (grid values or overrides, tiles, an entity whose cell is void), a void rect that is empty or reaches outside the box, a void that leaves no cell, and a void that splits the level into pieces that don't touch (one level is one 4-connected room). A void rect the level encloses on every side (a hole) is allowed; the export's `outline` is the outer boundary only.
 - Rules treat void cells as outside the level: a pattern cell over the void takes the rule's `out_of_bounds` value, or the rule doesn't fire, exactly as past the level's edge, so walls close around an L's inside corner; no rule anchors in the void; region rules treat the void as the level's border (no region holds a void cell, and edge runs stop at it); derived layers compute nothing there. A level without `void` bakes exactly as before.
 - The editor draws only the level's cells (void is transparent, and a neighbouring level can sit in the notch), and hatches the void of the active level. Commands keep content out of the void ([commands.md](commands.md#set_level_void)).
-- With the grid vania layout ([ROADMAP 3.9](ROADMAP.md#39-world-layout-modes), not built yet), where levels are whole cells of a lattice, a level's void will have to be whole lattice cells too: a shaped room is then a set of lattice cells.
+- With the grid vania layout ([World layouts](#world-layouts)), where levels are whole cells of a lattice, a level's void must be whole lattice cells too (validation reports a void rect that isn't): a shaped room is then a set of lattice cells.
+
+### Object groups
+
+A puzzle, an encounter, a furnished corner: a named set of a level's entities and annotations that selects and moves together in the editor. Groups are editor organisation: nothing of them is exported. Files written before groups existed load as they are.
+
+```json
+{
+  "$schema": "../../../../schema/level.json",
+  "format": 1,
+  "id": "crevasse22",
+  "slug": "crevasse",
+  "name": "Crevasse",
+  "world_px": [0, 0],
+  "size": [20, 5],
+  "depth": 0,
+  "groups": [
+    { "id": "gapgroup22", "name": "Gap puzzle", "members": ["btncrev222", "doorcrev22", "notecrev22"] }
+  ]
+}
+```
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `id` | id | Unique among the level's groups |
+| `name` | string | Display name |
+| `members` | array of ids | Entities (`entities.json`) and annotations (`notes.json`) of this level. Tile stacks have no id and are never members |
+
+Validation reports a member the level doesn't have (`groups[<id>].members[<i>]`: a deleted entity the file still lists), a member given twice or in a second group (an object is in one group), and a repeated group id.
 
 ## &lt;int_grid layer&gt;.json
 
@@ -1337,6 +1387,10 @@ Line by line:
 - derived grids: a `write.grid` that isn't a derived `int_grid` layer on the auto layer's grid, a `write.value` that isn't a value of it (a group isn't one), a second layer writing a grid one layer already writes (`write.grid`: "pillar_marks is already written by layer pillars"), auto layers that read each other's derived grids (`layers.json` `layers[<first layer of the cycle>]`: "auto layers a and b read each other's derived grids: a → marks_b → b → marks_a → a"), a derived `collision_layer` (`project.json` `collision_layer`), and a derived layer's stored overrides the size of the level in its cells;
 - tile placements and entity cells inside the level; for a [non-rectangular level](#non-rectangular-levels-void), `void` rects that are empty or reach outside the box (`level.json` `void[<i>]`), a void that leaves no cell or splits the level into pieces that don't touch (`void`), and content in a void cell: grid values or overrides (`<layer>.json` `rows[<y>]`, counted, with the first cell), tiles (`tiles[x,y]`) and entities (`layers[<layer>].entities[<id>].cell`);
 - the world order: each slug in `project.json` `worlds` names a world and appears once (`worlds[<i>]`), and, when the list is there, every world is in it (`worlds`: "world "x" isn't listed; it is shown after the listed worlds");
+- the level order: each slug in `world.json` `levels` names a level of that world and appears once (`levels[<i>]`), and, when the list is there, every level is in it (`levels`: "level "x" isn't listed; it comes after the listed levels");
+- world layouts: in a strip, each level's `world_px` is where the strip puts it; in grid vania, each level's corner is on the lattice (`world_px`) and its size whole lattice cells (`size`), and `layout.cell` is a whole number of project cells. The lattice check takes any rectangle (`worlds_core::lattice_problem`);
+- object groups (`level.json` `groups[<id>]`): every member is an entity or annotation of the level, none is listed twice or in two groups, group ids are unique in the level;
+- layer folders: a `folder` is a path like an entity `category` (`layers[<i>].folder`);
 - duplicate slugs and ids (layers, values and groups, tilesets, enums and their values, entity types, fields, rule groups, stamps, worlds, levels, entity ids, note ids; in a rules file, rule slugs, reference slugs and expanded slugs together; template rule slugs within a template);
 - field values and defaults against their field type, `min`/`max`, `regex` (the whole value must match), enum values, path extensions, nullability (per element for arrays); `point` and `entity_ref` defaults again in each level or entity that inherits them; a `regex` that doesn't compile;
 - annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); a connector end (`notes[<id>].from`, `notes[<id>].to`) naming no level or entity ("level "x" does not exist: the connector's end dangles"), or one in another world than the connector's; an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;
