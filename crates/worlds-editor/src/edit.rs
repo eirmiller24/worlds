@@ -476,13 +476,15 @@ impl Editing {
             }
         }
         // World commands move levels between worlds or change the worlds'
-        // order: level indices and their world indices change.
+        // order, and a world's level order changes the order of its levels
+        // (`world_meta`): level indices and their world indices change.
         if changes.iter().any(|c| {
             matches!(
                 c,
                 Change::LevelCreated { .. }
                     | Change::LevelDeleted { .. }
                     | Change::LevelRenamed { .. }
+                    | Change::WorldMeta { .. }
                     | Change::WorldCreated { .. }
                     | Change::WorldRemoved { .. }
                     | Change::WorldRenamed { .. }

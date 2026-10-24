@@ -155,6 +155,8 @@ pub enum Action {
     ArmAssembly(worlds_core::Slug),
     /// Show the Library in the Palette pane (or the layer's palette again).
     ToggleLibrary,
+    /// Ctrl+L: the Levels pane in front, its search box focused.
+    ShowLevels,
 }
 
 impl Action {
@@ -262,6 +264,11 @@ impl Action {
                 Action::LinkCameras(None),
             ),
             ("Bookmark this view…".into(), "", Action::SaveBookmark),
+            (
+                "Levels: show the Levels pane".into(),
+                "Ctrl+L",
+                Action::ShowLevels,
+            ),
         ];
         use super::project_pane::Section;
         for (name, s) in [

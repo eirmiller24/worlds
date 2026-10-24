@@ -17,6 +17,7 @@ pub mod history;
 pub mod import;
 pub mod inspector;
 mod layer_actions;
+pub mod levels;
 pub mod note_inspector;
 pub mod notes;
 pub mod panels;
@@ -81,6 +82,9 @@ pub enum Pane {
     Find,
     /// The undo log ([`history`]): click an entry to go back to it.
     History,
+    /// The levels of the world shown ([`levels`]): thumbnails, search,
+    /// sort, drag to reorder. Tab "Levels", next to the Layers pane.
+    Levels,
 }
 
 /// Default layout. Split fractions are the share of the first (left or
@@ -90,7 +94,7 @@ pub enum Pane {
 pub fn default_dock() -> DockState<Pane> {
     let mut dock = DockState::new(vec![Pane::Viewport(ViewportId::FIRST)]);
     let s = dock.main_surface_mut();
-    let [center, _left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
+    let [center, _left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers, Pane::Levels]);
     let [_layers, _palette] = s.split_below(_left, 0.45, vec![Pane::Palette]);
     let [center, right] = s.split_right(
         center,
@@ -248,6 +252,26 @@ fn parse_ui_file(text: &str) -> serde_json::Result<UiFile> {
         legacy_dock(d);
     }
     serde_json::from_value(v)
+}
+
+/// Give a layout saved before the Levels pane existed one: a tab next to
+/// the Layers pane, else the Palette, else a split left of the map.
+pub fn add_levels_pane(dock: &mut DockState<Pane>) {
+    if dock.find_tab(&Pane::Levels).is_some() {
+        return;
+    }
+    for next_to in [Pane::Layers, Pane::Palette] {
+        if let Some(p) = dock.find_tab(&next_to)
+            && let Ok(leaf) = dock.leaf_mut(p.node_path())
+        {
+            leaf.append_tab(Pane::Levels);
+            return;
+        }
+    }
+    if let Some((node, _)) = main_viewport(dock) {
+        dock.main_surface_mut()
+            .split_left(node, 0.2, vec![Pane::Levels]);
+    }
 }
 
 /// Bring `pane` to the front of its tab group.
@@ -493,6 +517,8 @@ pub struct EditorState {
     pub bookmark_focus: bool,
     /// The Library (assemblies) and the Save as assembly dialog.
     pub library: crate::library::LibraryState,
+    /// The Levels pane.
+    pub levels: levels::LevelsState,
 }
 
 impl Default for EditorState {
@@ -529,6 +555,7 @@ impl Default for EditorState {
             bookmark_name: String::new(),
             bookmark_focus: false,
             library: crate::library::LibraryState::default(),
+            levels: levels::LevelsState::default(),
         }
     }
 }
@@ -1302,7 +1329,29 @@ impl EditorApp {
             UiStep::Arrange(a) => self.arrange_step(a),
             UiStep::SaveAssembly(s) => self.save_assembly_step(s),
             UiStep::Library(l) => self.library_step(l),
+            UiStep::Levels(l) => self.levels_step(l),
         }
+    }
+
+    /// `"ui": "levels"`: see [`crate::script::LevelsStep`].
+    fn levels_step(&mut self, l: &crate::script::LevelsStep) -> Result<(), String> {
+        let sort = match l.sort.as_deref() {
+            None => levels::Sort::Order,
+            Some(s) => levels::Sort::parse(s)
+                .ok_or_else(|| format!("sort {s:?}: order, name or position"))?,
+        };
+        self.st.levels.search = l.search.clone().unwrap_or_default();
+        self.st.levels.sort = sort;
+        self.st.levels.all_worlds = l.all_worlds.unwrap_or(false);
+        show_pane(&mut self.dock, Pane::Levels);
+        if let Some(slug) = &l.select {
+            let doc = self.st.doc.as_ref().ok_or("no project open")?;
+            let ix = doc
+                .level_ix(slug)
+                .ok_or_else(|| format!("no level {slug:?}"))?;
+            levels::select(&mut self.st.view, doc, ix);
+        }
+        Ok(())
     }
 
     /// `"ui": "find"`: see [`crate::script::FindStep`].
@@ -2279,6 +2328,7 @@ impl EditorApp {
         add_project_pane(&mut self.dock);
         add_find_pane(&mut self.dock);
         add_history_pane(&mut self.dock);
+        add_levels_pane(&mut self.dock);
         self.restore_viewports(doc, &f);
         if let Some(i) = f
             .active_layer
@@ -2468,8 +2518,12 @@ impl EditorApp {
         entities::refresh(&mut self.st, rev, &ctx);
         self.st.notes.rev = rev;
         self.st.find.rev = rev;
+        self.st.levels.rev = rev;
         if std::mem::take(&mut self.st.find.focus) {
             show_pane(&mut self.dock, Pane::Find);
+        }
+        if std::mem::take(&mut self.st.levels.focus) {
+            show_pane(&mut self.dock, Pane::Levels);
         }
         history::refresh(
             &mut self.st.history,
@@ -3384,6 +3438,9 @@ impl EditorApp {
                     acts.push(Action::JumpBookmark(n));
                 }
             }
+            if i.consume_key(cmd, Key::L) {
+                acts.push(Action::ShowLevels);
+            }
         });
         if !ctx.egui_wants_keyboard_input() && !self.palette.open {
             ctx.input_mut(|i| {
@@ -3638,6 +3695,10 @@ impl EditorApp {
                         .view
                         .set_status(format!("Forgot bookmark {}", b.name), false);
                 }
+            }
+            Action::ShowLevels => {
+                show_pane(&mut self.dock, Pane::Levels);
+                self.st.levels.focus_search = true;
             }
             Action::DeleteSelection => self.delete_selection(),
             Action::DuplicateSelection => self.duplicate_selection(),
@@ -4584,6 +4645,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Project => "Project".into(),
             Pane::Find => "Find".into(),
             Pane::History => "History".into(),
+            Pane::Levels => "Levels".into(),
         }
     }
 
@@ -4638,6 +4700,7 @@ impl TabViewer for Tabs<'_> {
             Pane::Project => project_pane::pane(ui, self.st),
             Pane::Find => find::pane(ui, self.st),
             Pane::History => history::pane(ui, self.st),
+            Pane::Levels => levels::pane(ui, self.st),
         }
     }
 
@@ -4971,6 +5034,37 @@ mod tests {
         assert_eq!(
             d.find_tab(&Pane::Find).unwrap().node_path(),
             d.find_tab(&Pane::Notes).unwrap().node_path()
+        );
+    }
+
+    #[test]
+    fn old_layouts_get_the_levels_pane_next_to_the_layers() {
+        let mut old = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
+        let s = old.main_surface_mut();
+        let [_, left] = s.split_left(NodeIndex::root(), 0.2, vec![Pane::Layers]);
+        s.split_below(left, 0.45, vec![Pane::Palette]);
+        add_levels_pane(&mut old);
+        let layers = old.find_tab(&Pane::Layers).unwrap();
+        let levels = old.find_tab(&Pane::Levels).unwrap();
+        assert_eq!(
+            layers.node_path(),
+            levels.node_path(),
+            "a tab next to Layers"
+        );
+        add_levels_pane(&mut old);
+        assert_eq!(
+            old.iter_all_tabs()
+                .filter(|(_, t)| **t == Pane::Levels)
+                .count(),
+            1
+        );
+        let mut bare = DockState::new(vec![Pane::Viewport(crate::view::ViewportId::FIRST)]);
+        add_levels_pane(&mut bare);
+        assert!(bare.find_tab(&Pane::Levels).is_some());
+        let d = default_dock();
+        assert_eq!(
+            d.find_tab(&Pane::Levels).unwrap().node_path(),
+            d.find_tab(&Pane::Layers).unwrap().node_path()
         );
     }
 
