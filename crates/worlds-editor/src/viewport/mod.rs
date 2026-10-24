@@ -1208,7 +1208,7 @@ impl Viewport {
         }
         self.paint_strip = tool
             .is_paint_mode()
-            .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions));
+            .then(|| paint_strip(ui.ctx(), rect, tool, cx.actions, doc, cx.view));
 
         // Context menu (a right click; right drag pans).
         if resp.secondary_clicked() {
@@ -1510,7 +1510,14 @@ fn draw_dragged_selection(
 /// The Paint group's modes as a segmented strip (Brush, Line, Rectangle,
 /// Fill), where the Note tool's options go. A click is `SetTool`, exactly
 /// as the mode's key. Returns where it was drawn.
-fn paint_strip(ctx: &egui::Context, map: Rect, tool: Tool, actions: &mut Vec<Action>) -> Rect {
+fn paint_strip(
+    ctx: &egui::Context,
+    map: Rect,
+    tool: Tool,
+    actions: &mut Vec<Action>,
+    doc: &Document,
+    view: &mut ViewState,
+) -> Rect {
     egui::Area::new(egui::Id::new("paint tool strip"))
         .fixed_pos(map.min + STRIP_OFFSET)
         .order(egui::Order::Foreground)
@@ -1528,11 +1535,56 @@ fn paint_strip(ctx: &egui::Context, map: Rect, tool: Tool, actions: &mut Vec<Act
                             actions.push(Action::SetTool(t));
                         }
                     }
+                    let tiles_layer = view
+                        .active_layer
+                        .and_then(|l| doc.project.layers.get(l))
+                        .filter(|d| d.is_tiles());
+                    if let Some(def) = tiles_layer {
+                        ui.separator();
+                        random_toggle(ui, view, def.slug.as_str());
+                        let mut d = view.palette.density.clamp(1, 100);
+                        let r = ui
+                            .add(
+                                egui::Slider::new(&mut d, 1..=100)
+                                    .suffix(" %")
+                                    .text("Density"),
+                            )
+                            .on_hover_text(
+                                "Scatter: each cell of a stroke, rectangle or fill on a tiles \
+                                 layer is painted with this chance",
+                            );
+                        crate::app::fields::mark(ui, "paint:density", r.rect);
+                        view.palette.density = d;
+                    }
                 });
             });
         })
         .response
         .rect
+}
+
+/// The Paint strip's Random toggle for tiles layer `layer`: on turns a
+/// stamp into a random brush of its tiles (one alternative each), off
+/// turns a random brush back into a stamp of its first alternative.
+fn random_toggle(ui: &mut egui::Ui, view: &mut ViewState, layer: &str) {
+    let brush = view.palette.brush(layer).cloned();
+    let on = matches!(brush, Some(Brush::Random { .. }));
+    let r = ui
+        .add(egui::Button::selectable(on, "Random"))
+        .on_hover_text(
+            "Paint one of the selected tiles per cell, by weight (select several in the \
+             palette; Ctrl adds tiles, Shift adds a stamp)",
+        );
+    crate::app::fields::mark(ui, "paint:random", r.rect);
+    if !r.clicked() {
+        return;
+    }
+    match brush.as_ref().and_then(Brush::toggled_random) {
+        Some(b) => {
+            view.palette.brushes.insert(layer.to_string(), b);
+        }
+        None => view.set_status("Pick tiles in the palette first", true),
+    }
 }
 
 /// The Note tool's options: kind, scope (Auto or World), the pin icon.
@@ -2195,6 +2247,18 @@ fn brush_span(doc: &Document, view: &ViewState, layer: usize, tool: Tool) -> [i3
             [
                 (rect[2] * ts[0]).div_ceil(g).max(1) as i32,
                 (rect[3] * ts[1]).div_ceil(g).max(1) as i32,
+            ]
+        }
+        // A random brush previews one pick's cell (one tile).
+        Some(Brush::Random { tileset, .. }) => {
+            let g = doc.project.layer_grid(def).max(1);
+            let ts = doc
+                .project
+                .tileset(tileset.as_str())
+                .map_or([g, g], |t| t.tile_size);
+            [
+                ts[0].div_ceil(g).max(1) as i32,
+                ts[1].div_ceil(g).max(1) as i32,
             ]
         }
         _ => [1, 1],

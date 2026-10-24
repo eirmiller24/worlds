@@ -272,6 +272,30 @@ pub enum Brush {
 }
 
 impl Brush {
+    /// What the Paint strip's Random toggle makes of this brush: a stamp
+    /// becomes the random brush of its tiles, a random brush the stamp of
+    /// its first alternative (its first tile, for a stack); `None` for
+    /// anything else (or a random brush with no tiles).
+    pub fn toggled_random(&self) -> Option<Brush> {
+        match self {
+            Brush::Tiles { tileset, rect } => Some(Brush::random_of_rect(tileset.clone(), *rect)),
+            Brush::Random {
+                tileset,
+                alternatives,
+            } => alternatives
+                .iter()
+                .find_map(|a| {
+                    a.as_rect()
+                        .or_else(|| a.tiles.first().map(|t| [t[0], t[1], 1, 1]))
+                })
+                .map(|rect| Brush::Tiles {
+                    tileset: tileset.clone(),
+                    rect,
+                }),
+            _ => None,
+        }
+    }
+
     /// The random brush of every tile of an atlas rect, one alternative
     /// each, weight 1 (the Paint strip's Random toggle on a stamp).
     pub fn random_of_rect(tileset: Slug, rect: [u32; 4]) -> Brush {
@@ -1050,6 +1074,50 @@ pub fn crop_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn random_toggle_and_rolls() {
+        let ts = Slug::new("t").unwrap();
+        let stamp = Brush::Tiles {
+            tileset: ts.clone(),
+            rect: [2, 1, 2, 2],
+        };
+        let random = stamp.toggled_random().unwrap();
+        let Brush::Random { alternatives, .. } = &random else {
+            panic!("{random:?}")
+        };
+        let tiles: Vec<_> = alternatives.iter().map(|a| a.tiles.clone()).collect();
+        assert_eq!(tiles, [[[2, 1]], [[3, 1]], [[2, 2]], [[3, 2]]]);
+        assert!(alternatives.iter().all(|a| a.weight == 1));
+        assert_eq!(
+            random.toggled_random(),
+            Some(Brush::Tiles {
+                tileset: ts.clone(),
+                rect: [2, 1, 1, 1]
+            })
+        );
+        assert_eq!(Brush::Erase.toggled_random(), None);
+        let empty = Brush::Random {
+            tileset: ts,
+            alternatives: Vec::new(),
+        };
+        assert_eq!(empty.toggled_random(), None);
+        // Rolls: the same cell and seed always agree; weights steer picks.
+        assert_eq!(cell_roll(5, [3, -4], 1), cell_roll(5, [3, -4], 1));
+        assert_ne!(cell_roll(5, [3, -4], 1), cell_roll(6, [3, -4], 1));
+        let mut hits = [0u32; 3];
+        for x in 0..3000 {
+            hits[pick_weighted(&[1, 0, 3], 11, [x, 0]).unwrap()] += 1;
+        }
+        assert_eq!(hits[1], 0);
+        assert!((600..900).contains(&hits[0]), "{hits:?}");
+        assert_eq!(pick_weighted(&[0, 0], 1, [0, 0]), None);
+        let kept = (0..10_000)
+            .filter(|&x| density_keeps(9, [x, 1], 25))
+            .count();
+        assert!((2_200..2_800).contains(&kept), "{kept}");
+        assert!((0..100).all(|x| density_keeps(9, [x, 1], 100)));
+    }
 
     #[test]
     fn line_endpoints_and_continuity() {

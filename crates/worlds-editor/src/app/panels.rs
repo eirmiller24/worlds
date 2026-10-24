@@ -317,6 +317,13 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
             let Some(ts) = doc.project.tileset(&current) else {
                 return;
             };
+            random_section(
+                ui,
+                &mut st.view,
+                &mut st.edit_bufs,
+                &mut st.palette_tab,
+                &slug,
+            );
             let tex = atlas_texture(&mut st.atlas, ui.ctx(), doc, ts);
             let Some(tex) = tex else {
                 ui.colored_label(
@@ -342,6 +349,12 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
                     if resp.drag_started() || resp.clicked() {
                         st.atlas_drag = pointer.map(to_tile);
                     }
+                    let random = matches!(st.view.palette.brush(&slug), Some(Brush::Random { .. }));
+                    if random && (resp.drag_started() || resp.clicked()) {
+                        // A random brush keeps what it had before this drag
+                        // (Ctrl and Shift add to it).
+                        st.random_base = st.view.palette.brush(&slug).cloned();
+                    }
                     if let (Some(a), Some(p)) = (st.atlas_drag, pointer)
                         && (resp.dragged() || resp.drag_stopped() || resp.clicked())
                     {
@@ -352,32 +365,66 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
                             a[0].abs_diff(b[0]) + 1,
                             a[1].abs_diff(b[1]) + 1,
                         ];
-                        st.view.palette.brushes.insert(
-                            slug.clone(),
+                        let m = ui.input(|i| i.modifiers);
+                        let brush = if random {
+                            random_pick(st.random_base.as_ref(), ts.slug.clone(), rect, m)
+                        } else {
                             Brush::Tiles {
                                 tileset: ts.slug.clone(),
                                 rect,
-                            },
-                        );
+                            }
+                        };
+                        st.view.palette.brushes.insert(slug.clone(), brush);
                     }
                     if resp.drag_stopped() || resp.clicked() {
                         st.atlas_drag = None;
                     }
                     let p = ui.painter_at(resp.rect);
-                    if let Some(Brush::Tiles { tileset, rect }) = st.view.palette.brush(&slug)
-                        && tileset == &ts.slug
-                    {
+                    let outline = |rect: [u32; 4]| {
                         let a = ts.tile_px([rect[0], rect[1]]);
                         let b = ts.tile_px([rect[0] + rect[2] - 1, rect[1] + rect[3] - 1]);
-                        let r = egui::Rect::from_min_max(
+                        egui::Rect::from_min_max(
                             resp.rect.min + Vec2::new(a[0] as f32, a[1] as f32) * scale,
                             resp.rect.min
                                 + Vec2::new(
                                     (b[0] + ts.tile_size[0]) as f32,
                                     (b[1] + ts.tile_size[1]) as f32,
                                 ) * scale,
-                        );
-                        p.rect_stroke(r, 0.0, Stroke::new(2.0, st.accent), StrokeKind::Outside);
+                        )
+                    };
+                    match st.view.palette.brush(&slug) {
+                        Some(Brush::Tiles { tileset, rect }) if tileset == &ts.slug => {
+                            p.rect_stroke(
+                                outline(*rect),
+                                0.0,
+                                Stroke::new(2.0, st.accent),
+                                StrokeKind::Outside,
+                            );
+                        }
+                        // A random brush: every alternative's tiles, dashed
+                        // look by a thinner stroke and a tint.
+                        Some(Brush::Random {
+                            tileset,
+                            alternatives,
+                        }) if tileset == &ts.slug => {
+                            for a in alternatives {
+                                let rects: Vec<[u32; 4]> = match a.as_rect() {
+                                    Some(r) => vec![r],
+                                    None => a.tiles.iter().map(|t| [t[0], t[1], 1, 1]).collect(),
+                                };
+                                for r in rects {
+                                    let r = outline(r);
+                                    p.rect_filled(r, 0.0, st.accent.gamma_multiply(0.18));
+                                    p.rect_stroke(
+                                        r,
+                                        0.0,
+                                        Stroke::new(1.5, st.accent),
+                                        StrokeKind::Inside,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                     if let Some(h) = resp.hover_pos() {
                         let t = to_tile(h);
@@ -396,6 +443,163 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
         }
         LayerKind::Entities => super::entities::palette(ui, st),
     }
+}
+
+/// The random brush an atlas drag over `rect` makes: each tile of it one
+/// alternative, replacing `base`'s (a plain drag), added to them (Ctrl),
+/// or the whole rect added as one stamp alternative (Shift). A `base` of
+/// another tileset is replaced.
+pub fn random_pick(
+    base: Option<&Brush>,
+    tileset: worlds_core::Slug,
+    rect: [u32; 4],
+    m: egui::Modifiers,
+) -> Brush {
+    let mut alternatives = match base {
+        Some(Brush::Random {
+            tileset: t,
+            alternatives,
+        }) if *t == tileset && (m.shift || crate::tools::pixel_mod(m)) => alternatives.clone(),
+        _ => Vec::new(),
+    };
+    let fresh: Vec<worlds_core::TileAlt> = if m.shift {
+        vec![worlds_core::TileAlt::rect(
+            rect[0], rect[1], rect[2], rect[3],
+        )]
+    } else {
+        match Brush::random_of_rect(tileset.clone(), rect) {
+            Brush::Random { alternatives, .. } => alternatives,
+            _ => Vec::new(),
+        }
+    };
+    for a in fresh {
+        if !alternatives.iter().any(|b| b.tiles == a.tiles) {
+            alternatives.push(a);
+        }
+    }
+    Brush::Random {
+        tileset,
+        alternatives,
+    }
+}
+
+/// The palette's random brush part, above the atlas of tiles layer
+/// `layer`: the current random brush's alternatives with their weights
+/// (`×` drops one) and Save as preset; then the saved presets (a click
+/// makes one the brush, `×` forgets it).
+fn random_section(
+    ui: &mut egui::Ui,
+    view: &mut crate::view::ViewState,
+    edit_bufs: &mut std::collections::HashMap<String, String>,
+    palette_tab: &mut std::collections::HashMap<String, String>,
+    layer: &str,
+) {
+    let presets = &mut view.palette.presets;
+    let brush = view.palette.brushes.get_mut(layer);
+    let mut load = None;
+    if let Some(Brush::Random {
+        tileset,
+        alternatives,
+    }) = brush
+    {
+        ui.horizontal(|ui| {
+            ui.strong("Random");
+            ui.weak(format!(
+                "{} alternative{} from {tileset}",
+                alternatives.len(),
+                if alternatives.len() == 1 { "" } else { "s" }
+            ));
+        });
+        let mut remove = None;
+        egui::Grid::new("random alternatives")
+            .num_columns(3)
+            .show(ui, |ui| {
+                for (i, a) in alternatives.iter_mut().enumerate() {
+                    let what = match (a.as_rect(), a.tiles.as_slice()) {
+                        (Some([c, r, 1, 1]), _) => format!("[{c}, {r}]"),
+                        (Some([c, r, w, h]), _) => format!("[{c}, {r}] {w}x{h}"),
+                        (None, t) => format!("stack of {}", t.len()),
+                    };
+                    ui.label(what);
+                    let r = ui
+                        .add(
+                            egui::DragValue::new(&mut a.weight)
+                                .range(0..=1000)
+                                .prefix("w "),
+                        )
+                        .on_hover_text("Weight: picked in proportion to it (0: never)");
+                    super::fields::mark(ui, &format!("random:weight:{i}"), r.rect);
+                    if ui.small_button("×").clicked() {
+                        remove = Some(i);
+                    }
+                    ui.end_row();
+                }
+            });
+        if let Some(i) = remove {
+            alternatives.remove(i);
+        }
+        ui.horizontal(|ui| {
+            let name = edit_bufs.entry("random:preset_name".into()).or_default();
+            let r = ui.add(
+                egui::TextEdit::singleline(name)
+                    .hint_text("preset name")
+                    .desired_width(110.0),
+            );
+            super::fields::mark(ui, "random:preset_name", r.rect);
+            let ok = !name.trim().is_empty() && !alternatives.is_empty();
+            let b = ui.add_enabled(ok, egui::Button::new("Save preset"));
+            super::fields::mark(ui, "random:save", b.rect);
+            if b.clicked() {
+                let name = name.trim().to_string();
+                let p = crate::tools::BrushPreset {
+                    name: name.clone(),
+                    tileset: tileset.clone(),
+                    alternatives: alternatives.clone(),
+                };
+                match presets.iter_mut().find(|q| q.name == name) {
+                    Some(q) => *q = p,
+                    None => presets.push(p),
+                }
+                edit_bufs.remove("random:preset_name");
+            }
+        });
+    }
+    if !presets.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Presets");
+            let mut forget = None;
+            for (i, p) in presets.iter().enumerate() {
+                let r = ui.button(&p.name).on_hover_text(format!(
+                    "{} alternatives from {} (right click: forget)",
+                    p.alternatives.len(),
+                    p.tileset
+                ));
+                super::fields::mark(ui, &format!("random:preset:{}", p.name), r.rect);
+                if r.clicked() {
+                    load = Some(i);
+                }
+                if r.secondary_clicked() {
+                    forget = Some(i);
+                }
+            }
+            if let Some(i) = forget {
+                presets.remove(i);
+            }
+        });
+    }
+    if let Some(i) = load
+        && let Some(p) = view.palette.presets.get(i).cloned()
+    {
+        palette_tab.insert(layer.to_string(), p.tileset.to_string());
+        view.palette.brushes.insert(
+            layer.to_string(),
+            Brush::Random {
+                tileset: p.tileset,
+                alternatives: p.alternatives,
+            },
+        );
+    }
+    ui.separator();
 }
 
 /// The egui texture of a tileset's atlas (nearest sampling), loaded on
@@ -955,6 +1159,91 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    /// The palette's random brush: an atlas drag replaces, Ctrl adds tiles,
+    /// Shift adds a stamp; the weights, Save preset and a preset's click.
+    #[test]
+    fn random_brush_in_the_palette() {
+        use super::super::testkit::{Driver, state};
+        use worlds_core::{Slug, TileAlt};
+        let ts = Slug::new("castle_main").unwrap();
+        let none = egui::Modifiers::default();
+        let ctrl = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..Default::default()
+        };
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let alts = |b: &Brush| match b {
+            Brush::Random { alternatives, .. } => alternatives.clone(),
+            _ => panic!("{b:?}"),
+        };
+        let a = random_pick(None, ts.clone(), [0, 0, 2, 1], none);
+        assert_eq!(alts(&a), [TileAlt::single(0, 0), TileAlt::single(1, 0)]);
+        let b = random_pick(Some(&a), ts.clone(), [1, 0, 2, 1], ctrl);
+        assert_eq!(
+            alts(&b),
+            [
+                TileAlt::single(0, 0),
+                TileAlt::single(1, 0),
+                TileAlt::single(2, 0)
+            ]
+        );
+        let c = random_pick(Some(&b), ts.clone(), [4, 4, 2, 2], shift);
+        assert_eq!(alts(&c).last(), Some(&TileAlt::rect(4, 4, 2, 2)));
+        assert_eq!(
+            alts(&random_pick(Some(&c), ts.clone(), [9, 9, 1, 1], none)).len(),
+            1
+        );
+
+        let (_tmp, mut st) = state();
+        let li = st
+            .doc
+            .as_ref()
+            .unwrap()
+            .project
+            .layers
+            .iter()
+            .position(|l| l.slug == "decor_back")
+            .unwrap();
+        st.view.active_layer = Some(li);
+        st.view
+            .palette
+            .brushes
+            .insert("decor_back".into(), c.clone());
+        let mut d = Driver::new(palette);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        // Name it and save it.
+        d.click(&mut st, d.rect("random:preset_name").center());
+        d.frame(&mut st, vec![egui::Event::Text("ledges".into())]);
+        d.click(&mut st, d.rect("random:save").center());
+        assert_eq!(st.view.palette.presets.len(), 1);
+        assert_eq!(st.view.palette.presets[0].name, "ledges");
+        assert_eq!(st.view.palette.presets[0].alternatives, alts(&c));
+        // Another brush, then the preset brings it back.
+        st.view.palette.brushes.insert(
+            "decor_back".into(),
+            Brush::Tiles {
+                tileset: ts.clone(),
+                rect: [0, 0, 1, 1],
+            },
+        );
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("random:preset:ledges").center());
+        assert_eq!(st.view.palette.brush("decor_back"), Some(&c));
+        // The presets go to ui.json and come back.
+        let json = serde_json::to_string(&st.view.palette).unwrap();
+        let back: crate::tools::PaletteSelection = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.presets, st.view.palette.presets);
+        // A ui.json palette from before presets: density 100, no presets.
+        let old: crate::tools::PaletteSelection =
+            serde_json::from_str(r#"{ "brushes": {} }"#).unwrap();
+        assert_eq!((old.density, old.presets.len()), (100, 0));
+    }
 
     /// The Inspector's level Resize section: the anchor picker and the size
     /// make one `resize_level`; Crop to content queues the crop batch; a

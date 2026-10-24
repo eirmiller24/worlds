@@ -283,6 +283,9 @@ pub struct EditorState {
     /// Palette tileset tab per tiles layer slug.
     pub palette_tab: HashMap<String, String>,
     pub atlas_drag: Option<[u32; 2]>,
+    /// The random brush as it was when the current atlas drag started (a
+    /// Ctrl or Shift drag adds to it).
+    pub random_base: Option<crate::tools::Brush>,
     pub tool_events: Vec<ToolEvent>,
     /// Commands queued by panels this frame (inspector edits), applied as
     /// one undo entry each.
@@ -323,6 +326,7 @@ impl Default for EditorState {
             atlas: HashMap::new(),
             palette_tab: HashMap::new(),
             atlas_drag: None,
+            random_base: None,
             tool_events: Vec::new(),
             pending: Vec::new(),
             edit_bufs: HashMap::new(),
