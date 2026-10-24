@@ -246,6 +246,17 @@ fn hit_tests_and_fills_follow_the_outline() {
     // An L: crevasse (20x5 at [0, 0]) loses its top-right 4x2; shaft moves
     // into the notch.
     r.gesture(r#"{ "gesture": "shape", "level": "crevasse", "path": [[16, 0], [19, 1]] }"#);
+    // The map's per-world lookup: nothing under the empty notch.
+    let notch = [17.0 * 16.0 + 4.0, 20.0];
+    assert_eq!(worlds_editor::viewport::level_under(&r.doc, notch), None);
+    assert_eq!(
+        worlds_editor::viewport::level_under_in(&r.doc, 0, notch),
+        None
+    );
+    assert_eq!(
+        worlds_editor::viewport::level_under_in(&r.doc, 0, [4.0, 4.0]),
+        r.doc.level_ix("crevasse")
+    );
     let mut ed = std::mem::take(&mut r.ed);
     ed.apply(
         &mut r.cx(),
@@ -326,4 +337,46 @@ fn shape_void_cuts_and_fills_rects() {
     );
     // A fill outside every rect changes nothing.
     assert_eq!(shape_void(&v, size, [8, 0, 9, 1], true), None);
+}
+
+#[test]
+fn the_paste_ghost_marks_the_void_and_the_paste_skips_it() {
+    use worlds_editor::clipboard::{self, PasteGhost, VOID_TINT};
+    let mut r = Rig::new();
+    r.gesture(r#"{ "gesture": "shape", "level": "crevasse", "path": [[16, 0], [19, 1]] }"#);
+    let frag: worlds_core::fragment::Fragment = serde_json::from_value(serde_json::json!({
+        "worlds_fragment": 1, "grid_size": 16, "size": [4, 1],
+        "grids": { "collision": { "rows": ["oooo"] } }
+    }))
+    .unwrap();
+    let crev = r.doc.level_ix("crevasse").unwrap();
+    let mut g = PasteGhost::new(frag.clone());
+    g.at = Some((crev, [14, 1]));
+    g.refresh(&r.doc);
+    let (_, ghost) = g.ghost.as_ref().unwrap();
+    // Cells 16 and 17 of row 1 can't land: one red fill over them.
+    let red: Vec<_> = ghost
+        .fills
+        .iter()
+        .filter(|(_, c)| *c == VOID_TINT)
+        .map(|(r, _)| (r.min, r.max))
+        .collect();
+    assert_eq!(red, [([256.0, 16.0], [288.0, 32.0])]);
+    assert_eq!(ghost.cells(), 2, "only the two level cells are painted");
+    // Off the void, nothing is marked.
+    g.at = Some((crev, [2, 2]));
+    g.refresh(&r.doc);
+    let (_, ghost) = g.ghost.as_ref().unwrap();
+    assert!(ghost.fills.iter().all(|(_, c)| *c != VOID_TINT));
+    // The paste itself leaves the void empty.
+    let plan = clipboard::paste_plan(&r.doc, &frag, crev, [14, 1]).unwrap();
+    assert!(
+        plan.problems.iter().any(|p| p.contains("void")),
+        "{:?}",
+        plan.problems
+    );
+    let mut ed = std::mem::take(&mut r.ed);
+    ed.apply(&mut r.cx(), plan.command()).unwrap();
+    r.ed = ed;
+    assert_eq!(&r.rows("crevasse")[1][14..], "oo....");
 }

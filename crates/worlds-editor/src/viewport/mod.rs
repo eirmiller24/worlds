@@ -2392,8 +2392,9 @@ fn shape_strip(
         });
 }
 
-/// The topmost level of world `world` whose rect holds world pixel `wp`
-/// (draw order: depth, then index).
+/// The topmost level of world `world` with a cell under world pixel `wp`
+/// (draw order: depth, then index): a non-rectangular level's void isn't
+/// part of it.
 pub fn level_under_in(doc: &Document, world: usize, wp: [f64; 2]) -> Option<LevelIx> {
     let mut order: Vec<LevelIx> = (0..doc.levels.len())
         .filter(|&i| doc.levels[i].world == world)
@@ -2402,7 +2403,7 @@ pub fn level_under_in(doc: &Document, world: usize, wp: [f64; 2]) -> Option<Leve
     order
         .into_iter()
         .rev()
-        .find(|&i| level_wrect(doc, i).contains(wp))
+        .find(|&i| level_wrect(doc, i).contains(wp) && in_level_px(doc, i, wp))
 }
 
 /// What a Select click at `wp` picks, topmost first: a note or pin (card,

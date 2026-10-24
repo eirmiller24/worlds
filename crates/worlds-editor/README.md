@@ -598,9 +598,9 @@ A level can have cells cut out of its rect (its `void`, a list of rects in proje
 
 - **Shape mode**: right-click a level, "Shape {slug}…", or Edit shape in the Inspector. Drag a rect of cells to cut them out, Shift-drag to fill them back in; the preview is red for a cut and green for a fill, with what it will do. Each release is one `set_level_void`, so one undo entry ("Shape level crevasse"). A cut over an entity is refused with a status and no entry; cut cells lose their grid, overrides and tiles (undo brings them back). The strip has Make rectangular and Done; Escape goes back to Select. The tool isn't in the toolbar and has no shortcut.
 - **Inspector**: the Shape section lists the void rects as `x, y, w, h` (each editable, Set or Enter; × fills it back in), a row to cut another (Cut out), the cell count and how many pieces the level is in, Edit shape and Make rectangular.
-- **Painting**: brush, rect and line skip void cells, fill doesn't run through them, and the entity tool refuses a void cell ("Cell x, y is cut out of level L (its void)"). The API and `--script` clip the same way.
+- **Painting**: brush, rect and line skip void cells, fill doesn't run through them, and the entity tool refuses a void cell ("Cell x, y is cut out of level L (its void)"). The API and `--script` clip the same way. Paste (Ctrl+V) leaves out what lands in the void; its ghost shows those cells in red.
 - **Drawing**: the level's background covers only its cells (the void is transparent, so a level behind shows through), its outline is the shape's boundary, and the active level's void is hatched. Snapshots fill the background by cells too.
-- **Hit tests**: a click, hover or the level under the pointer follows the cells, so a level sitting in another's notch gets the clicks there. Dragging a level snaps to the shaped outlines of the others.
+- **Hit tests**: a click, hover or the level under the pointer follows the cells, so a level sitting in another's notch gets the clicks there (in every world: `level_under_in` follows the cells too). Connectors to a shaped level end on its outline. Dragging a level snaps to the shaped outlines of the others.
 - **Script**: `{ "gesture": "shape", "level": "crevasse", "path": [[16, 0], [19, 1]], "shift": false }`, the drag's two corners in project cells; it takes no `layer`.
 
 ## Versions
