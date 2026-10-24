@@ -149,6 +149,23 @@ impl ProjectState {
         self.show(Section::Layers);
     }
 
+    /// Show a tileset's form.
+    pub fn show_tileset(&mut self, slug: Slug) {
+        self.tileset = Some(slug);
+        self.show(Section::Tilesets);
+    }
+
+    /// What + Tileset… does: the native PNG picker, then a new tileset for
+    /// the picked file (its form open). The Tilesets part comes to the
+    /// front so the result is seen. Nothing happens while a picker is
+    /// already open.
+    pub fn pick_new_tileset(&mut self, ctx: &egui::Context, dir: &Path) {
+        if self.picker.is_none() {
+            self.picker = Some((start_picker(ctx, dir), PickFor::New));
+        }
+        self.show(Section::Tilesets);
+    }
+
     /// The frame's pending commands were applied: `ok` if none was refused.
     /// Returns a layer to make active (one the pane just added).
     pub fn applied(&mut self, ok: bool) -> Option<Slug> {

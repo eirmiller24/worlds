@@ -636,20 +636,17 @@ pub fn palette(ui: &mut egui::Ui, st: &mut EditorState) {
                 .entry(slug.clone())
                 .or_insert(default)
                 .clone();
-            egui::ScrollArea::horizontal()
-                .id_salt("tileset tabs")
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for t in tilesets {
-                            if ui
-                                .selectable_label(current == t.slug.as_str(), t.slug.as_str())
-                                .clicked()
-                            {
-                                st.palette_tab.insert(slug.clone(), t.slug.to_string());
-                            }
-                        }
-                    });
-                });
+            if let Some(t) = tileset_picker(
+                ui,
+                doc,
+                &mut st.edit_bufs,
+                &mut st.project,
+                &mut st.palette_rects,
+                &slug,
+                &current,
+            ) {
+                st.palette_tab.insert(slug.clone(), t);
+            }
             ui.separator();
             let Some(ts) = doc.project.tileset(&current) else {
                 return;
@@ -1506,11 +1503,166 @@ pub fn log(ui: &mut egui::Ui, st: &mut EditorState) {
     });
 }
 
+/// The tilesets that match `query` (the palette picker's search box), best
+/// first: a fuzzy match on the slug, ties by slug. An empty query lists
+/// every tileset in project order.
+pub fn rank_tilesets<'a>(
+    tilesets: &'a [worlds_core::TilesetDef],
+    query: &str,
+) -> Vec<&'a worlds_core::TilesetDef> {
+    let q = super::actions::fuzzy_query(query);
+    if q.is_empty() {
+        return tilesets.iter().collect();
+    }
+    let mut v: Vec<(i32, &worlds_core::TilesetDef)> = tilesets
+        .iter()
+        .filter_map(|t| super::actions::fuzzy_score_chars(&q, t.slug.as_str()).map(|s| (s, t)))
+        .collect();
+    v.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.slug.cmp(&b.1.slug)));
+    v.into_iter().map(|(_, t)| t).collect()
+}
+
+/// The tiles palette's tileset picker: a button naming the tileset the
+/// atlas shows, whose popup has a search box (Enter or Tab takes the first
+/// match), the matching tilesets with their tile sizes, and Edit… / Add a
+/// tileset… (both go to the Project pane's Tilesets part). Ten tilesets in
+/// a row of tabs can't be read or searched; a list with a search box can.
+/// Returns the slug picked, if any.
+fn tileset_picker(
+    ui: &mut egui::Ui,
+    doc: &crate::doc::Document,
+    bufs: &mut std::collections::HashMap<String, String>,
+    project: &mut super::project_pane::ProjectState,
+    rects: &mut std::collections::HashMap<String, egui::Rect>,
+    layer: &str,
+    current: &str,
+) -> Option<String> {
+    use egui::{Key, Modifiers, Popup, PopupCloseBehavior};
+    let key = format!("tileset search:{layer}");
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        ui.weak("Tileset");
+        let button = ui.button(format!("{current} ⏷")).on_hover_text(
+            "The tileset the atlas below shows. Click to pick another (type to search), \
+                 edit this one, or add a tileset",
+        );
+        rects.insert("tileset button".into(), button.rect);
+        let popup = Popup::from_toggle_button_response(&button)
+            .close_behavior(PopupCloseBehavior::CloseOnClickOutside);
+        // The rects are last frame's: a closed popup has no rows.
+        rects.retain(|k, _| !k.starts_with("tileset row:") && k != "tileset edit");
+        if !popup.is_open() {
+            bufs.remove(&key);
+        }
+        popup.show(|ui| {
+            ui.set_min_width(240.0);
+            ui.set_max_width(320.0);
+            // Tab completes before the text field can move the focus.
+            let complete = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab));
+            // No buffer yet: the popup just opened, so the search box takes
+            // the keyboard.
+            let just_opened = !bufs.contains_key(&key);
+            let query = bufs.entry(key.clone()).or_default();
+            let search = ui.add(
+                egui::TextEdit::singleline(query)
+                    .hint_text("Search tilesets")
+                    .desired_width(280.0),
+            );
+            if just_opened {
+                search.request_focus();
+            }
+            let entered = search.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            let ranked = rank_tilesets(&doc.project.tilesets, query);
+            if (complete || entered)
+                && let Some(t) = ranked.first()
+            {
+                picked = Some(t.slug.to_string());
+            }
+            ui.separator();
+            if ranked.is_empty() {
+                ui.weak("No tileset matches");
+            }
+            egui::ScrollArea::vertical()
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    for t in &ranked {
+                        let r = ui.selectable_label(
+                            current == t.slug.as_str(),
+                            format!("{}  {}x{}", t.slug, t.tile_size[0], t.tile_size[1]),
+                        );
+                        rects.insert(format!("tileset row:{}", t.slug), r.rect);
+                        if r.clicked() {
+                            picked = Some(t.slug.to_string());
+                        }
+                    }
+                });
+            ui.separator();
+            if let Ok(cur) = worlds_core::Slug::new(current) {
+                let r = ui.button(format!("Edit {current}…")).on_hover_text(
+                    "Its form in the Project pane: slug, image, tile size, spacing, padding",
+                );
+                rects.insert("tileset edit".into(), r.rect);
+                if r.clicked() {
+                    project.show_tileset(cur);
+                    ui.close();
+                }
+            }
+            if ui
+                .button("Add a tileset…")
+                .on_hover_text(
+                    "Pick a PNG (the Project pane's + Tileset…). One outside the project is \
+                     copied into art/ first",
+                )
+                .clicked()
+            {
+                project.pick_new_tileset(ui.ctx(), &doc.dir);
+                ui.close();
+            }
+            if picked.is_some() {
+                ui.close();
+            }
+        });
+    });
+    picked
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    #[test]
+    fn tileset_search_ranks_by_fuzzy_match_and_keeps_project_order_when_empty() {
+        let ts = |slug: &str| worlds_core::TilesetDef {
+            slug: worlds_core::Slug::new(slug).unwrap(),
+            image: format!("art/{slug}.png"),
+            tile_size: [16, 16],
+            spacing: 0,
+            padding: 0,
+        };
+        let all = [
+            ts("castle_main"),
+            ts("props"),
+            ts("cave_fg"),
+            ts("castle_decor"),
+        ];
+        let slugs = |v: Vec<&worlds_core::TilesetDef>| {
+            v.iter().map(|t| t.slug.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            slugs(rank_tilesets(&all, "")),
+            ["castle_main", "props", "cave_fg", "castle_decor"]
+        );
+        // A prefix beats a scattered match; ties fall back to the slug.
+        let r = slugs(rank_tilesets(&all, "cas"));
+        assert_eq!(r.len(), 2);
+        assert!(r.contains(&"castle_main".to_string()) && r.contains(&"castle_decor".to_string()));
+        assert_eq!(slugs(rank_tilesets(&all, "pr")), ["props"]);
+        // Whitespace and case don't matter; no match is an empty list.
+        assert_eq!(slugs(rank_tilesets(&all, " Cave FG ")), ["cave_fg"]);
+        assert!(rank_tilesets(&all, "zzz").is_empty());
+    }
 
     /// Layer folders: the tree, the command a drop makes, and a folder's
     /// eye, lock and opacity applied to the layers inside.

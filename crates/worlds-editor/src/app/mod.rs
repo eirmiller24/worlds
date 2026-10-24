@@ -508,6 +508,10 @@ pub struct EditorState {
     pub project: project_pane::ProjectState,
     /// Where each pane drew last frame (screen points; tests).
     pub pane_rects: HashMap<Pane, egui::Rect>,
+    /// Where the Palette pane drew its controls last frame, by key
+    /// ("tileset button", "tileset row:<slug>"; tests).
+    #[doc(hidden)]
+    pub palette_rects: HashMap<String, egui::Rect>,
     /// The Find pane.
     pub find: find::FindState,
     /// The History pane.
@@ -559,6 +563,7 @@ impl Default for EditorState {
             notes: notes::NotesState::default(),
             project: project_pane::ProjectState::default(),
             pane_rects: HashMap::new(),
+            palette_rects: HashMap::new(),
             find: find::FindState::default(),
             history: history::HistoryState::default(),
             ref_picker: None,
