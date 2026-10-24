@@ -456,12 +456,28 @@ impl Editing {
         }
         let redefined = self.defs_changed(cx, changes);
         let doc = &mut *cx.doc;
+        // A renamed world stays the one shown.
+        for c in changes {
+            if let Change::WorldRenamed { from, to } = c
+                && cx.view.active_world.as_ref() == Some(from)
+            {
+                cx.view.active_world = Some(to.clone());
+            }
+        }
+        // World commands move levels between worlds or change the worlds'
+        // order: level indices and their world indices change.
         if changes.iter().any(|c| {
             matches!(
                 c,
                 Change::LevelCreated { .. }
                     | Change::LevelDeleted { .. }
                     | Change::LevelRenamed { .. }
+                    | Change::WorldCreated { .. }
+                    | Change::WorldRemoved { .. }
+                    | Change::WorldRenamed { .. }
+                    | Change::Project {
+                        key: ProjectKey::Worlds
+                    }
             )
         }) {
             let map = doc.reindex();
@@ -1284,9 +1300,13 @@ impl Editing {
                     cx.view.zoom,
                 )
                 .or_else(|| {
-                    crate::viewport::level_under(cx.doc, start.world_px)
-                        .map(|ix| crate::view::SelItem::Level(cx.doc.ids[ix].clone()))
-                        .filter(|i| cx.view.selection.contains(i))
+                    crate::viewport::level_under_in(
+                        cx.doc,
+                        cx.view.world_ix(cx.doc),
+                        start.world_px,
+                    )
+                    .map(|ix| crate::view::SelItem::Level(cx.doc.ids[ix].clone()))
+                    .filter(|i| cx.view.selection.contains(i))
                 })
             {
                 if pixel {

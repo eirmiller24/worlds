@@ -587,6 +587,47 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         world_px: Option<[i64; 2]>,
     },
+
+    // ---- worlds ----
+    /// Add an empty world (`worlds/<slug>/world.json`), last in the display
+    /// order.
+    CreateWorld {
+        slug: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Change a world's slug (its directory) and/or display name. Leave a
+    /// key out to keep it; `name: ""` removes the name.
+    RenameWorld {
+        world: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slug: Option<Slug>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Remove a world with its levels, notes and guide groups. Refused
+    /// unless the world is empty or `confirm` is set, and for the last world.
+    RemoveWorld {
+        world: Slug,
+        #[serde(default, skip_serializing_if = "is_false")]
+        confirm: bool,
+    },
+    /// Set the display order (`project.json` `worlds`): every world once.
+    /// `[]` drops the list (slug order). `restore` takes the list as given
+    /// (unknown or missing slugs); inverses set it.
+    ReorderWorlds {
+        order: Vec<Slug>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        restore: bool,
+    },
+    /// Move a level to another world, keeping its slug, id and content;
+    /// `world_px` places it there (default: where it was).
+    MoveLevelToWorld {
+        level: Slug,
+        world: Slug,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        world_px: Option<[i64; 2]>,
+    },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -708,6 +749,18 @@ impl Command {
             }
             Batch { label, .. } => label.clone(),
             DuplicateLevel { level, slug, .. } => format!("Duplicate level {level} as {slug}"),
+            CreateWorld { slug, .. } => format!("Create world {slug}"),
+            RenameWorld {
+                world,
+                slug: Some(slug),
+                ..
+            } if slug != world => format!("Rename world {world} to {slug}"),
+            RenameWorld { world, .. } => format!("Rename world {world}"),
+            RemoveWorld { world, .. } => format!("Delete world {world}"),
+            ReorderWorlds { .. } => "Reorder worlds".into(),
+            MoveLevelToWorld { level, world, .. } => {
+                format!("Move level {level} to world {world}")
+            }
         }
     }
 }
@@ -1026,6 +1079,8 @@ pub enum ProjectKey {
     DefaultLevelSize,
     /// Matters only to saving.
     ExportOnSave,
+    /// `worlds`: the display order of the worlds.
+    Worlds,
 }
 
 impl ProjectKey {
@@ -1040,6 +1095,7 @@ impl ProjectKey {
             ProjectKey::BlockingValues => "blocking_values",
             ProjectKey::DefaultLevelSize => "default_level_size",
             ProjectKey::ExportOnSave => "export_on_save",
+            ProjectKey::Worlds => "worlds",
         }
     }
 }
@@ -1394,6 +1450,28 @@ pub enum Change {
         from: Slug,
         to: Slug,
     },
+    /// A world was added (its directory is dirty).
+    WorldCreated {
+        world: Slug,
+    },
+    /// A world was removed with everything in it (saving deletes its
+    /// directory). Its levels are reported as `level_deleted` first.
+    WorldRemoved {
+        world: Slug,
+    },
+    /// A world's slug changed: its directory moved, levels and all.
+    WorldRenamed {
+        from: Slug,
+        to: Slug,
+    },
+    /// A world's `world.json` name changed.
+    WorldMeta {
+        world: Slug,
+    },
+}
+
+fn world_dir(world: &Slug) -> PathBuf {
+    PathBuf::from("worlds").join(world.as_str())
 }
 
 fn level_dir(world: &Slug, level: &Slug) -> PathBuf {
@@ -1452,6 +1530,9 @@ impl Change {
             LayerFileRenamed {
                 world, level, to, ..
             } => level_dir(world, level).join(format!("{to}.json")),
+            WorldCreated { world } | WorldRemoved { world } => world_dir(world),
+            WorldRenamed { to, .. } => world_dir(to),
+            WorldMeta { world } => world_dir(world).join("world.json"),
         }
     }
 
@@ -1463,6 +1544,7 @@ impl Change {
             Change::LevelRenamed { world, from, to } => {
                 vec![level_dir(world, from), level_dir(world, to)]
             }
+            Change::WorldRenamed { from, to } => vec![world_dir(from), world_dir(to)],
             Change::DefRenamed { kind, from, to } => {
                 let (a, b) = (kind.file(from), kind.file(to));
                 if a == b { vec![b] } else { vec![a, b] }
@@ -1499,7 +1581,14 @@ impl Change {
             | LayerFileRenamed { level, .. } => Some(level),
             LevelRenamed { to, .. } => Some(to),
             Note { level, .. } => level.as_ref(),
-            GuideGroup { .. } | Project { .. } | Def { .. } | DefRenamed { .. } => None,
+            GuideGroup { .. }
+            | Project { .. }
+            | Def { .. }
+            | DefRenamed { .. }
+            | WorldCreated { .. }
+            | WorldRemoved { .. }
+            | WorldRenamed { .. }
+            | WorldMeta { .. } => None,
         }
     }
 }
@@ -1554,7 +1643,10 @@ pub fn coalesce(changes: Vec<Change>) -> Vec<Change> {
             | Change::LevelDeleted { .. }
             | Change::LevelRenamed { .. }
             | Change::DefRenamed { .. }
-            | Change::LayerFileRenamed { .. } => {
+            | Change::LayerFileRenamed { .. }
+            | Change::WorldCreated { .. }
+            | Change::WorldRemoved { .. }
+            | Change::WorldRenamed { .. } => {
                 seen.clear();
                 out.push(c);
                 continue;
@@ -1706,6 +1798,8 @@ pub enum CommandError {
         batch: Box<CommandError>,
         failed: Vec<CommandError>,
     },
+    #[error("a world {0:?} already exists")]
+    DuplicateWorld(Slug),
 }
 
 impl fmt::Display for NoteScope {

@@ -39,7 +39,7 @@ mygame.worlds/
     autosave/g<N>/<path>        the autosaved bytes of each modified file, generation N
     autosave.discarded/         the last autosave discarded (one kept)
     server.json, server.lock    the live API's discovery file and its lock (api.md)
-    ui.json                     the editor's view state (active level and layer, layer visibility, tool, annotation options)
+    ui.json                     the editor's view state (active world, level and layer, layer visibility, tool, annotation options)
 ```
 
 Rules for the layout:
@@ -114,6 +114,7 @@ A layer's grid must divide or be a multiple of the project grid. A level that is
 | `level_fields` | array of field definitions | no | Fields every level has. Same shape as entity fields (see [Field definitions](#field-definitions)). Values go in each `level.json` under `fields` |
 | `default_level_size` | `[w, h]` | no | Size in cells of a level made with the editor's New Level command. Left out, the editor uses the most common level size in the project |
 | `export_on_save` | bool | no | Default `false`. When `true`, the editor writes [export/](#export-generated) on every save, from its cached bakes |
+| `worlds` | array of slugs | no | The display order of the worlds (the editor's world switcher, `project.describe`, the export index). Left out, worlds are in slug order. A world directory it doesn't list is shown after the listed ones, in slug order, and validation reports it, as it does a listed slug with no directory or one listed twice. The world commands write it as soon as a project has more than one world; a project with one world and no list keeps having none |
 
 **Migration rule for `blocking_values`.** When `collision_layer` is set and `blocking_values` is left out, loading fills it with `["solid"]` if the collision layer has a `solid` value. The next full save writes that list out. Other wall kinds (`breakable`, ramps, ...) only block when the project lists them. If the layer has no `solid` value the key stays absent, every border cell is open, and validation reports it; write `"blocking_values": []` to say that on purpose. The export always uses this effective list.
 
@@ -846,6 +847,8 @@ Guides store their points as designed. The editor draws a grouped guide at `poin
 
 Levels are the subdirectories of `levels/`. Level placement lives in each `level.json`, not here.
 
+A project can hold several worlds (`worlds/main/`, `worlds/underdark/`, ...). Each is its own map: its own coordinate space, levels, world-scope annotations and guide groups. Everything else is project-wide: the grid, layers, tilesets, entity types, enums and rules. Level slugs are unique across all worlds, so a `level:` link never needs to say which world. `project.json` `worlds` gives their display order.
+
 ## worlds/&lt;world&gt;/levels/&lt;level&gt;/level.json
 
 ```json
@@ -1258,6 +1261,7 @@ Line by line:
 - region rules: `region.grid` (as for a pattern's `grid`: an `int_grid` layer on the auto layer's grid), `region.cells` (not `"*"`: "every cell would be one region"; values and groups the grid has, as are `place.against`'s), a `min_*` greater than its `max_*` (`region.min_width`: "min_width 20 is greater than max_width 10"), `place.align` with a spacing other than `even` and `place.jitter` with one other than `random`;
 - derived grids: a `write.grid` that isn't a derived `int_grid` layer on the auto layer's grid, a `write.value` that isn't a value of it (a group isn't one), a second layer writing a grid one layer already writes (`write.grid`: "pillar_marks is already written by layer pillars"), auto layers that read each other's derived grids (`layers.json` `layers[<first layer of the cycle>]`: "auto layers a and b read each other's derived grids: a → marks_b → b → marks_a → a"), a derived `collision_layer` (`project.json` `collision_layer`), and a derived layer's stored overrides the size of the level in its cells;
 - tile placements and entity cells inside the level;
+- the world order: each slug in `project.json` `worlds` names a world and appears once (`worlds[<i>]`), and, when the list is there, every world is in it (`worlds`: "world "x" isn't listed; it is shown after the listed worlds");
 - duplicate slugs and ids (layers, values and groups, tilesets, enums and their values, entity types, fields, rule groups, stamps, worlds, levels, entity ids, note ids; in a rules file, rule slugs, reference slugs and expanded slugs together; template rule slugs within a template);
 - field values and defaults against their field type, `min`/`max`, `regex` (the whole value must match), enum values, path extensions, nullability (per element for arrays); `point` and `entity_ref` defaults again in each level or entity that inherits them; a `regex` that doesn't compile;
 - annotations, guide groups and level tags: a guide's `group` names a guide group of its world (`notes[<id>].group`); guide group slugs are unique in their world (`guide_groups[<i>].slug`); a guide flagged `export` (`notes[<id>].export`: guides are never exported, the flag is ignored); a level-scope `note` or `pin` whose `px` is outside its level's pixels (`notes[<id>].px`); a region `rect` with a width or height of 0 or less (`notes[<id>].rect`); an exported annotation whose `note:` link points at one that isn't exported, or at a guide (`notes[<id>].links[<i>]`: the game couldn't resolve it); a connector end (`notes[<id>].from`, `notes[<id>].to`) naming no level or entity ("level "x" does not exist: the connector's end dangles"), or one in another world than the connector's; an empty tag, or one given twice in a list, on annotations and levels (`notes[<id>].tags[<i>]`, `tags[<i>]`); and the **region check**: for each tag `T` of a level, when its world has at least one world-scope region tagged `T`, the level's center (`world_px + size * grid / 2`, integer division) must lie inside one of them (`level.json` `tags[<i>]`: "level tagged "forest" sits outside every region tagged "forest" (its center is [x, y])"). A rect is half-open (`[x, x + w)`); a polygon uses the even-odd rule, a point on an edge counting as inside. Regions are compared as stored (guide groups never move regions). A tag no region carries is never checked;

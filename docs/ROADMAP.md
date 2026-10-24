@@ -16,19 +16,7 @@ The three features the rest of the roadmap leans on. Multi-world comes first: vi
 
 ### 1.1 Multiple worlds per project
 
-**What.** A project holds several world maps (overworld and dungeon set, chapters, a sequel's new continent), each its own coordinate space with its own levels, world-scope annotations and guide groups. The user creates, renames, reorders and deletes worlds, moves levels between them, and the editor shows one world at a time.
-
-**Today.** The format already has `worlds/<world>/` and `Project.worlds` is a list; the API takes `world` where it is ambiguous and the export indexes per world. But nothing can create a second world (no command; `worlds-cli new` makes `main`), and the editor flattens every world into one space: `Project::levels()` iterates all of them and the viewport draws that, so two worlds would overlap on screen. A few editor helpers hard-code `worlds[0]`.
-
-**Format.** No new files. `world.json` already carries the world's `name`. Directory listing order means nothing, so `project.json` gains `worlds: ["main", "underdark"]` as the display order; a world directory not listed is appended and validation says so. Level slugs stay unique across worlds (already the case), so every existing reference by level slug keeps working.
-
-**Commands.** `create_world { slug, name? }`, `rename_world { world, slug?, name? }` (a slug rename moves the directory and rewrites every `world:` reference), `remove_world { world, confirm }` (refused unless the world is empty or `confirm` is set; inverse restores levels and notes), `reorder_worlds { order }`, `move_level_to_world { level, world, world_px? }` (the level keeps its slug, id and content; world-scope links to it stay valid; its inverse moves it back).
-
-**API / MCP.** `project.describe` lists worlds with level counts and bounding boxes. `world.create`, `world.rename`, `world.remove`, `world.reorder`, `level.move_to_world`. MCP: `create_world`, `edit_worlds` (rename, reorder, remove) and a `world` argument on `move_level`. `read_level`'s header already names the world. `view.focus` takes `world`.
-
-**Editor.** An active world in the view state (`.worlds/ui.json` `active_world`), a world switcher in the toolbar (a combo, or tabs once 1.2 lands), New world / Rename / Delete in the command palette and the Project pane, "Move to world" in a level's context menu and the Levels pane (3.1). Fit world (Shift+F) fits the active world. The flattened iteration stays for things that are genuinely project-wide (validation, the entity palette's counts, Find).
-
-**Decisions.** One project grid for all worlds (a per-world grid would multiply every layer rule). Layers, tilesets, entity types, enums and rules stay project-wide; a world is a map, not a sub-project. The LDtk importer should map each LDtk world to a Worlds world (verify what it does now with a multi-world LDtk file).
+Shipped. The spec now lives in [format.md](format.md) (`project.json` `worlds`, `worlds/<world>/world.json`), [commands.md](commands.md#world-commands), [api.md](api.md) (`world.*`, `level.move_to_world`, `view.focus { world }`), [mcp.md](mcp.md) (`create_world`, `edit_worlds`, `move_level`) and the [editor README](../crates/worlds-editor/README.md#worlds).
 
 ### 1.2 Multiple viewport tabs
 

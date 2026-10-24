@@ -324,6 +324,9 @@ impl Engine {
             "duplicate_level" => self.duplicate_level(a),
             "resize_level" => self.resize_level(a),
             "crop_level" => self.crop_level(a),
+            "create_world" => self.create_world(a),
+            "edit_worlds" => self.edit_worlds(a),
+            "move_level" => self.move_level(a),
             other => Err(format!(
                 "there is no tool {other:?}; the tools are {}",
                 crate::catalog::TOOLS

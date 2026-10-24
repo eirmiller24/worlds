@@ -40,6 +40,9 @@ pub struct StatusMsg {
 #[derive(Debug, Clone)]
 pub struct ViewState {
     pub active_level: Option<LevelIx>,
+    /// The world the map shows (`ui.json` `active_world`), by slug; see
+    /// [`Self::world_ix`]. The active level's world wins over it.
+    pub active_world: Option<Slug>,
     /// Index into `project.layers`.
     pub active_layer: Option<usize>,
     /// By index into `project.layers`.
@@ -95,6 +98,7 @@ impl Default for ViewState {
     fn default() -> Self {
         ViewState {
             active_level: None,
+            active_world: None,
             active_layer: None,
             layers: Vec::new(),
             layer_slugs: Vec::new(),
@@ -487,6 +491,58 @@ impl ViewState {
             self.drawing = None;
         }
         self.tool = t;
+    }
+
+    /// The world the map shows, as an index into `project.worlds`: the
+    /// active level's world, else [`Self::active_world`]'s, else the first.
+    /// Only that world's levels and world-scope annotations are drawn and
+    /// hit-tested; everything project-wide (validation, palette counts,
+    /// the Notes and Problems panes) still covers every world.
+    pub fn world_ix(&self, doc: &Document) -> usize {
+        if let Some(r) = self
+            .active_level
+            .and_then(|ix| doc.levels.get(ix))
+            .filter(|r| r.world < doc.project.worlds.len())
+        {
+            return r.world;
+        }
+        self.active_world
+            .as_ref()
+            .and_then(|s| doc.project.worlds.iter().position(|w| w.slug == *s))
+            .unwrap_or(0)
+    }
+
+    /// Show world `w`: it becomes [`Self::active_world`], and an active
+    /// level in another world stops being active.
+    pub fn set_world(&mut self, doc: &Document, w: usize) {
+        let Some(world) = doc.project.worlds.get(w) else {
+            return;
+        };
+        if self.world_ix(doc) != w {
+            // What sits on the old world's map doesn't follow: an armed
+            // paste ghost and the grid marquee are placed in its levels.
+            self.paste = None;
+            self.grid_marquee = None;
+        }
+        self.active_world = Some(world.slug.clone());
+        if self
+            .active_level
+            .and_then(|ix| doc.levels.get(ix))
+            .is_some_and(|r| r.world != w)
+        {
+            self.active_level = None;
+        }
+    }
+
+    /// Make [`Self::active_world`] name the world shown (the active
+    /// level's, after something made a level in another world active).
+    pub fn sync_world(&mut self, doc: &Document) {
+        let w = self.world_ix(doc);
+        if let Some(world) = doc.project.worlds.get(w)
+            && self.active_world.as_ref() != Some(&world.slug)
+        {
+            self.active_world = Some(world.slug.clone());
+        }
     }
 
     /// The tool the Paint button (and P) selects: the last Paint mode.

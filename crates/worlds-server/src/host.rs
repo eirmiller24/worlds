@@ -45,6 +45,8 @@ pub enum ViewTarget {
     WorldRect { world: Option<Slug>, rect: [i64; 4] },
     /// An annotation, by id: framed as built
     Note(Id),
+    /// A whole world, by slug: it becomes the active world, fitted.
+    World(Slug),
 }
 
 /// What `view.select` asks for: `level` alone (make it active, clear the selection),

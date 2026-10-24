@@ -76,6 +76,23 @@ pub fn world_of(doc: &Document, ix: LevelIx) -> usize {
     doc.levels[ix].world
 }
 
+/// The world index an annotation is in.
+pub fn note_world(doc: &Document, at: At) -> usize {
+    match at {
+        At::World(w) => w,
+        At::Level(ix) => world_of(doc, ix),
+    }
+}
+
+/// The annotations of the world the map shows ([`ViewState::world_ix`]):
+/// what it draws and hit-tests, in [`all_notes`] order.
+pub fn shown_notes<'a>(doc: &'a Document, view: &ViewState) -> Vec<NoteRef<'a>> {
+    let w = view.world_ix(doc);
+    let mut out = all_notes(doc);
+    out.retain(|r| note_world(doc, r.at) == w);
+    out
+}
+
 /// What to add to an annotation's own pixels to get world pixels, as
 /// built: the level's position for level notes, a guide's group offset.
 pub fn offset(doc: &Document, at: At, a: &Annotation) -> [i64; 2] {
@@ -155,10 +172,18 @@ pub fn end_anchor(doc: &Document, e: &Endpoint) -> Option<worlds_core::Anchor> {
     doc.project.endpoint_anchor(e).map(|a| a.0)
 }
 
+/// Where a connector end is, in world px, if it is in world `w` (index
+/// into `project.worlds`): an end in another world has no place on this
+/// world's map.
+fn end_anchor_in(doc: &Document, e: &Endpoint, w: usize) -> Option<worlds_core::Anchor> {
+    let (a, world, _) = doc.project.endpoint_anchor(e)?;
+    (doc.project.worlds.get(w).map(|x| &x.slug) == Some(&world.slug)).then_some(a)
+}
+
 /// A connector's line in world px: its `from` end, the waypoints, its `to`
 /// end ([`worlds_core::connector_polyline`]), so it follows the rooms and
-/// entities it joins. An end that names nothing is left out (validation
-/// reports it).
+/// entities it joins. An end that names nothing, or something in another
+/// world than the connector's, is left out (validation reports both).
 pub fn connector_line(doc: &Document, r: NoteRef<'_>) -> Vec<[i64; 2]> {
     let Shape::Connector {
         from,
@@ -174,7 +199,8 @@ pub fn connector_line(doc: &Document, r: NoteRef<'_>) -> Vec<[i64; 2]> {
         .iter()
         .map(|p| [p[0] + o[0], p[1] + o[1]])
         .collect();
-    match (end_anchor(doc, from), end_anchor(doc, to)) {
+    let w = note_world(doc, r.at);
+    match (end_anchor_in(doc, from, w), end_anchor_in(doc, to, w)) {
         (Some(a), Some(b)) => worlds_core::connector_polyline(a, b, &wp),
         (a, b) => {
             let mut out = Vec::new();
@@ -306,7 +332,7 @@ pub fn shown(view: &ViewState, a: &Annotation, snapshot: bool) -> bool {
 pub fn point_note_at(doc: &Document, view: &ViewState, wp: [f64; 2], zoom: f64) -> Option<Id> {
     let card = card_zoom(doc, zoom);
     let pin_r = (pin_size(doc, zoom) / 2.0).max(5.0) / zoom;
-    all_notes(doc).into_iter().rev().find_map(|r| {
+    shown_notes(doc, view).into_iter().rev().find_map(|r| {
         if !shown(view, r.note, false) {
             return None;
         }
@@ -336,7 +362,7 @@ pub fn point_note_at(doc: &Document, view: &ViewState, wp: [f64; 2], zoom: f64) 
 /// `wp`, topmost first.
 pub fn line_note_at(doc: &Document, view: &ViewState, wp: [f64; 2], zoom: f64) -> Option<Id> {
     let tol = LINE_HIT_PX / zoom;
-    let notes = all_notes(doc);
+    let notes = shown_notes(doc, view);
     // Drawn order: regions, guides, paths, connectors; so connectors are
     // hit first.
     for kind in ["connector", "path", "guide", "region"] {
@@ -450,14 +476,15 @@ pub fn marquee_items(
             }
         }
         None => {
-            for ix in 0..doc.levels.len() {
+            let w = view.world_ix(doc);
+            for ix in (0..doc.levels.len()).filter(|&ix| world_of(doc, ix) == w) {
                 if crate::viewport::level_wrect(doc, ix).intersects(r) {
                     out.push(SelItem::Level(doc.ids[ix].clone()));
                 }
             }
         }
     }
-    for n in all_notes(doc) {
+    for n in shown_notes(doc, view) {
         let in_scope = match n.at {
             At::World(_) => true,
             At::Level(lx) => level == Some(lx),
@@ -535,15 +562,11 @@ pub fn note_scope(
     Some(ix)
 }
 
-/// The world a new annotation goes in.
-fn note_world(doc: &Document, level: Option<LevelIx>, view: &ViewState) -> Option<usize> {
+/// The world a new annotation goes in: its level's, else the one shown.
+fn new_note_world(doc: &Document, level: Option<LevelIx>, view: &ViewState) -> Option<usize> {
     match level {
         Some(ix) => Some(world_of(doc, ix)),
-        None => view
-            .active_level
-            .filter(|&a| a < doc.levels.len())
-            .map(|a| world_of(doc, a))
-            .or((!doc.project.worlds.is_empty()).then_some(0)),
+        None => (!doc.project.worlds.is_empty()).then(|| view.world_ix(doc)),
     }
 }
 
@@ -577,7 +600,7 @@ fn add_note(
     shape: Shape,
     title: &str,
 ) -> Option<Command> {
-    let w = note_world(doc, level, view)?;
+    let w = new_note_world(doc, level, view)?;
     let mut shape = shape;
     let scope = match level {
         Some(ix) => {
@@ -1084,7 +1107,7 @@ pub fn drag_delta(
     let tol = SNAP_PX / view.zoom.max(1e-9);
     // Candidates per axis: (coordinate, segment along it if any).
     let mut cand: [Vec<(i64, Option<Seg>)>; 2] = [Vec::new(), Vec::new()];
-    for r in all_notes(doc) {
+    for r in shown_notes(doc, view) {
         if !matches!(r.note.shape, Shape::Guide { .. }) || !shown(view, r.note, false) {
             continue;
         }
@@ -1695,7 +1718,8 @@ pub fn edited_note<'a>(doc: &'a Document, view: &ViewState) -> Option<NoteRef<'a
     let [crate::view::SelItem::Note(id)] = view.selection.items.as_slice() else {
         return None;
     };
-    find_note(doc, id).filter(|r| shown(view, r.note, false))
+    find_note(doc, id)
+        .filter(|r| shown(view, r.note, false) && note_world(doc, r.at) == view.world_ix(doc))
 }
 
 /// The handles of an annotation, world px as built: each vertex of a path,
@@ -1786,7 +1810,7 @@ pub fn snap_vertex(
     }
     let tol = SNAP_PX / view.zoom.max(1e-9);
     let mut cand: [Vec<(i64, Option<Seg>)>; 2] = [Vec::new(), Vec::new()];
-    for r in all_notes(doc) {
+    for r in shown_notes(doc, view) {
         if !matches!(r.note.shape, Shape::Guide { .. })
             || r.note.id == *editing
             || !shown(view, r.note, false)

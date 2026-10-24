@@ -14,7 +14,7 @@ worlds-mcp [--project <dir>] [--headless] [--name <client>]
 
 **Client name.** `session.hello` sends the MCP client's name: `clientInfo.name` (e.g. `claude-code`) from `initialize`, or, for a client on the stateless lifecycle that sends no `initialize` (Claude Code opens with `server/discover`), from the `io.modelcontextprotocol/clientInfo` of each request's `_meta`, lowercased with characters outside `a-z 0-9 - _ .` dropped and cut to 32; empty means the `--name` argument (sanitized the same way), else `mcp`. The editor records every edit as `Origin::Agent(<name>)`.
 
-**Undo labels.** Every write tool call is one undo entry labelled `Agent: <tool> <summary>`. The summary is the tool's `label` argument when given ("Agent: paint east wall"), else generated: the slug for `create_level`; `<layer> in <level>` for `paint`, `place_tiles` and `clear_tiles`; `<type> in <level>` for `place_entity`; the id (or `<n> entities`) for `update_entity` and `remove_entity`; `<kind> in <level>` or `<kind> in world <world>` for `add_note` ("Agent: add_note pin in world main"); the id for `resolve_note` and `update_note`; the id (or `<n> notes`) for `remove_note`; the slug for `set_guide_group`; the level slugs for `tag_levels`, in slug order, cut to 60 characters; the layer for `edit_rules`; the level slug for `resize_level` and `crop_level`; for `edit_definitions`, what it touches, in patch order, each named once (layer, entity type and enum slugs, `level fields`, `project`), cut to 60 characters ("Agent: edit_definitions locked_door, facing"). A call that needs several API writes wraps them in `history.begin_batch`/`end_batch`.
+**Undo labels.** Every write tool call is one undo entry labelled `Agent: <tool> <summary>`. The summary is the tool's `label` argument when given ("Agent: paint east wall"), else generated: the slug for `create_level`; `<layer> in <level>` for `paint`, `place_tiles` and `clear_tiles`; `<type> in <level>` for `place_entity`; the id (or `<n> entities`) for `update_entity` and `remove_entity`; `<kind> in <level>` or `<kind> in world <world>` for `add_note` ("Agent: add_note pin in world main"); the id for `resolve_note` and `update_note`; the id (or `<n> notes`) for `remove_note`; the slug for `set_guide_group`; the level slugs for `tag_levels`, in slug order, cut to 60 characters; the layer for `edit_rules`; the level slug for `resize_level` and `crop_level`; the slug for `create_world`; for `edit_worlds`, the worlds renamed or removed, each once, cut to 60 characters (`order` for a reorder alone); the level slug for `move_level`; for `edit_definitions`, what it touches, in patch order, each named once (layer, entity type and enum slugs, `level fields`, `project`), cut to 60 characters ("Agent: edit_definitions locked_door, facing"). A call that needs several API writes wraps them in `history.begin_batch`/`end_batch`.
 
 **Revisions.** Every write is sent with `expect_rev` set to the newest rev `worlds-mcp` has seen (from results and from the `changed` events it subscribes to). That only orders requests in flight: it catches an edit that landed between the reads a tool call built its request from and the write itself. It is not a lock on the agent's view of the project (that is what the notices below are for). On `stale_rev` it refreshes first, re-running the `project.describe` or level read the request was built from (a `paint` with `outline` reads nothing; `edit_rules` and `edit_definitions` read nothing either), rebuilds the request and retries once; a second `stale_rev` becomes a tool error. Separately, it remembers the rev at which the agent last read each level (`read_level`, or a write to it); when a write lands on a level that someone else changed since (a `changed` event touching that level whose `session` isn't this connection's, which also catches a second client with the same name), the result carries a notice saying who changed what, so the agent can re-read if it matters. User activity never blocks the agent.
 
@@ -37,7 +37,7 @@ Every tool returns one text content block holding JSON (two-space indented, with
 `initialize` returns these `instructions`:
 
 ```text
-Worlds is a 2D tile level editor. A project is a set of levels (rooms) laid out in a world. Each level has the same layers, defined once for the project:
+Worlds is a 2D tile level editor. A project is a set of levels (rooms) laid out in a world; a project can hold several worlds (separate maps, such as an overworld and a dungeon), each with its own levels, but most have one. Each level has the same layers, defined once for the project:
 - int_grid layers: a grid where each cell holds a named value or is empty. The collision layer (values like solid, oneway, water) is the playable truth. You paint these with `paint`. A derived int_grid layer (marks such as where pillars go) is computed by an auto layer's rules instead; painting it sets hand overrides on top of what the rules compute.
 - auto layers: tiles generated from an int_grid layer by rules. Never painted directly: change the source grid, or the rules with `edit_rules`.
 - tiles layers: hand-placed decoration tiles taken from a tileset image by atlas column and row (`place_tiles`).
@@ -85,11 +85,14 @@ Each write tool call is one undo entry that the user can undo with one click; un
 | `copy_fragment` | `edit.copy` (the arguments are its `selection`) |
 | `paste_fragment` | `edit.paste` |
 | `duplicate_level` | `level.duplicate` |
+| `create_world` | `world.create` |
+| `edit_worlds` | `world.rename` per rename, `world.reorder`, `world.remove` per world (`confirm` passed through), in that order (several in one batch) |
+| `move_level` | `level.move_to_world` when `world` is given, else `level.move` |
 
 ### describe_project
 
 ```text
-Get the map of the open Worlds project: the project grid size; every level with its world position, size in cells and pixels, tags, and how much content each layer holds; every layer with its kind and cell size, and for int_grid layers each value's slug and glyph (the character that stands for it in read_level and paint), for a derived int_grid layer (one the rules compute) "derived": true and its writer (the auto layer whose rules compute it), for an auto layer the passes its rule groups use; entity types with their fields, defaults and how many exist; enums; tilesets with tile size and atlas size in tiles; note counts (guides are counted apart) and each world's guide groups. Call this first: the slugs, glyphs and sizes you need for every other tool are here. Returns JSON.
+Get the map of the open Worlds project: the project grid size; every level with its world position, size in cells and pixels, tags, and how much content each layer holds; every layer with its kind and cell size, and for int_grid layers each value's slug and glyph (the character that stands for it in read_level and paint), for a derived int_grid layer (one the rules compute) "derived": true and its writer (the auto layer whose rules compute it), for an auto layer the passes its rule groups use; entity types with their fields, defaults and how many exist; enums; tilesets with tile size and atlas size in tiles; note counts (guides are counted apart); and the worlds, in order, each with its levels, level count, bounding box in world pixels ([x, y, width, height] around its levels, null when it has none) and guide groups. Call this first: the slugs, glyphs and sizes you need for every other tool are here. Returns JSON.
 ```
 
 ```json
@@ -726,13 +729,63 @@ Shrink a level to the bounding box of its content, as one undo entry: its non-em
   "required": ["level"], "additionalProperties": false }
 ```
 
+### create_world
+
+```text
+Create a new, empty world: a separate map with its own levels, world notes and guides, such as a dungeon set apart from the overworld or a later chapter. Everything else (layers, tilesets, entity types, enums, rules, the grid) is shared by every world, and level slugs are unique across all of them. slug names it (lowercase snake_case, unused by any other world); name is its display name. It goes last in the project's world order. Then create_level with world set to it, or move_level an existing level there. Most projects have one world; describe_project lists them.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "slug": { "type": "string", "description": "World slug, e.g. \"underdark\"." },
+    "name": { "type": "string", "description": "Display name, e.g. \"The Underdark\"." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["slug"], "additionalProperties": false }
+```
+
+### edit_worlds
+
+```text
+Rename, reorder or remove worlds, all in one undo entry, applied in this order: rename ([{ world, slug?, name? }]: a new slug moves the world's directory and every reference follows; a new display name, "" to remove it), order (every world's slug once, in the order the editor and describe_project list them), remove (world slugs). Removing a world removes its levels, world notes and guide groups with it, so it needs "confirm": true unless the world is empty; the last world can't be removed. To keep a level, move_level it to another world first.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "rename": { "type": "array", "items": { "type": "object",
+      "properties": { "world": { "type": "string" }, "slug": { "type": "string" }, "name": { "type": "string" } },
+      "required": ["world"], "additionalProperties": false } },
+    "order": { "type": "array", "items": { "type": "string" }, "description": "Every world's slug, once each." },
+    "remove": { "type": "array", "items": { "type": "string" } },
+    "confirm": { "type": "boolean", "default": false, "description": "Needed to remove a world that has levels, notes or guide groups." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "additionalProperties": false }
+```
+
+### move_level
+
+```text
+Move a level, as one undo entry. world_px is its new top-left corner in world pixels (levels should not overlap; describe_project gives every level's position and size). world moves it into another world, keeping its slug, id and all its content; with world, world_px is where it goes there (default: the same coordinates). Give world_px, world, or both.
+```
+
+```json
+{ "type": "object",
+  "properties": {
+    "level": { "type": "string" },
+    "world_px": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2, "description": "[x, y] top-left corner in world pixels." },
+    "world": { "type": "string", "description": "World slug to move the level into." },
+    "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
+  "required": ["level"], "additionalProperties": false }
+```
+
 ## Results by tool
 
 | Tool | Result |
 | --- | --- |
 | `describe_project` | the `project.describe` result. In headless mode only, when a Worlds editor session that ended without saving left an autosave, it adds `autosave: { unrecovered: true, pid, written, files, last_label, message }` (`files` the number of files with unsaved edits, `message` the warning in words; an unreadable manifest gives `files: 0` and nulls), looked up again on every call, and also given as a notice when the project is loaded. Not reported while an editor holds the project (its autosave is its own) |
 | `read_level` | text: the [text view](format.md#text-view) (done notes left out unless asked; derived layers drawn by their effective grids); json: the `level.get` result (with `derived`) |
-| write tools (`create_level`, `paint`, `place_tiles`, `clear_tiles`, `place_entity`, `update_entity`, `remove_entity`, `add_note`, `resolve_note`, `update_note`, `remove_note`, `set_guide_group`, `tag_levels`, `edit_rules`, `edit_definitions`, `resize_level`, `crop_level`) | the write result above; `create_level`, `place_entity` and `add_note` add `id`. For `edit_definitions`, `changes` has a `def` per definition it wrote (`{ "change": "def", "kind": "entity", "slug": "locked_door" }`), `def_renamed` for a renamed type or enum, `project` key `level_fields` for level fields and the setting's key for each `set_project` setting, and an `entity` or `level_meta` change per stored value a rename or removal rewrote. For `edit_rules`, `set_level_states` adds a `layer_state` change per level. For `create_level` with `replace`, the `level.replace` changes (`level_meta` part `all`, then a change per layer, entity and note before or after) |
+| write tools (`create_level`, `paint`, `place_tiles`, `clear_tiles`, `place_entity`, `update_entity`, `remove_entity`, `add_note`, `resolve_note`, `update_note`, `remove_note`, `set_guide_group`, `tag_levels`, `edit_rules`, `edit_definitions`, `resize_level`, `crop_level`, `create_world`, `edit_worlds`, `move_level`) | the write result above; `create_level`, `place_entity` and `add_note` add `id`. For `edit_definitions`, `changes` has a `def` per definition it wrote (`{ "change": "def", "kind": "entity", "slug": "locked_door" }`), `def_renamed` for a renamed type or enum, `project` key `level_fields` for level fields and the setting's key for each `set_project` setting, and an `entity` or `level_meta` change per stored value a rename or removal rewrote. For `edit_rules`, `set_level_states` adds a `layer_state` change per level. For `create_level` with `replace`, the `level.replace` changes (`level_meta` part `all`, then a change per layer, entity and note before or after). For `move_level` into another world, `level_deleted` in the old world and `level_created` in the new one; `create_world` and `edit_worlds` report `world_created`, `world_renamed`, `world_meta`, `world_removed` (after a `level_deleted` per level and a `note` per world note) and `project` key `worlds` (the order) |
 | `find_entities` | `{ rev, entities }` |
 | `list_notes` | `{ rev, notes }`, each `{ scope, note }` as in `notes.list` |
 | `preview_rule` | `{ rev, rule, level, grid, pass, count, cells, matched_count, matched, occupied, picture, regions?, write?, other_grids?, rules?, truncated? }`: `grid` the int_grid layer the rule matched on (from `rules.preview`: a region rule's `region.grid`), `pass` the rule's pass (the first rule's for a reference), `cells` where it fires, `matched` where it matches but doesn't fire, `occupied` the part of `matched` skipped because the footprint was taken (`avoid_overlap`), and `picture` that layer's rows (effective values on a derived layer) with `@` where it fires and `?` where it is blocked (a cell where one rule of a reference fires and another is blocked reads `@`). A region rule adds `regions` and a write rule `write`, as `rules.preview` gives them. For a template reference, `count`, `cells`, `matched` and `occupied` cover all its rules and `rules` lists each one's `{ rule, pass, grid, count, matched_count }`; when its rules match on more than one layer, `picture` marks only the cells of the rules on `grid`, and `other_grids` is `[{ grid, picture }]` for each other layer, in rule order. An unknown `rule` is an error listing the layer's rules and references |

@@ -376,3 +376,48 @@ fn collision_layer_is_the_layer_named_collision() {
     assert_eq!(imported.project.collision_layer, None);
     assert_eq!(imported.project.blocking_values, None);
 }
+
+/// A `MultiWorlds` file: each LDtk world becomes a world of its own, named
+/// after it, in LDtk's order (`project.json` `worlds`), and level slugs
+/// stay unique across them.
+#[test]
+fn each_ldtk_world_is_a_world() {
+    let src = fixtures().join("ldtk-samples/AutoLayers_1_basic.ldtk");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&src).unwrap()).unwrap();
+    let levels = v["levels"].take();
+    let mut second = levels.clone();
+    for l in second.as_array_mut().unwrap() {
+        l["iid"] = serde_json::json!(format!("{}-2", l["iid"].as_str().unwrap()));
+    }
+    v["levels"] = serde_json::json!([]);
+    v["flags"]
+        .as_array_mut()
+        .unwrap()
+        .push("MultiWorlds".into());
+    v["worlds"] = serde_json::json!([
+        { "identifier": "Zeta_Overworld", "iid": "w1", "worldLayout": "Free", "levels": levels },
+        { "identifier": "Abyss", "iid": "w2", "worldLayout": "Free", "levels": second }
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("multi.ldtk");
+    std::fs::write(&file, serde_json::to_vec(&v).unwrap()).unwrap();
+    let out = tmp.path().join("multi.worlds");
+    let imported = ldtk::import(&file, &out).unwrap();
+    let p = &imported.project;
+    let worlds: Vec<&str> = p.worlds.iter().map(|w| w.slug.as_str()).collect();
+    assert_eq!(worlds, ["zeta_overworld", "abyss"]);
+    assert_eq!(p.world_order.len(), 2);
+    assert_eq!(p.worlds[1].name.as_deref(), Some("Abyss"));
+    assert_eq!(p.worlds[0].levels.len(), 1);
+    assert_eq!(p.worlds[1].levels.len(), 1);
+    assert_ne!(p.worlds[0].levels[0].slug, p.worlds[1].levels[0].slug);
+    ldtk::write(&imported, &out).unwrap();
+    let loaded = worlds_core::load(&out).unwrap();
+    let order: Vec<&str> = loaded.worlds.iter().map(|w| w.slug.as_str()).collect();
+    assert_eq!(order, ["zeta_overworld", "abyss"]);
+    assert!(
+        std::fs::read_to_string(out.join("project.json"))
+            .unwrap()
+            .contains("\"worlds\": [\"zeta_overworld\", \"abyss\"]")
+    );
+}

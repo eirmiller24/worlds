@@ -1836,6 +1836,131 @@ struct DuplicateLevel {
     label: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateWorld {
+    slug: String,
+    name: Option<String>,
+    label: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct RenameWorld {
+    world: String,
+    slug: Option<String>,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditWorlds {
+    #[serde(default)]
+    rename: Vec<RenameWorld>,
+    order: Option<Vec<String>>,
+    #[serde(default)]
+    remove: Vec<String>,
+    #[serde(default)]
+    confirm: bool,
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveLevel {
+    level: String,
+    world_px: Option<[i64; 2]>,
+    world: Option<String>,
+    label: Option<String>,
+}
+
+/// The API writes of an `edit_worlds` call, in order: renames, the new
+/// order, removals; and the undo label's summary (the worlds renamed or
+/// removed, each once, or `order`).
+fn plan_worlds(a: &EditWorlds) -> Result<(Vec<ApiWrite>, String), String> {
+    let mut writes = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
+    for r in &a.rename {
+        if r.slug.is_none() && r.name.is_none() {
+            return Err(format!(
+                "rename of world {:?} changes nothing: give slug or name",
+                r.world
+            ));
+        }
+        let mut p = json!({ "world": r.world });
+        put(&mut p, "slug", &r.slug);
+        put(&mut p, "name", &r.name);
+        writes.push(("world.rename", p));
+        if !names.contains(&r.world.as_str()) {
+            names.push(&r.world);
+        }
+    }
+    if let Some(order) = &a.order {
+        writes.push(("world.reorder", json!({ "order": order })));
+    }
+    for w in &a.remove {
+        let mut p = json!({ "world": w });
+        if a.confirm {
+            p["confirm"] = json!(true);
+        }
+        writes.push(("world.remove", p));
+        if !names.contains(&w.as_str()) {
+            names.push(w);
+        }
+    }
+    let mut summary = if names.is_empty() {
+        "order".to_string()
+    } else {
+        names.join(", ")
+    };
+    if summary.chars().count() > 60 {
+        summary = summary.chars().take(57).collect::<String>() + "...";
+    }
+    Ok((writes, summary))
+}
+
+impl Engine {
+    pub(crate) fn create_world(&mut self, a: Value) -> ToolResult {
+        let a: CreateWorld = args("create_world", a)?;
+        let label = Self::label("create_world", a.label.as_deref(), &a.slug);
+        let mut p = json!({ "slug": a.slug });
+        put(&mut p, "name", &a.name);
+        let r = self.write(&label, |_| Ok(vec![("world.create", p.clone())]))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn edit_worlds(&mut self, a: Value) -> ToolResult {
+        let a: EditWorlds = args("edit_worlds", a)?;
+        let (writes, summary) = plan_worlds(&a)?;
+        if writes.is_empty() {
+            return Err("nothing to do: give rename, order or remove".into());
+        }
+        let label = Self::label("edit_worlds", a.label.as_deref(), &summary);
+        let r = self.write(&label, |_| Ok(writes.clone()))?;
+        Ok(vec![json_block(&r)])
+    }
+
+    pub(crate) fn move_level(&mut self, a: Value) -> ToolResult {
+        let a: MoveLevel = args("move_level", a)?;
+        let label = Self::label("move_level", a.label.as_deref(), &a.level);
+        let write = match (&a.world, a.world_px) {
+            (Some(w), px) => {
+                let mut p = json!({ "level": a.level, "world": w });
+                put(&mut p, "world_px", &px);
+                ("level.move_to_world", p)
+            }
+            (None, Some(px)) => ("level.move", json!({ "level": a.level, "world_px": px })),
+            (None, None) => {
+                return Err(
+                    "give world_px (a new position), world (another world), or both".into(),
+                );
+            }
+        };
+        let r = self.write(&label, |_| Ok(vec![write.clone()]))?;
+        Ok(vec![json_block(&r)])
+    }
+}
+
 /// Rows with the column rulers and row numbers of the text view.
 fn picture(rows: &[String]) -> String {
     let rw = rows.first().map_or(0, |r| r.chars().count());

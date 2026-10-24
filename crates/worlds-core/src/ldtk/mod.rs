@@ -351,6 +351,10 @@ impl Ctx {
         project.collision_layer = self.collision_layer(&src.defs.layers);
         project.blocking_values = project.default_blocking_values();
         project.worlds = self.worlds(src)?;
+        if project.worlds.len() > 1 {
+            // A MultiWorlds file: each LDtk world is a world, in LDtk's order.
+            project.world_order = project.worlds.iter().map(|w| w.slug.clone()).collect();
+        }
         project.normalize();
         Ok(project)
     }

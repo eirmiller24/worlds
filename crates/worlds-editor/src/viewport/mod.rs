@@ -259,11 +259,12 @@ impl Viewport {
         self.camera.zoom_at(c, zoom);
     }
 
-    fn apply_fit(&mut self, doc: &Document, fit: Fit) {
+    /// Fit the camera; [`Fit::World`] fits world `world` (index into
+    /// `project.worlds`): its levels, or its world-scope annotations when
+    /// it has no level.
+    fn apply_fit(&mut self, doc: &Document, fit: Fit, world: usize) {
         let rect = match fit {
-            Fit::World => (0..doc.levels.len())
-                .map(|i| level_wrect(doc, i))
-                .fold(WRect::EMPTY, |a, b| a.union(&b)),
+            Fit::World => world_wrect(doc, world),
             Fit::Level(i) if i < doc.levels.len() => level_wrect(doc, i),
             Fit::Level(_) => return,
             Fit::Rect(r) => r,
@@ -298,8 +299,12 @@ impl Viewport {
         if self.scene.is_none() {
             self.set_document(doc, cx.gpu);
         }
+        let world = cx.view.world_ix(doc);
+        if let Some(scene) = &mut self.scene {
+            scene.set_world(doc, world);
+        }
         if let Some(fit) = self.pending_fit.take() {
-            self.apply_fit(doc, fit);
+            self.apply_fit(doc, fit, world);
         }
 
         if self.map_only {
@@ -609,7 +614,7 @@ impl Viewport {
         for g in cx.ghosts {
             g.draw(&painter, &to_screen, cx.accent);
         }
-        if doc.levels.is_empty() && cx.view.drawing.is_none() {
+        if scene.draw_order.is_empty() && cx.view.drawing.is_none() {
             empty_map_hint(&painter, rect, doc.project.layers.is_empty(), cx.accent);
         }
         self.readout = None;
@@ -1351,6 +1356,23 @@ impl Viewport {
                     cx.actions.push(Action::CropLevel);
                     ui.close();
                 }
+                let here = doc.levels[ix].world;
+                if doc.project.worlds.len() > 1 {
+                    ui.menu_button("Move to world", |ui| {
+                        for (w, world) in doc.project.worlds.iter().enumerate() {
+                            if w == here {
+                                continue;
+                            }
+                            if ui.button(crate::app::worlds::world_label(world)).clicked() {
+                                cx.actions.push(Action::MoveLevelToWorld {
+                                    level: doc.level(ix).slug.clone(),
+                                    world: world.slug.clone(),
+                                });
+                                ui.close();
+                            }
+                        }
+                    });
+                }
             }
         });
     }
@@ -1983,10 +2005,50 @@ pub struct SelectPress {
     pub zoom: f64,
 }
 
+/// What Fit world frames for world `w`: its levels' rects, or with none
+/// its world-scope annotations' (empty when it has neither).
+pub fn world_wrect(doc: &Document, w: usize) -> WRect {
+    let levels = (0..doc.levels.len())
+        .filter(|&i| doc.levels[i].world == w)
+        .map(|i| level_wrect(doc, i))
+        .fold(WRect::EMPTY, |a, b| a.union(&b));
+    if !levels.is_empty() {
+        return levels;
+    }
+    let Some(world) = doc.project.worlds.get(w) else {
+        return WRect::EMPTY;
+    };
+    world
+        .notes
+        .iter()
+        .filter_map(|n| {
+            let r = crate::annot::NoteRef {
+                at: crate::annot::At::World(w),
+                note: n,
+            };
+            crate::annot::world_bbox(doc, r)
+        })
+        .fold(WRect::EMPTY, |a, b| a.union(&b))
+}
+
 /// The topmost level whose rect holds world pixel `wp` (draw order:
-/// depth, then index).
+/// depth, then index), in any world: for a project with one world. The
+/// map uses [`level_under_in`].
 pub fn level_under(doc: &Document, wp: [f64; 2]) -> Option<LevelIx> {
     let mut order: Vec<LevelIx> = (0..doc.levels.len()).collect();
+    order.sort_by_key(|&i| (doc.level(i).depth, i));
+    order
+        .into_iter()
+        .rev()
+        .find(|&i| level_wrect(doc, i).contains(wp))
+}
+
+/// The topmost level of world `world` whose rect holds world pixel `wp`
+/// (draw order: depth, then index).
+pub fn level_under_in(doc: &Document, world: usize, wp: [f64; 2]) -> Option<LevelIx> {
+    let mut order: Vec<LevelIx> = (0..doc.levels.len())
+        .filter(|&i| doc.levels[i].world == world)
+        .collect();
     order.sort_by_key(|&i| (doc.level(i).depth, i));
     order
         .into_iter()
@@ -2850,8 +2912,9 @@ fn draw_entities(
                                     worlds_core::FieldType::EntityRef { .. },
                                     serde_json::Value::String(id),
                                 ) => {
-                                    let t = targets
-                                        .get_or_insert_with(|| entity_world_rects(doc, &defs));
+                                    let t = targets.get_or_insert_with(|| {
+                                        entity_world_rects(doc, &defs, scene.world)
+                                    });
                                     t.get(id.as_str()).map(|r| r.center())
                                 }
                                 (worlds_core::FieldType::Point, serde_json::Value::Array(xy)) => {
@@ -3177,14 +3240,16 @@ fn draw_world_labels(
     }
 }
 
-/// Every entity's world rect by id (arrow targets, any level).
+/// Every entity's world rect by id (arrow targets, any level of world
+/// `world`: another world's coordinates mean nothing on this map).
 fn entity_world_rects<'a>(
     doc: &'a Document,
     defs: &std::collections::HashMap<&str, &worlds_core::EntityDef>,
+    world: usize,
 ) -> std::collections::HashMap<&'a str, WRect> {
     let pg = doc.project.grid_size;
     let mut out = std::collections::HashMap::new();
-    for ix in 0..doc.levels.len() {
+    for ix in (0..doc.levels.len()).filter(|&ix| doc.levels[ix].world == world) {
         let level = doc.level(ix);
         let o = [level.world_px[0] as f64, level.world_px[1] as f64];
         for el in &level.entities {

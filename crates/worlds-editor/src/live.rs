@@ -148,6 +148,7 @@ impl Host for EditorHost<'_> {
                     .level_ix(slug.as_str())
                     .ok_or_else(|| RpcError::command(&CommandError::UnknownLevel(slug.clone())))?;
                 self.view.active_level = Some(ix);
+                self.view.sync_world(self.doc);
                 self.effects.focus = Some(Fit::Level(ix));
             }
             ViewTarget::WorldRect { world, rect } => {
@@ -161,6 +162,9 @@ impl Host for EditorHost<'_> {
                         "world_rect {rect:?} needs a positive width and height"
                     )));
                 }
+                if let Some(w) = crate::snapshot::target_world(self.doc, target) {
+                    self.view.set_world(self.doc, w);
+                }
                 self.effects.focus = Some(Fit::Rect(WRect::from_pos_size(
                     [rect[0] as f64, rect[1] as f64],
                     [rect[2] as f64, rect[3] as f64],
@@ -171,10 +175,20 @@ impl Host for EditorHost<'_> {
             ViewTarget::Note(id) => {
                 let (rect, level) = crate::annot::focus_rect(self.doc, id)
                     .ok_or_else(|| RpcError::command(&CommandError::UnknownNote(id.clone())))?;
+                if let Some(w) = crate::snapshot::target_world(self.doc, target) {
+                    self.view.set_world(self.doc, w);
+                }
                 if let Some(ix) = level {
                     self.view.active_level = Some(ix);
                 }
                 self.effects.focus = Some(Fit::Rect(rect));
+            }
+            // A world: it is shown, fitted.
+            ViewTarget::World(w) => {
+                let wi = crate::snapshot::target_world(self.doc, target)
+                    .ok_or_else(|| RpcError::command(&CommandError::UnknownWorld(w.clone())))?;
+                self.view.set_world(self.doc, wi);
+                self.effects.focus = Some(Fit::World);
             }
         }
         Ok(())

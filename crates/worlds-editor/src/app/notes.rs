@@ -524,6 +524,11 @@ pub fn jump(st: &mut EditorState, id: &Id) {
     let Some((rect, level)) = annot::focus_rect(doc, id) else {
         return;
     };
+    // Its world is shown (a world note of another world, too).
+    if let Some(r) = annot::find_note(doc, id) {
+        let w = annot::note_world(doc, r.at);
+        st.view.set_world(doc, w);
+    }
     if let Some(ix) = level {
         st.view.active_level = Some(ix);
     }

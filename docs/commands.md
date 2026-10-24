@@ -775,6 +775,67 @@ Removes the field and every level's value for it; `keep_values` as for `remove_e
 - **Inverse:** as for `remove_entity_field_def`: `set_level_field_def` at the old `index`, or, with stored values, a `batch` that puts the field back and then each level's value (the command ran as a `batch` of `set_level_field` without `value` per level, then the remove).
 - **Changes:** a `level_meta` part `fields` per level that stored a value, then `project` key `level_fields`.
 
+## World commands
+
+A project holds one or more worlds, each its own map with its own levels, world-scope annotations and guide groups (`worlds/<world>/`). Layers, tilesets, entity types, enums, rules and the grid are project-wide. Level slugs stay unique across worlds, so moving a level never breaks a `level:` link.
+
+The display order of the worlds is `project.json` `worlds` (see [format.md](format.md#projectjson)). A project with one world and no list keeps having none. Once there is more than one world, or the list is already there, creating or removing a world rewrites the list to the display order (a new world goes last). Every inverse puts the list back exactly as it was.
+
+### create_world
+
+An empty world, last in the display order. `name` is optional (`world.json` `name`).
+
+```json
+{ "op": "create_world", "slug": "underdark", "name": "Underdark" }
+```
+
+- **Inverse:** `remove_world`, then `reorder_worlds` with the old list (`restore: true`) when the list changed.
+- **Changes:** `world_created` (the world's directory), and `project` key `worlds` when the list changed.
+
+### move_level_to_world
+
+Move a level to another world. It keeps its slug, id and all its content; `world_px` (optional) is its top-left corner in the new world, default where it was. Moving a level to its own world with a new `world_px` is a `move_level`.
+
+```json
+{ "op": "move_level_to_world", "level": "wing", "world": "underdark", "world_px": [0, 0] }
+```
+
+- **Inverse:** `move_level_to_world` back, with the old `world_px`.
+- **Changes:** `level_deleted` in the old world, then `level_created` in the new one (both level directories are dirty; saving moves the files). Within one world: `level_meta` part `position`.
+
+### rename_world
+
+Change a world's slug (its directory: saving moves every file of it) and/or its display name. Leave out `slug` or `name` to keep it; `"name": ""` removes the name. The slug in `project.json` `worlds` follows, and the world keeps its place in the order. Nothing else names a world on disk; commands and API calls that take a `world` take the new slug.
+
+```json
+{ "op": "rename_world", "world": "underdark", "slug": "caves", "name": "The Caves" }
+```
+
+- **Inverse:** `rename_world` back.
+- **Changes:** `world_renamed` (dirties both directories) and `project` key `worlds` if the slug is listed, when the slug changed; `world_meta` when the name changed.
+
+### reorder_worlds
+
+Set the display order: `order` lists every world once. `[]` drops the list (worlds then show in slug order). `restore: true` takes the list as given, even one naming unknown worlds or leaving some out (the file can hold that; validation reports it). Edits leave it off; inverses set it.
+
+```json
+{ "op": "reorder_worlds", "order": ["caves", "main"] }
+```
+
+- **Inverse:** `reorder_worlds` with the old list, `restore: true`.
+- **Changes:** `project` key `worlds`.
+
+### remove_world
+
+Remove a world with everything in it. Refused unless the world is empty (no levels, world notes or guide groups) or `confirm` is `true`, and refused for the last world: a project keeps at least one.
+
+```json
+{ "op": "remove_world", "world": "caves", "confirm": true }
+```
+
+- **Inverse:** a `batch` that creates the world again, puts back its guide groups and world notes in order, each level with `create_level` and `restore: true`, and the old list with `reorder_worlds`.
+- **Changes:** `level_deleted` per level, `note` per world note, `world_removed` (saving deletes the directory), and `project` key `worlds` when the list changed.
+
 ## batch
 
 Apply several commands as one: all of them or none. If command `i` fails, the ones before it are undone in reverse and the error is `batch "<label>", command <i>: <why>`. Batches nest. Inverses are built to always apply to the state they came from, so the rollback can't fail in practice; if one is refused anyway, the rest are still applied, every file the batch touched is marked dirty, and the error is `rollback` (it names the batch error and the refused inverses). Treat the project as changed after a `rollback` error. An agent's request and an editor gesture are each one batch, and one undo entry.
@@ -808,10 +869,14 @@ Each change says what was touched, precisely enough for the editor to redraw and
 | `note` | `world`, `level` (`null` at world scope), `id` | `worlds/<world>/world.json` or `.../<level>/notes.json` |
 | `layer_state` | `world`, `level`, `layer` | `.../<level>/level.json` |
 | `guide_group` | `world`, `slug` | `worlds/<world>/world.json`; a guide group was added, replaced, moved or removed |
-| `project` | `key`: `name`, `bg_color`, `collision_layer`, `seed` or `level_fields` | `project.json` |
+| `project` | `key`: `name`, `bg_color`, `collision_layer`, `seed`, `level_fields` or `worlds` (the display order of the worlds) | `project.json` |
 | `def` | `kind`: `layer`, `entity`, `enum`, `tileset`, `rules` or `macros`; `slug` | `layers.json`, `entities/<slug>.json`, `enums.json`, `tilesets.json`, `rules/<slug>.json` (the slug of a rule set is its layer's) or `rules/macros.json` (slug `macros`) |
 | `def_renamed` | `kind`, `from`, `to` | the file of `to`; for `entity` and `rules` also the file of `from`, which saving deletes |
 | `layer_file_renamed` | `world`, `level`, `from`, `to` | `.../<level>/<to>.json`, and `.../<level>/<from>.json`, which saving deletes |
+| `world_created` | `world` | the directory `worlds/<world>` (every file in it) |
+| `world_removed` | `world` | the directory (saving deletes its files) |
+| `world_renamed` | `from`, `to` | both world directories (saving moves the files) |
+| `world_meta` | `world` | `worlds/<world>/world.json`; the world's name changed |
 
 Rects are in cells of the layer's grid and cover the cells whose value or tile stack changed. A tile drawn from a cell can overhang it; the renderer knows tile sizes.
 
@@ -833,6 +898,10 @@ Rects are in cells of the layer's grid and cover the cells whose value or tile s
 
 ```json
 { "change": "guide_group", "world": "main", "slug": "ruined" }
+```
+
+```json
+{ "change": "world_renamed", "from": "underdark", "to": "caves" }
 ```
 
 ## Undo and redo
@@ -857,6 +926,6 @@ An agent's batch on the [live API](api.md#history) uses `record`, not a gesture,
 
 ## Errors
 
-`CommandError` says why a command was refused; its message is meant for the agent to read. The kinds: unknown world, level, layer, value, tileset, entity type, field, entity, note, guide group (`unknown_guide_group`), enum, enum value, rule group, rule (`unknown_rule`), macro (`unknown_macro`) or stamp (`unknown_stamp`); a definition slug that is taken; a field slug that is taken (`duplicate_field`: renaming a field to the slug of another); a definition still in use (`in_use`: removing a tileset, macro or stamp something uses, with the first few uses); a level that is in another world; a layer of the wrong kind; a cell outside the layer (with the layer size); a stored grid whose size doesn't match the level; a cell holding a value index the layer doesn't define; a duplicate id or level slug; an invalid argument (bad anchor, index past the end, `note.id` mismatch, `"!"` on a layer that isn't derived, `derived` switched on a layer with content); a failed batch step (`batch`, with the index and the cause); a batch whose rollback failed too (`rollback`: the project may differ from before).
+`CommandError` says why a command was refused; its message is meant for the agent to read. The kinds: unknown world, level, layer, value, tileset, entity type, field, entity, note, guide group (`unknown_guide_group`), enum, enum value, rule group, rule (`unknown_rule`), macro (`unknown_macro`) or stamp (`unknown_stamp`); a definition slug that is taken; a field slug that is taken (`duplicate_field`: renaming a field to the slug of another); a definition still in use (`in_use`: removing a tileset, macro or stamp something uses, with the first few uses); a level that is in another world; a layer of the wrong kind; a cell outside the layer (with the layer size); a stored grid whose size doesn't match the level; a cell holding a value index the layer doesn't define; a duplicate id or level slug; a world slug that is taken (`duplicate_world { world }`); an invalid argument (bad anchor, index past the end, `note.id` mismatch, `"!"` on a layer that isn't derived, `derived` switched on a layer with content); a failed batch step (`batch`, with the index and the cause); a batch whose rollback failed too (`rollback`: the project may differ from before).
 
 On the wire (the [live API](api.md#errors)) a `CommandError` serializes as `{ "kind": <variant in snake_case>, ...fields, "message": <the Display text> }`: `{ "kind": "unknown_value", "layer": "collision", "value": "lava", "message": "\"lava\" is not a value of layer \"collision\"" }`. Variants with one unnamed field name it (`unknown_level { level }`, `unknown_entity_type { type }`, `unknown_entity { id }`, ...), `enum_` is `enum`, the definition kind of `duplicate_def` and `in_use` is `def_kind` (a stamp in use is `in_use` with `def_kind: "stamp"` and its `layer`), the macro kind of `unknown_macro` is `macro_kind`, `unknown_guide_group` is `{ world, group }`, `unknown_field` and `duplicate_field` are `{ owner, field }` with `owner` naming the list (`entity type "door"` or `project level_fields`), and `invalid` has only its `message`. `batch { label, index, source }` and `rollback { batch, failed }` nest errors in the same form.

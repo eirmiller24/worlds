@@ -83,6 +83,13 @@ pub struct Project {
     /// The editor writes `export/` on every save (as `worlds-cli bake` does).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub export_on_save: bool,
+    /// `worlds`: the display order of the worlds, by slug. Optional: left
+    /// out, worlds are in slug order. A world it doesn't list comes after
+    /// the listed ones (in slug order), and validation reports it; so does
+    /// a listed slug with no world. The world commands write it as soon as
+    /// there is more than one world.
+    #[serde(rename = "worlds", default, skip_serializing_if = "Vec::is_empty")]
+    pub world_order: Vec<Slug>,
 
     /// `layers.json`, in draw order: first is drawn first (bottom).
     #[serde(skip)]
@@ -102,7 +109,8 @@ pub struct Project {
     /// `rules/macros.json`, if present.
     #[serde(skip)]
     pub macros: Option<Macros>,
-    /// `worlds/<slug>/`, sorted by slug.
+    /// `worlds/<slug>/`, in display order: the order of
+    /// [`Self::world_order`], then unlisted worlds by slug.
     #[serde(skip)]
     pub worlds: Vec<World>,
 
@@ -288,6 +296,7 @@ impl Project {
             level_fields: Vec::new(),
             default_level_size: None,
             export_on_save: false,
+            world_order: Vec::new(),
             layers: Vec::new(),
             tilesets: Vec::new(),
             enums: Vec::new(),
@@ -342,6 +351,27 @@ impl Project {
 
     pub fn world(&self, slug: &str) -> Option<&World> {
         self.worlds.iter().find(|w| w.slug == slug)
+    }
+
+    /// The world holding the level `slug`, if any.
+    pub fn world_of_level(&self, slug: &str) -> Option<&World> {
+        self.worlds.iter().find(|w| w.level(slug).is_some())
+    }
+
+    /// Where a world sorts in the display order: its position in
+    /// [`Self::world_order`], or after every listed one.
+    fn world_rank(&self, slug: &Slug) -> (usize, Option<Slug>) {
+        match self.world_order.iter().position(|s| s == slug) {
+            Some(i) => (i, None),
+            None => (usize::MAX, Some(slug.clone())),
+        }
+    }
+
+    /// Put [`Self::worlds`] in display order (see [`Self::world_order`]).
+    pub fn sort_worlds(&mut self) {
+        let mut worlds = std::mem::take(&mut self.worlds);
+        worlds.sort_by_cached_key(|w| self.world_rank(&w.slug));
+        self.worlds = worlds;
     }
 
     /// Find a level by slug in any world.
@@ -444,7 +474,7 @@ impl Project {
     pub fn normalize(&mut self) {
         self.entities.sort_by(|a, b| a.slug.cmp(&b.slug));
         self.rules.sort_by(|a, b| a.layer.cmp(&b.layer));
-        self.worlds.sort_by(|a, b| a.slug.cmp(&b.slug));
+        self.sort_worlds();
         for w in &mut self.worlds {
             w.normalize();
         }

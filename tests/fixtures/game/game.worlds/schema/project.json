@@ -794,6 +794,13 @@
       "description": "Project-wide seed mixed into every rule's random choices.",
       "format": "int64",
       "type": "integer"
+    },
+    "worlds": {
+      "description": "`worlds`: the display order of the worlds, by slug. Optional: left\nout, worlds are in slug order. A world it doesn't list comes after\nthe listed ones (in slug order), and validation reports it; so does\na listed slug with no world. The world commands write it as soon as\nthere is more than one world.",
+      "items": {
+        "$ref": "#/$defs/Slug"
+      },
+      "type": "array"
     }
   },
   "required": [

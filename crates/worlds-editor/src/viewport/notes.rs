@@ -394,7 +394,7 @@ pub fn draw_annotations(painter: &egui::Painter, f: &NotesFrame<'_>) {
     } else {
         f.view.selection.notes().collect()
     };
-    let notes = annot::all_notes(doc);
+    let notes = annot::shown_notes(doc, f.view);
     // A margin around the view for cards and icons hanging off a point.
     let slack = (annot::CARD_MAX[0].max(annot::CARD_MAX[1]) as f64 + 16.0) / f.zoom;
     let near = f.visible.expand(slack);

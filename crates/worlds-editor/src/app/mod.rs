@@ -23,6 +23,7 @@ pub mod rules;
 pub(crate) mod testkit;
 pub mod theme;
 pub mod watch;
+pub mod worlds;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -199,6 +200,9 @@ struct UiFile {
     /// The Note tool's options strip.
     #[serde(default)]
     note_tool: crate::view::NoteToolOptions,
+    /// The world the map shows (by slug).
+    #[serde(default)]
+    active_world: Option<String>,
 }
 
 fn default_paint_mode() -> Tool {
@@ -459,6 +463,11 @@ enum Confirm {
         label: String,
         commands: Vec<Command>,
     },
+    /// Delete a world and what it holds (`summary`: " and its 3 levels").
+    RemoveWorld {
+        world: Slug,
+        summary: String,
+    },
 }
 
 impl Confirm {
@@ -483,6 +492,13 @@ impl Confirm {
                     commands: commands.clone(),
                 },
             ),
+            Confirm::RemoveWorld { world, summary } => (
+                format!("Delete world {world}{summary}? Undo brings it back."),
+                Command::RemoveWorld {
+                    world: world.clone(),
+                    confirm: true,
+                },
+            ),
         }
     }
 }
@@ -497,6 +513,7 @@ enum Modal {
     Confirm,
     NewLevel,
     Recovery,
+    World,
 }
 
 /// Enter and Escape taken from this frame's input for the topmost modal.
@@ -618,6 +635,8 @@ pub struct EditorApp {
     /// The last fragment copied or pasted: what Ctrl+V pastes when the
     /// system clipboard can't be read (and `--script`'s paste).
     clipboard: Option<worlds_core::fragment::Fragment>,
+    /// The New world / Rename world dialog.
+    world_dialog: Option<worlds::WorldDialog>,
 }
 
 impl EditorApp {
@@ -676,6 +695,7 @@ impl EditorApp {
             recover_reports: 0,
             was_focused: None,
             clipboard: None,
+            world_dialog: None,
         }
     }
 
@@ -827,7 +847,8 @@ impl EditorApp {
             || matches!(kind, NoteKind::Path | NoteKind::Connector)
             || (kind == NoteKind::Region && g.polygon);
         let doc = self.st.doc.as_ref().ok_or("no project open")?;
-        let under = |wp: [f64; 2]| crate::viewport::level_under(doc, wp);
+        let world = self.st.view.world_ix(doc);
+        let under = |wp: [f64; 2]| crate::viewport::level_under_in(doc, world, wp);
         let mut cmds = Vec::new();
         if !clicks {
             let p0 = g.world_px[0];
@@ -991,7 +1012,7 @@ impl EditorApp {
             active: self.st.view.active_level.filter(|&a| a < doc.levels.len()),
             on_tab: false,
             handle: None,
-            level_under: crate::viewport::level_under(doc, p0),
+            level_under: crate::viewport::level_under_in(doc, self.st.view.world_ix(doc), p0),
             wp: p0,
             add: g.ctrl,
             zoom: self.st.view.zoom,
@@ -1323,6 +1344,22 @@ impl EditorApp {
     /// (exactly one), as `view.focus` does.
     fn focus_step(&mut self, f: &crate::script::FocusStep) -> Result<(), String> {
         let doc = self.st.doc.as_ref().ok_or("no project open")?;
+        if let Some(w) = &f.world {
+            let wi = doc
+                .project
+                .worlds
+                .iter()
+                .position(|x| x.slug == w.as_str())
+                .ok_or_else(|| format!("no world {w:?}"))?;
+            if f.level.is_some() || f.note.is_some() {
+                return Err("ui \"focus\": world goes alone or with world_rect".into());
+            }
+            self.st.view.set_world(doc, wi);
+            if f.world_rect.is_none() {
+                self.st.viewport.request_fit(Fit::World);
+                return Ok(());
+            }
+        }
         match (&f.level, &f.world_rect, &f.note) {
             (Some(l), None, None) => {
                 let ix = doc.level_ix(l).ok_or_else(|| format!("no level {l:?}"))?;
@@ -1346,6 +1383,10 @@ impl EditorApp {
                 let id = worlds_core::Id::new(n).map_err(|e| format!("note id {n:?}: {e}"))?;
                 let (rect, level) =
                     crate::annot::focus_rect(doc, &id).ok_or_else(|| format!("no note {n:?}"))?;
+                if let Some(r) = crate::annot::find_note(doc, &id) {
+                    let w = crate::annot::note_world(doc, r.at);
+                    self.st.view.set_world(doc, w);
+                }
                 if let Some(ix) = level {
                     self.st.view.active_level = Some(ix);
                 }
@@ -1975,6 +2016,10 @@ impl EditorApp {
         self.st.view.entities = f.entity_palette.to_palette(&doc.project);
         self.st.view.annotations = f.annotations;
         self.st.view.note_tool = f.note_tool;
+        self.st.view.active_world = f
+            .active_world
+            .and_then(|s| Slug::new(s).ok())
+            .filter(|s| doc.project.world(s.as_str()).is_some());
         self.last_ui_json = text;
         true
     }
@@ -2026,6 +2071,11 @@ impl EditorApp {
             entity_palette: UiPalette::from_palette(&self.st.view.entities),
             annotations: self.st.view.annotations.clone(),
             note_tool: self.st.view.note_tool.clone(),
+            active_world: doc
+                .project
+                .worlds
+                .get(self.st.view.world_ix(doc))
+                .map(|w| w.slug.to_string()),
         };
         let Ok(json) = serde_json::to_string_pretty(&f) else {
             return;
@@ -2049,6 +2099,11 @@ impl EditorApp {
         let t0 = Instant::now();
         let ctx = ui.ctx().clone();
         self.poll_external(&ctx);
+        // A level made active in another world (a problem, a note, the
+        // API) brings its world along.
+        if let Some(doc) = &self.st.doc {
+            self.st.view.sync_world(doc);
+        }
         self.modal_keys = modal_keys(&ctx, self.top_modal());
         self.shortcuts(&ctx);
 
@@ -2103,6 +2158,7 @@ impl EditorApp {
         self.close_prompt(&ctx);
         self.open_prompt(&ctx);
         self.new_level_dialog(&ctx);
+        self.world_dialog(&ctx);
         self.confirm(&ctx);
         self.toasts(&ctx);
         self.pending_panel(&ctx);
@@ -3129,6 +3185,11 @@ impl EditorApp {
                 self.st.project.section = s;
                 show_pane(&mut self.dock, Pane::Project);
             }
+            Action::SwitchWorld(w) => self.switch_world(&w),
+            Action::NewWorld => self.open_world_dialog(None),
+            Action::RenameWorld(w) => self.open_world_dialog(Some(w)),
+            Action::DeleteWorld(w) => self.ask_delete_world(w),
+            Action::MoveLevelToWorld { level, world } => self.move_level_to_world(level, world),
             Action::DeleteSelection => self.delete_selection(),
             Action::DuplicateSelection => self.duplicate_selection(),
             Action::DuplicateLevel(ix) => self.duplicate_level(ix),
@@ -3190,17 +3251,26 @@ impl EditorApp {
                 let Some(doc) = &self.st.doc else {
                     return;
                 };
-                let n = doc.levels.len();
+                // The levels of the world shown.
+                let w = self.st.view.world_ix(doc);
+                let shown: Vec<usize> = (0..doc.levels.len())
+                    .filter(|&i| doc.levels[i].world == w)
+                    .collect();
+                let n = shown.len();
                 if n == 0 {
                     return;
                 }
-                let cur = self.st.view.active_level;
-                let next = match (cur, a == Action::NextLevel) {
+                let cur = self
+                    .st
+                    .view
+                    .active_level
+                    .and_then(|ix| shown.iter().position(|&i| i == ix));
+                let next = shown[match (cur, a == Action::NextLevel) {
                     (None, true) => 0,
                     (None, false) => n - 1,
                     (Some(i), true) => (i + 1) % n,
                     (Some(i), false) => (i + n - 1) % n,
-                };
+                }];
                 self.st.view.active_level = Some(next);
                 self.st.viewport.request_fit(Fit::Level(next));
             }
@@ -3296,6 +3366,9 @@ impl EditorApp {
         {
             ui.strong("Worlds");
             ui.separator();
+            if self.world_switcher(ui) {
+                ui.separator();
+            }
             for b in ToolButton::ALL {
                 let sel = b.shows(self.st.view.tool);
                 let (name, tip, act) = match b {
@@ -3584,6 +3657,8 @@ impl EditorApp {
             Some(Modal::Confirm)
         } else if self.new_level.is_some() {
             Some(Modal::NewLevel)
+        } else if self.world_dialog.is_some() {
+            Some(Modal::World)
         } else {
             None
         }
@@ -3691,14 +3766,11 @@ impl EditorApp {
         let Some(doc) = &self.st.doc else {
             return;
         };
-        let Some(world) = self
-            .st
-            .view
-            .active_level
-            .filter(|&i| i < doc.levels.len())
-            .map(|i| doc.levels[i].world)
-            .or((!doc.project.worlds.is_empty()).then_some(0))
-            .map(|w| doc.project.worlds[w].slug.clone())
+        let Some(world) = doc
+            .project
+            .worlds
+            .get(self.st.view.world_ix(doc))
+            .map(|w| w.slug.clone())
         else {
             self.st
                 .toast("The project has no world to add a level to", true);

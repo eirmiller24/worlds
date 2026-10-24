@@ -18,6 +18,9 @@
 //!   tile size, spacing, padding, and a preview of the atlas with the
 //!   tiles as the editor cuts them. × is `remove_tileset_def`, refused
 //!   (with the uses listed) while anything draws from it.
+//! - **Worlds** (`worlds/<slug>/`, see [`super::worlds`]): the worlds in
+//!   display order with their level counts; click to show one, ⏶ ⏷
+//!   (`reorder_worlds`), Rename…, × (asks first), + World.
 //! - **Settings** (`project.json`): name, grid size (only while there are
 //!   no levels), background, collision layer and its blocking values,
 //!   seed, new level size, export on save, each one `set_project_setting`.
@@ -50,16 +53,23 @@ pub enum Section {
     Layers,
     Tilesets,
     Settings,
+    Worlds,
 }
 
 impl Section {
-    pub const ALL: [Section; 3] = [Section::Layers, Section::Tilesets, Section::Settings];
+    pub const ALL: [Section; 4] = [
+        Section::Layers,
+        Section::Tilesets,
+        Section::Settings,
+        Section::Worlds,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Section::Layers => "layers",
             Section::Tilesets => "tilesets",
             Section::Settings => "settings",
+            Section::Worlds => "worlds",
         }
     }
 
@@ -443,6 +453,8 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
         project: ps,
         rules,
         types,
+        view,
+        actions,
         ..
     } = st;
     let Some(doc) = doc.as_ref() else {
@@ -472,6 +484,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
                 Section::Layers => format!("Layers ({})", doc.project.layers.len()),
                 Section::Tilesets => format!("Tilesets ({})", doc.project.tilesets.len()),
                 Section::Settings => "Settings".into(),
+                Section::Worlds => format!("Worlds ({})", doc.project.worlds.len()),
             };
             let r = ui.selectable_label(ps.section == s, RichText::new(label).strong());
             ps.rects.insert(format!("section:{}", s.name()), r.rect);
@@ -504,6 +517,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
             Section::Layers => layers_section(ui, doc, bufs, ps, rules, types),
             Section::Tilesets => tilesets_section(ui, doc, bufs, atlas, ps),
             Section::Settings => settings_section(ui, doc, bufs, ps),
+            Section::Worlds => super::worlds::section(ui, doc, view, ps, actions),
         });
 }
 

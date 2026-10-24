@@ -358,7 +358,8 @@ pub struct NotesStep {
 }
 
 /// `{ "ui": "focus", "level" | "world_rect": [x, y, w, h] | "note" }`
-/// (exactly one): frame it as `view.focus` does.
+/// (exactly one): frame it as `view.focus` does. `world` alone shows that
+/// world, fitted; with `world_rect` it says which world the rect is in.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FocusStep {
@@ -368,6 +369,8 @@ pub struct FocusStep {
     pub world_rect: Option<[i64; 4]>,
     #[serde(default)]
     pub note: Option<String>,
+    #[serde(default)]
+    pub world: Option<String>,
 }
 
 /// `"tiles"` of a select step: stacks of one tiles layer of one level.
