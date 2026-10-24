@@ -1776,6 +1776,58 @@ impl Engine {
         }
         Ok(vec![json_block(&out)])
     }
+
+    /// `find`: `entity.find`, `level.find`, `notes.list` or `tiles.find`
+    /// with the query, at most `limit` results.
+    pub(crate) fn find(&mut self, a: Value) -> ToolResult {
+        let a: Find = args("find", a)?;
+        let query = a.query.unwrap_or_default();
+        let parsed = worlds_core::find::Query::parse(&query).map_err(|e| format!("query: {e}"))?;
+        let limit = a.limit.unwrap_or(FIND_LIMIT);
+        let (method, key, mut p) = match a.kind.as_str() {
+            "entities" => ("entity.find", "entities", json!({})),
+            "levels" => ("level.find", "levels", json!({})),
+            "notes" => {
+                // Guides stay out unless asked for by kind.
+                let p = if parsed.kinds.is_empty() {
+                    json!({ "kinds": ["note", "pin", "path", "region", "connector"] })
+                } else {
+                    json!({})
+                };
+                ("notes.list", "notes", p)
+            }
+            "tiles" => ("tiles.find", "tiles", json!({ "limit": limit })),
+            other => {
+                return Err(format!(
+                    "kind {other:?}: expected entities, levels, notes or tiles"
+                ));
+            }
+        };
+        if !query.trim().is_empty() {
+            p["query"] = json!(query);
+        }
+        let r = self.read(method, p)?;
+        let mut list = r[key].as_array().cloned().unwrap_or_default();
+        let total = r
+            .get("total")
+            .and_then(Value::as_u64)
+            .unwrap_or(list.len() as u64);
+        list.truncate(limit);
+        let mut out = json!({ "rev": r["rev"], "kind": a.kind, "total": total });
+        out[key] = Value::Array(list);
+        self.json_result(out)
+    }
+}
+
+/// How many results `find` returns by default.
+const FIND_LIMIT: usize = 100;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Find {
+    kind: String,
+    query: Option<String>,
+    limit: Option<usize>,
 }
 
 #[derive(Deserialize)]

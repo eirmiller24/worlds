@@ -490,4 +490,14 @@ patch holds any of these, applied in this order: set_macros ([{ kind: "pattern",
     "label": { "type": "string", "maxLength": 60, "description": "A few words on what this edit is, shown in the editor's undo history." } },
   "required": ["level", "slug"], "additionalProperties": false }"#,
     },
+    ToolDef {
+        name: "find",
+        description: r#"Search the whole project (every world and level) with a short query and get back what matches: kind "entities", "levels", "notes" (annotations; guides only with kind:guide) or "tiles" (hand-placed tiles). The query is words separated by spaces and every word must hold: type:locked_door (entity type), tag:puzzle (a tag of the entity's type, of a level or of a note), channel:3 or field:channel = 3 (a field's value, its default when the entity or level stores none, null when there is neither; also field:target != null), world:main, level:crevasse, layer:objects, kind:pin and status:open (notes), tileset:castle_main and tile:4,2 (tiles, atlas column,row), and free words matching a name, slug or id (for notes: title, body or label; "quote words" to keep them together). Values are JSON when they parse (3, true, null, [1,2]), else text; "3" in quotes is text. Slugs may use * as a wildcard (type:*door). Field tests are for entities and levels, free words for everything but tiles; a word the kind doesn't take is an error that says so. An empty query lists everything of that kind. Returns { rev, kind, total, <kind>: [...] }: each entity with id, type, world, level, layer, cell and stored fields; each level with slug, name, world, position, size, tags and fields; each note as list_notes gives it; each tile with world, level, layer, cell, tileset and tile. To change what you found, use update_entity, remove_entity, tag_levels, update_note or place_tiles with the ids and cells it gives."#,
+        schema: r#"{ "type": "object",
+  "properties": {
+    "kind": { "type": "string", "enum": ["entities", "levels", "notes", "tiles"] },
+    "query": { "type": "string", "description": "e.g. \"type:locked_door channel:3\", \"tag:puzzle\", \"field:target = null\", \"tileset:castle_main tile:4,2\", \"todo gap\". Default: everything of that kind." },
+    "limit": { "type": "integer", "minimum": 0, "default": 100, "description": "At most this many results; total still counts them all." } },
+  "required": ["kind"], "additionalProperties": false }"#,
+    },
 ];
