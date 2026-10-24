@@ -2968,13 +2968,17 @@ impl EditorApp {
         }
     }
 
-    /// The entity tool was chosen (or T pressed again): the search box gets
-    /// the keyboard, the Palette comes to the front, and a non-entities
-    /// active layer gives way to the first entities layer (the last one
-    /// used, by [`Self::layer_for_tool`], which ran first).
-    fn enter_entity_tool(&mut self) {
+    /// The entity tool was chosen: the Palette comes to the front and a
+    /// non-entities active layer gives way to an entities layer (the last
+    /// one used, by [`Self::layer_for_tool`], which ran first). The search
+    /// box takes the keyboard only when the tool was `already` on (T
+    /// pressed a second time): switching to the tool leaves the keyboard
+    /// on the map, so a change of mind (E, V, another tool key) still
+    /// switches tools instead of typing into the search box.
+    fn enter_entity_tool(&mut self, already: bool) {
         // Not after Enter picked the brush: the keyboard stays on the map.
-        self.st.entities.focus = !std::mem::take(&mut self.st.entities.keep_map_keys);
+        let keep = std::mem::take(&mut self.st.entities.keep_map_keys);
+        self.st.entities.focus = already && !keep;
         show_pane(&mut self.dock, Pane::Palette);
         let Some(doc) = &self.st.doc else {
             return;
@@ -3650,7 +3654,7 @@ impl EditorApp {
                 self.st.view.set_tool(t);
                 self.layer_for_tool(t);
                 if t == Tool::Entity {
-                    self.enter_entity_tool();
+                    self.enter_entity_tool(old == Tool::Entity);
                 }
             }
             Action::PaintTool => self.run(Action::SetTool(self.st.view.paint_tool())),

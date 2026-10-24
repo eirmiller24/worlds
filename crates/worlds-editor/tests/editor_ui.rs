@@ -196,6 +196,40 @@ fn tools_switch_to_a_layer_they_can_use() {
     assert_eq!(layer(&r), "collision");
 }
 
+/// T switches to the entity tool and leaves the keyboard on the map, so
+/// another tool key right after still switches tools; T a second time,
+/// with the tool already on, gives the search box the keyboard.
+#[test]
+fn t_focuses_the_entity_search_only_when_the_tool_is_already_on() {
+    if !gpu_tests() {
+        return;
+    }
+    let mut r = Rig::new([1400, 800]);
+    r.steps(r#"[{ "ui": "focus", "level": "crevasse" }]"#);
+    assert_eq!(r.app.st.view.tool, Tool::Select);
+    r.type_key(egui::Key::T, "t");
+    assert_eq!(r.app.st.view.tool, Tool::Entity);
+    assert!(
+        !r.ctx.egui_wants_keyboard_input(),
+        "switching to the tool leaves the keyboard on the map"
+    );
+    // A change of mind: E is the Eraser, not a letter in the search box.
+    r.type_key(egui::Key::E, "e");
+    assert_eq!(r.app.st.view.tool, Tool::Eraser);
+    assert_eq!(r.app.st.entities.query, "");
+    // T, then T again: now the search box has the keyboard.
+    r.type_key(egui::Key::T, "t");
+    assert!(!r.ctx.egui_wants_keyboard_input());
+    r.type_key(egui::Key::T, "t");
+    assert!(
+        r.ctx.egui_wants_keyboard_input(),
+        "T with the tool on focuses the search"
+    );
+    r.type_key(egui::Key::E, "e");
+    assert_eq!(r.app.st.view.tool, Tool::Entity, "typing, not a shortcut");
+    assert_eq!(r.app.st.entities.query, "e");
+}
+
 /// The Note tool's click adds a note and gives its title in the Inspector
 /// the keyboard, the text selected: typing replaces it, and the letters
 /// that are tool shortcuts (E: Eraser, T: entity search) don't switch
