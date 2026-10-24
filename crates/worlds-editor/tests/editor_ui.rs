@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
+use worlds_editor::app::actions::Action;
 use worlds_editor::app::{AppOptions, EditorApp};
 use worlds_editor::headless::Headless;
 use worlds_editor::tools::Tool;
@@ -137,6 +138,62 @@ impl Rig {
         self.frames(vec![egui::Event::PointerMoved(p), b(true)], 0);
         self.frames(vec![b(false)], 3);
     }
+}
+
+/// Picking a tool picks a layer it can use: the entity tool goes to the
+/// entities layer used last, the painting tools to the int_grid or tiles
+/// layer used last (the first of the kind when none was), and tools that
+/// work anywhere leave the layer alone.
+#[test]
+fn tools_switch_to_a_layer_they_can_use() {
+    if !gpu_tests() {
+        return;
+    }
+    let mut r = Rig::new([1400, 800]);
+    let layer = |r: &Rig| {
+        let doc = r.app.st.doc.as_ref().unwrap();
+        r.app
+            .st
+            .view
+            .active_layer
+            .map(|i| doc.project.layers[i].slug.to_string())
+            .unwrap_or_default()
+    };
+    // Painting on decor_front, then the entity tool: the entities layer.
+    r.steps(r#"[{ "ui": "layers", "active": "decor_front" }]"#);
+    r.app.run(Action::SetTool(Tool::Brush));
+    assert_eq!(layer(&r), "decor_front", "a tiles layer suits a brush");
+    r.app.run(Action::SetTool(Tool::Entity));
+    assert_eq!(layer(&r), "entities");
+    // Back to a brush: the decor layer used last, not the first one.
+    r.app.run(Action::SetTool(Tool::Brush));
+    assert_eq!(layer(&r), "decor_front");
+    // The remembered layer follows what was used: collision, then the
+    // entity tool, then the eraser lands on collision.
+    r.steps(r#"[{ "ui": "layers", "active": "collision" }]"#);
+    r.app.run(Action::SetTool(Tool::Entity));
+    assert_eq!(layer(&r), "entities");
+    r.app.run(Action::SetTool(Tool::Eraser));
+    assert_eq!(layer(&r), "collision");
+    assert!(
+        r.app
+            .st
+            .view
+            .status
+            .as_ref()
+            .is_some_and(|m| m.text.contains("Collision")),
+        "the status bar names the layer"
+    );
+    // Select and Hand leave the layer alone; an auto layer stays under
+    // them too.
+    r.steps(r#"[{ "ui": "layers", "active": "main_tiling" }]"#);
+    r.app.run(Action::SetTool(Tool::Select));
+    assert_eq!(layer(&r), "main_tiling");
+    r.app.run(Action::SetTool(Tool::Hand));
+    assert_eq!(layer(&r), "main_tiling");
+    // A brush can't paint an auto layer: back to collision.
+    r.app.run(Action::SetTool(Tool::Line));
+    assert_eq!(layer(&r), "collision");
 }
 
 /// The Note tool's click adds a note and gives its title in the Inspector

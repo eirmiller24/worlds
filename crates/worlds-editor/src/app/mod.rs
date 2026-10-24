@@ -295,6 +295,12 @@ struct UiFile {
     active_level: Option<String>,
     #[serde(default)]
     active_layer: Option<String>,
+    /// The entities and paintable layers that were active most recently
+    /// (the tools switch back to them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_entities_layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_paint_layer: Option<String>,
     #[serde(default)]
     layers: BTreeMap<String, LayerView>,
     #[serde(default)]
@@ -2387,6 +2393,13 @@ impl EditorApp {
         {
             self.st.view.active_layer = Some(i);
         }
+        let known = |s: &Option<String>| {
+            s.as_deref()
+                .filter(|s| doc.project.layers.iter().any(|l| l.slug == *s))
+                .and_then(|s| Slug::new(s).ok())
+        };
+        self.st.view.last_entities_layer = known(&f.last_entities_layer);
+        self.st.view.last_paint_layer = known(&f.last_paint_layer);
         for (i, l) in doc.project.layers.iter().enumerate() {
             if let Some(v) = f.layers.get(l.slug.as_str()) {
                 self.st.view.layers[i] = *v;
@@ -2482,6 +2495,18 @@ impl EditorApp {
                 .view
                 .active_layer
                 .map(|i| doc.project.layers[i].slug.to_string()),
+            last_entities_layer: self
+                .st
+                .view
+                .last_entities_layer
+                .as_ref()
+                .map(|s| s.to_string()),
+            last_paint_layer: self
+                .st
+                .view
+                .last_paint_layer
+                .as_ref()
+                .map(|s| s.to_string()),
             layers: doc
                 .project
                 .layers
@@ -2778,10 +2803,13 @@ impl EditorApp {
         if active != self.last_active_layer {
             self.last_active_layer = active;
             if let (Some(doc), Some(i)) = (&self.st.doc, active)
-                && doc.project.layers.get(i).is_some_and(|l| l.is_auto())
+                && let Some(def) = doc.project.layers.get(i)
             {
-                self.st.rules.layer = Some(doc.project.layers[i].slug.clone());
-                self.st.rules.focus = true;
+                self.st.view.remember_layer(def);
+                if def.is_auto() {
+                    self.st.rules.layer = Some(def.slug.clone());
+                    self.st.rules.focus = true;
+                }
             }
         }
         if std::mem::take(&mut self.st.rules.focus) {
@@ -2912,9 +2940,38 @@ impl EditorApp {
         }
     }
 
+    /// A tool was chosen: if the active layer is one it can't work on (an
+    /// entities layer under a brush, a tiles layer under the entity tool),
+    /// switch to the layer of the right kind that was active most recently,
+    /// else the first one, and say so. You can't paint on an entities
+    /// layer or place entities on a decor layer, so the switch saves the
+    /// click that always followed.
+    fn layer_for_tool(&mut self, t: Tool) {
+        let Some(doc) = &self.st.doc else {
+            return;
+        };
+        // The layer in use as the tool changes is the one to come back to
+        // (the per-frame hook misses a layer set and noted in one step).
+        if let Some(def) = self
+            .st
+            .view
+            .active_layer
+            .and_then(|i| doc.project.layers.get(i))
+        {
+            self.st.view.remember_layer(def);
+        }
+        if let Some(i) = self.st.view.layer_for_tool(doc, t) {
+            let def = &doc.project.layers[i];
+            let msg = format!("Layer {} ({})", def.name, def.kind.name());
+            self.st.view.active_layer = Some(i);
+            self.st.view.set_status(msg, false);
+        }
+    }
+
     /// The entity tool was chosen (or T pressed again): the search box gets
     /// the keyboard, the Palette comes to the front, and a non-entities
-    /// active layer gives way to the first entities layer.
+    /// active layer gives way to the first entities layer (the last one
+    /// used, by [`Self::layer_for_tool`], which ran first).
     fn enter_entity_tool(&mut self) {
         // Not after Enter picked the brush: the keyboard stays on the map.
         self.st.entities.focus = !std::mem::take(&mut self.st.entities.keep_map_keys);
@@ -3591,6 +3648,7 @@ impl EditorApp {
                         .cancel_gesture(old, &mut self.st.tool_events);
                 }
                 self.st.view.set_tool(t);
+                self.layer_for_tool(t);
                 if t == Tool::Entity {
                     self.enter_entity_tool();
                 }

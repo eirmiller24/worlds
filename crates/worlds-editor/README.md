@@ -123,6 +123,8 @@ Tests and local runs write reference shots to `crates/worlds-editor/screenshots/
 
 ## Using it
 
+Picking a tool picks a layer it can use. The entity tool only places on entities layers and the painting tools (Brush, Line, Rectangle, Fill, Eraser) only paint int_grid and tiles layers, so choosing one while the active layer is the wrong kind switches to the layer of the right kind you used most recently (else the first one), and the status bar names it. Select, Note, Measure and Hand leave the layer alone. The two remembered layers are saved in `.worlds/ui.json` as `last_entities_layer` and `last_paint_layer`.
+
 The toolbar starts with the **Worlds** menu: Open project…, Import from Worlds project…, Reload from disk, Save (with a • while there are unsaved edits), Undo and Redo (each entry names what it would undo: "Undo Paint collision"), Commands… (the command palette) and, last, Preferences… (see "Preferences"). Each entry shows its key as you have it. After the menu come the world switcher and bookmarks (see "Worlds" and "Map tabs and bookmarks") and the tools.
 
 The keys below are the defaults. Every command with a key can be given another one (or none) in Preferences (Ctrl+, the Worlds menu or "Preferences…" in the command palette; see "Preferences"), and the menu, tooltips and the palette then print yours. The clipboard keys, Escape, Enter in prompts and fields, Space to pan and the mouse modifiers stay as they are. On a Mac, Ctrl in this table is Cmd.

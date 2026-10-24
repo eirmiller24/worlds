@@ -54,6 +54,12 @@ Binaries in `target/release/`:
 | `worlds-mcp` | MCP server (stdio) for agents |
 | `worlds-server` | the live API on a project without the editor (tests, tools) |
 
+On Linux, `assets/icon/install-desktop.sh` installs a launcher and the
+icon for your user (`~/.local/share`), so the app menu and the taskbar
+show Worlds rather than a placeholder (on Wayland the taskbar takes the
+icon from the launcher, not the window). It points at
+`target/release/worlds`; pass another path to change that.
+
 ## Quick start
 
 ```sh

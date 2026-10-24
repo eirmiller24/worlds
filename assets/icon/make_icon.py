@@ -1,9 +1,10 @@
 """Draw the Worlds icon as pixel art and write it at several sizes.
 
 A 64x64 grid: four 30x30 tiles split by a 4 px black cross, no outer
-border. Top-left and bottom-right are empty (transparent); bottom-left is
-the Earth, top-right the Moon, each filling its whole tile. Larger sizes
-are nearest-neighbour scale-ups, so every art pixel stays a sharp square.
+border. Top-left is a chunky W (so the icon reads as "Worlds" in a
+taskbar), bottom-right is empty (transparent); bottom-left is the Earth,
+top-right the Moon, each filling its whole tile. Larger sizes are
+nearest-neighbour scale-ups, so every art pixel stays a sharp square.
 
     python3 assets/icon/make_icon.py
 """
@@ -12,7 +13,7 @@ import math
 import random
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 TILE = 30
 LINE = 4
@@ -114,12 +115,22 @@ def moon():
     return px
 
 
+def letter_w(img):
+    """A chunky pixel W in the top-left tile: four strokes of one zigzag,
+    pale on a black outline so it reads on light and dark taskbars."""
+    zig = [(3, 3), (9, 27), (15, 13), (21, 27), (27, 3)]
+    d = ImageDraw.Draw(img)
+    d.line(zig, fill=BLACK, width=8, joint="curve")
+    d.line(zig, fill=(236, 236, 240, 255), width=4, joint="curve")
+
+
 def draw():
     img = Image.new("RGBA", (SIZE, SIZE), CLEAR)
     for i in range(SIZE):
         for j in range(TILE, TILE + LINE):
             img.putpixel((i, j), BLACK)
             img.putpixel((j, i), BLACK)
+    letter_w(img)
     for (x, y), c in earth(29).items():
         img.putpixel((x, TILE + LINE + y), c + (255,))
     for (x, y), c in moon().items():

@@ -115,6 +115,12 @@ pub struct ViewState {
     pub active_world: Option<Slug>,
     /// Index into `project.layers`.
     pub active_layer: Option<usize>,
+    /// The entities layer that was active most recently, by slug: the one
+    /// the entity tool goes back to ([`Self::remember_layer`]).
+    pub last_entities_layer: Option<Slug>,
+    /// The paintable layer (int_grid or tiles) that was active most
+    /// recently, by slug: the one the painting tools go back to.
+    pub last_paint_layer: Option<Slug>,
     /// By index into `project.layers`.
     pub layers: Vec<LayerView>,
     /// The layer slugs `layers` was last synced to (same order), so a
@@ -237,6 +243,8 @@ impl Default for ViewState {
             active_level: None,
             active_world: None,
             active_layer: None,
+            last_entities_layer: None,
+            last_paint_layer: None,
             layers: Vec::new(),
             layer_slugs: Vec::new(),
             tool: Tool::default(),
@@ -639,6 +647,57 @@ impl ViewState {
             self.drawing = None;
         }
         self.tool = t;
+    }
+
+    /// Note that `def` is the active layer, so a tool that can't work on
+    /// the current layer can come back to it: an entities layer for the
+    /// entity tool, an int_grid or tiles layer for the painting tools.
+    pub fn remember_layer(&mut self, def: &worlds_core::LayerDef) {
+        if def.is_entities() {
+            self.last_entities_layer = Some(def.slug.clone());
+        } else if def.is_int_grid() || def.is_tiles() {
+            self.last_paint_layer = Some(def.slug.clone());
+        }
+    }
+
+    /// Whether tool `t` can work on layer `def`: the entity tool places on
+    /// entities layers, the painting tools paint int_grid and tiles layers,
+    /// every other tool works anywhere.
+    pub fn tool_fits_layer(t: Tool, def: &worlds_core::LayerDef) -> bool {
+        if t == Tool::Entity {
+            def.is_entities()
+        } else if t.paints() {
+            def.is_int_grid() || def.is_tiles()
+        } else {
+            true
+        }
+    }
+
+    /// The layer tool `t` should switch to, if the active one doesn't fit
+    /// it: the one of the right kind that was active most recently, else
+    /// the first of that kind; `None` when the active layer already fits
+    /// (or no layer does).
+    pub fn layer_for_tool(&self, doc: &Document, t: Tool) -> Option<usize> {
+        let layers = &doc.project.layers;
+        let fits = |l: &worlds_core::LayerDef| Self::tool_fits_layer(t, l);
+        if self
+            .active_layer
+            .and_then(|i| layers.get(i))
+            .is_some_and(fits)
+        {
+            return None;
+        }
+        let remembered = if t == Tool::Entity {
+            &self.last_entities_layer
+        } else if t.paints() {
+            &self.last_paint_layer
+        } else {
+            return None;
+        };
+        remembered
+            .as_ref()
+            .and_then(|s| layers.iter().position(|l| l.slug == *s && fits(l)))
+            .or_else(|| layers.iter().position(fits))
     }
 
     /// The world the map shows, as an index into `project.worlds`: the
