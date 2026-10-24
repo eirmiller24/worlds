@@ -18,6 +18,7 @@
 pub mod autosave;
 pub mod command;
 pub mod export;
+pub mod find;
 pub mod format;
 pub mod fragment;
 pub mod id;
