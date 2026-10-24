@@ -333,6 +333,7 @@ impl Engine {
             "remove_reference" => self.remove_reference(a),
             "layer_operation" => self.layer_operation(a),
             "import_project" => self.import_project(a),
+            "shape_level" => self.shape_level(a),
             other => Err(format!(
                 "there is no tool {other:?}; the tools are {}",
                 crate::catalog::TOOLS

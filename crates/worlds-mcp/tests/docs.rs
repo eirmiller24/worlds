@@ -69,7 +69,7 @@ fn every_json_block_parses() {
 fn published_tools_and_instructions_equal_the_doc() {
     let doc = doc();
     let documented = documented_tools(&doc);
-    assert_eq!(documented.len(), 39);
+    assert_eq!(documented.len(), 40);
     let instructions = doc
         .split("\n## Server instructions\n")
         .nth(1)
