@@ -304,8 +304,23 @@ impl Drop for EditorBackend {
 /// pid runs, the port accepts, and `project` is this directory.
 pub fn live_server(dir: &Path) -> Option<ServerInfo> {
     let info = ServerInfo::read(dir).ok()??;
-    let same = std::fs::canonicalize(&info.project).is_ok_and(|p| p == dir);
-    (same && info.is_live()).then_some(info)
+    (same_dir(Path::new(&info.project), dir) && info.is_live()).then_some(info)
+}
+
+/// Whether `a` and `b` are the same directory. The editor and `worlds-mcp`
+/// can see one directory under different paths that no symlink connects (a
+/// bind mount, such as a toolbox's `/run/host/var/home` for the host's
+/// `/var/home`), so on Unix this compares device and inode rather than the
+/// canonical paths.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return ma.dev() == mb.dev() && ma.ino() == mb.ino();
+        }
+    }
+    std::fs::canonicalize(a).is_ok_and(|p| std::fs::canonicalize(b).is_ok_and(|q| p == q))
 }
 
 /// Picks and keeps the backend: the editor when its server is live, else
