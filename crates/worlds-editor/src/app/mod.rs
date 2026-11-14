@@ -1514,8 +1514,9 @@ impl EditorApp {
             .section
             .as_deref()
             .map(|s| {
-                Section::parse(s)
-                    .ok_or_else(|| format!("section {s:?}: expected layers, tilesets or settings"))
+                Section::parse(s).ok_or_else(|| {
+                    format!("section {s:?}: expected layers, tilesets, enums, settings or worlds")
+                })
             })
             .transpose()?;
         if let Some(kind) = &p.add_layer {
@@ -1560,6 +1561,14 @@ impl EditorApp {
                 .ok_or_else(|| format!("no tileset {t:?}"))?;
             self.st.project.tileset = Some(def.slug.clone());
             self.st.project.section = Section::Tilesets;
+        }
+        if let Some(e) = &p.enum_ {
+            let def = doc
+                .project
+                .enum_def(e)
+                .ok_or_else(|| format!("no enum {e:?}"))?;
+            self.st.project.enum_ = Some(def.slug.clone());
+            self.st.project.section = Section::Enums;
         }
         if let Some(s) = section {
             self.st.project.section = s;
@@ -2147,6 +2156,26 @@ impl EditorApp {
         }
     }
 
+    /// At start without a project: open the last one, if the user asked
+    /// for that (Worlds > Open recent) and it is still there. Returns
+    /// whether it tried.
+    pub fn open_last_project(&mut self) -> bool {
+        if self.opts.is_synthetic() {
+            return false;
+        }
+        let Some(dir) = self.prefs.last_project().map(Path::to_path_buf) else {
+            return false;
+        };
+        tracing::info!("opening the last project, {}", dir.display());
+        self.open(&dir);
+        true
+    }
+
+    /// The recent projects, newest first (Worlds > Open recent).
+    pub fn recent_projects(&self) -> &[PathBuf] {
+        &self.prefs.recent
+    }
+
     /// Open a project directory, replacing the current one. An editing
     /// session (`opts.edits`) takes the project's session lock first (held
     /// by another Worlds: nothing opens, see [`Self::locked_out`]) and
@@ -2250,6 +2279,9 @@ impl EditorApp {
         self.recovery = None;
         self.recovered = None;
         self.open_document(doc);
+        if !self.opts.is_synthetic() && self.prefs.opened(dir) {
+            self.save_preferences();
+        }
         let rev = self.commands.editing_ref().map_or(0, |e| e.rev());
         let locked = recovery::session_locked(self.lock.as_ref());
         if wants_lock && !locked {
@@ -2751,6 +2783,9 @@ impl EditorApp {
             && let Some(doc) = &self.st.doc
         {
             self.st.view.active_layer = doc.project.layers.iter().position(|l| l.slug == slug);
+        }
+        if let Some(e) = self.st.types.show_enum.take() {
+            self.st.project.show_enum(e);
         }
         if std::mem::take(&mut self.st.project.focus) {
             show_pane(&mut self.dock, Pane::Project);
@@ -3608,6 +3643,29 @@ impl EditorApp {
             }
             Action::Reload => self.reload(),
             Action::OpenPreferences => self.prefs_win.show(),
+            Action::OpenRecent(dir) => {
+                if dir.join("project.json").is_file() {
+                    self.request_open(&dir);
+                } else {
+                    self.st.toast(
+                        format!(
+                            "{} is gone (or has no project.json); it was taken off the recent list",
+                            dir.display()
+                        ),
+                        true,
+                    );
+                    self.prefs.recent.retain(|d| *d != dir);
+                    self.save_preferences();
+                }
+            }
+            Action::ClearRecent => {
+                self.prefs.recent.clear();
+                self.save_preferences();
+            }
+            Action::SetOpenLast(on) => {
+                self.prefs.open_last = on;
+                self.save_preferences();
+            }
             Action::Save => {
                 let _ = self.save();
             }
@@ -3967,10 +4025,70 @@ impl EditorApp {
             .clicked()
         };
         let mut acts = Vec::new();
+        let recent = self.prefs.recent.clone();
+        let open_last = self.prefs.open_last;
+        let open_dir = self.st.doc.as_ref().map(|d| d.dir.clone());
         let menu = ui.menu_button(egui::RichText::new("Worlds").strong(), |ui| {
             if entry(ui, true, "Open project…".into(), &k(Cmd::Open)) {
                 acts.push(Action::OpenDialog);
             }
+            let r = ui.menu_button("Open recent", |ui| {
+                let current = open_dir
+                    .as_ref()
+                    .map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.clone()));
+                if recent.is_empty() {
+                    ui.weak("Projects you open show up here");
+                }
+                for d in &recent {
+                    let name = d
+                        .file_name()
+                        .map_or_else(|| d.display().to_string(), |n| n.to_string_lossy().into());
+                    let here = d.join("project.json").is_file();
+                    let is_open = current.as_ref() == Some(d);
+                    let label = if is_open {
+                        format!("{name} (open)")
+                    } else {
+                        name
+                    };
+                    let r = ui
+                        .add_enabled(
+                            here && !is_open,
+                            egui::Button::new(label).min_size(egui::vec2(260.0, 0.0)),
+                        )
+                        .on_hover_text(d.display().to_string())
+                        .on_disabled_hover_text(if is_open {
+                            format!("{} (already open)", d.display())
+                        } else {
+                            format!("{} is gone (no project.json there)", d.display())
+                        });
+                    if r.clicked() {
+                        acts.push(Action::OpenRecent(d.clone()));
+                    }
+                }
+                ui.separator();
+                let mut on = open_last;
+                let r = ui
+                    .checkbox(&mut on, "Open the last project at start")
+                    .on_hover_text(
+                        "When Worlds starts without a project to open, it opens the one \
+                         at the top of this list",
+                    );
+                fields::mark(ui, "menu:open last", r.rect);
+                if r.changed() {
+                    acts.push(Action::SetOpenLast(on));
+                }
+                if ui
+                    .add_enabled(!recent.is_empty(), egui::Button::new("Clear the list"))
+                    .on_hover_text("Forget the recent projects (the projects stay on disk)")
+                    .clicked()
+                {
+                    acts.push(Action::ClearRecent);
+                }
+                if !acts.is_empty() {
+                    ui.close();
+                }
+            });
+            fields::mark(ui, "menu:recent", r.response.rect);
             if entry(ui, open, "Import from Worlds project…".into(), "") {
                 acts.push(Action::ImportProject);
             }

@@ -322,6 +322,8 @@ fn main() -> anyhow::Result<()> {
                 {
                     app.st.toast(format!("--rule: {e}"), true);
                 }
+            } else {
+                app.open_last_project();
             }
             Ok(Box::new(app))
         }),

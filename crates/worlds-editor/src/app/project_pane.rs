@@ -18,6 +18,14 @@
 //!   tile size, spacing, padding, and a preview of the atlas with the
 //!   tiles as the editor cuts them. × is `remove_tileset_def`, refused
 //!   (with the uses listed) while anything draws from it.
+//! - **Enums** (`enums.json`): named lists of values that `enum` fields
+//!   pick from (a field can also list its values inline, in the Types
+//!   pane). + Enum adds one; the form: slug (`rename_enum`: fields
+//!   follow), name, and the values (color, slug, name; ⏶ ⏷ ×, + Value).
+//!   A value's slug change is `rename_enum_value`, so stored values,
+//!   defaults and rule requirements follow; every other edit is one
+//!   `set_enum_def`. × on an enum is `remove_enum_def`, offered only
+//!   while no field uses it (the uses are listed).
 //! - **Worlds** (`worlds/<slug>/`, see [`super::worlds`]): the worlds in
 //!   display order with their level counts; click to show one, ⏶ ⏷
 //!   (`reorder_worlds`), Rename…, × (asks first), + World.
@@ -37,8 +45,8 @@ use std::sync::mpsc::Receiver;
 use egui::{Color32, RichText, Stroke, StrokeKind, Vec2};
 use worlds_core::command::ProjectSetting;
 use worlds_core::{
-    AutoDef, Color, Command, IntGridDef, IntGridGroup, IntGridValue, LayerDef, LayerKind, Slug,
-    TilesDef, TilesetDef,
+    AutoDef, Color, Command, EnumDef, EnumSource, EnumValue, FieldType, IntGridDef, IntGridGroup,
+    IntGridValue, LayerDef, LayerKind, Project, Slug, TilesDef, TilesetDef,
 };
 
 use super::EditorState;
@@ -52,14 +60,16 @@ pub enum Section {
     #[default]
     Layers,
     Tilesets,
+    Enums,
     Settings,
     Worlds,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 5] = [
         Section::Layers,
         Section::Tilesets,
+        Section::Enums,
         Section::Settings,
         Section::Worlds,
     ];
@@ -68,6 +78,7 @@ impl Section {
         match self {
             Section::Layers => "layers",
             Section::Tilesets => "tilesets",
+            Section::Enums => "enums",
             Section::Settings => "settings",
             Section::Worlds => "worlds",
         }
@@ -104,6 +115,7 @@ pub enum Follow {
         activate: bool,
     },
     Tileset(Slug),
+    Enum(Slug),
 }
 
 /// The Project pane's state.
@@ -114,6 +126,8 @@ pub struct ProjectState {
     pub layer: Option<Slug>,
     /// The tileset whose form shows.
     pub tileset: Option<Slug>,
+    /// The enum whose form shows.
+    pub enum_: Option<Slug>,
     /// Bring the pane to the front next frame.
     pub focus: bool,
     /// The last refusal of a command the pane sent (or a file it couldn't
@@ -155,6 +169,14 @@ impl ProjectState {
         self.show(Section::Tilesets);
     }
 
+    /// Show the Enums part, with `slug`'s form open (`None`: the list).
+    pub fn show_enum(&mut self, slug: Option<Slug>) {
+        if slug.is_some() {
+            self.enum_ = slug;
+        }
+        self.show(Section::Enums);
+    }
+
     /// What + Tileset… does: the native PNG picker, then a new tileset for
     /// the picked file (its form open). The Tilesets part comes to the
     /// front so the result is seen. Nothing happens while a picker is
@@ -180,6 +202,10 @@ impl ProjectState {
             }
             Follow::Tileset(t) => {
                 self.tileset = Some(t);
+                None
+            }
+            Follow::Enum(e) => {
+                self.enum_ = Some(e);
                 None
             }
         }
@@ -498,11 +524,19 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
     {
         ps.tileset = None;
     }
-    ui.horizontal(|ui| {
+    if ps
+        .enum_
+        .as_ref()
+        .is_some_and(|e| doc.project.enum_def(e.as_str()).is_none())
+    {
+        ps.enum_ = None;
+    }
+    ui.horizontal_wrapped(|ui| {
         for s in Section::ALL {
             let label = match s {
                 Section::Layers => format!("Layers ({})", doc.project.layers.len()),
                 Section::Tilesets => format!("Tilesets ({})", doc.project.tilesets.len()),
+                Section::Enums => format!("Enums ({})", doc.project.enums.len()),
                 Section::Settings => "Settings".into(),
                 Section::Worlds => format!("Worlds ({})", doc.project.worlds.len()),
             };
@@ -536,6 +570,7 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
         .show(ui, |ui| match ps.section {
             Section::Layers => layers_section(ui, doc, bufs, ps, rules, types),
             Section::Tilesets => tilesets_section(ui, doc, bufs, atlas, ps),
+            Section::Enums => enums_section(ui, doc, bufs, ps),
             Section::Settings => settings_section(ui, doc, bufs, ps),
             Section::Worlds => super::worlds::section(ui, doc, view, ps, actions),
         });
@@ -1370,6 +1405,306 @@ fn groups_editor(
     }
 }
 
+// ---- enums ----
+
+/// What uses enum `slug`: "entity type door, field kind", "level field
+/// biome", in project order.
+pub fn enum_uses(p: &Project, slug: &str) -> Vec<String> {
+    let uses = |ty: &FieldType| matches!(ty, FieldType::Enum(EnumSource::Project(e)) if e == slug);
+    let mut out = Vec::new();
+    for d in &p.entities {
+        for f in d.fields.iter().filter(|f| uses(&f.ty)) {
+            out.push(format!("entity type {}, field {}", d.slug, f.slug));
+        }
+    }
+    for f in p.level_fields.iter().filter(|f| uses(&f.ty)) {
+        out.push(format!("level field {}", f.slug));
+    }
+    out
+}
+
+/// A new enum for + Enum: a free slug and one value to start from.
+pub fn new_enum(p: &Project) -> (Command, Slug) {
+    let slug = super::defs::unique_slug("enum", |s| p.enum_def(s).is_some());
+    let def = EnumDef {
+        slug: slug.clone(),
+        name: Some(title(slug.as_str())),
+        values: vec![EnumValue {
+            slug: Slug::new("value").expect("valid"),
+            name: Some("Value".into()),
+            color: Some(color(COLORS[0])),
+            icon: None,
+        }],
+    };
+    (
+        Command::SetEnumDef {
+            enum_: slug.clone(),
+            def,
+            index: None,
+        },
+        slug,
+    )
+}
+
+/// A copy of enum `def` changed by `f`, as one `set_enum_def` (on top of
+/// what the pane already queued this frame).
+fn set_enum(ps: &mut ProjectState, def: &EnumDef, what: &str, f: impl FnOnce(&mut EnumDef)) {
+    let mut base = def.clone();
+    for c in ps.pending.iter().flat_map(batch_commands) {
+        match c {
+            Command::SetEnumDef { enum_, def: d, .. } if *enum_ == base.slug => base = d.clone(),
+            Command::RenameEnum { from, to } if *from == base.slug => base.slug = to.clone(),
+            Command::RenameEnumValue { enum_, from, to } if *enum_ == base.slug => {
+                for v in base.values.iter_mut().filter(|v| v.slug == *from) {
+                    v.slug = to.clone();
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut d = base.clone();
+    f(&mut d);
+    if d != base {
+        push(
+            &mut ps.pending,
+            format!("Edit enum {}: {what}", base.slug),
+            vec![Command::SetEnumDef {
+                enum_: base.slug.clone(),
+                def: d,
+                index: None,
+            }],
+        );
+    }
+}
+
+fn enums_section(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    bufs: &mut HashMap<String, String>,
+    ps: &mut ProjectState,
+) {
+    ui.horizontal(|ui| {
+        let r = ui
+            .button("+ Enum")
+            .on_hover_text("A new list of values for enum fields to pick from");
+        ps.rects.insert("add enum".into(), r.rect);
+        if r.clicked() {
+            let (cmd, slug) = new_enum(&doc.project);
+            push(&mut ps.pending, format!("Add enum {slug}"), vec![cmd]);
+            ps.follow = Some(Follow::Enum(slug));
+        }
+        ui.weak("saved in enums.json");
+    });
+    if doc.project.enums.is_empty() {
+        ui.add_space(4.0);
+        ui.label(
+            "No enums yet. An enum is a named list of values (wood, iron, gold) that entity \
+             and level fields of type enum pick from. Make a field one in the Types pane: \
+             its type \"enum\", values from this enum.",
+        );
+    }
+    ui.add_space(4.0);
+    egui::Grid::new("project enums")
+        .num_columns(3)
+        .striped(true)
+        .show(ui, |ui| {
+            for e in &doc.project.enums {
+                let open = ps.enum_.as_ref() == Some(&e.slug);
+                let r = ui.selectable_label(open, e.slug.as_str());
+                ps.rects.insert(format!("enum:{}", e.slug), r.rect);
+                if r.clicked() {
+                    ps.enum_ = if open { None } else { Some(e.slug.clone()) };
+                }
+                let uses = enum_uses(&doc.project, e.slug.as_str());
+                let values: Vec<&str> = e.values.iter().map(|v| v.slug.as_str()).collect();
+                let mut summary = values.join(", ");
+                if summary.chars().count() > 40 {
+                    summary = summary.chars().take(39).collect::<String>() + "…";
+                }
+                ui.weak(match uses.len() {
+                    0 => format!("{summary}  ·  unused"),
+                    1 => format!("{summary}  ·  1 field"),
+                    n => format!("{summary}  ·  {n} fields"),
+                })
+                .on_hover_text(if uses.is_empty() {
+                    "No field uses it yet".to_string()
+                } else {
+                    format!("Used by:\n{}", uses.join("\n"))
+                });
+                let x = ui
+                    .add_enabled(uses.is_empty(), egui::Button::new("×").small())
+                    .on_hover_text("Remove the enum")
+                    .on_disabled_hover_text(format!(
+                        "Fields use it; switch them to another enum first:\n{}",
+                        uses.join("\n")
+                    ));
+                ps.rects.insert(format!("enum:{}:remove", e.slug), x.rect);
+                if x.clicked() {
+                    push(
+                        &mut ps.pending,
+                        format!("Delete enum {}", e.slug),
+                        vec![Command::RemoveEnumDef {
+                            enum_: e.slug.clone(),
+                        }],
+                    );
+                }
+                ui.end_row();
+            }
+        });
+    let Some(def) = ps
+        .enum_
+        .as_ref()
+        .and_then(|e| doc.project.enum_def(e.as_str()))
+    else {
+        if !doc.project.enums.is_empty() {
+            ui.add_space(6.0);
+            ui.weak("Click an enum to edit it.");
+        }
+        return;
+    };
+    ui.separator();
+    enum_form(ui, bufs, ps, def);
+}
+
+fn enum_form(
+    ui: &mut egui::Ui,
+    bufs: &mut HashMap<String, String>,
+    ps: &mut ProjectState,
+    def: &EnumDef,
+) {
+    let slug = &def.slug;
+    let k = |what: &str| format!("enum:{slug}:{what}");
+    ui.heading(slug.as_str());
+    egui::Grid::new(("enum form", slug.as_str()))
+        .num_columns(2)
+        .striped(true)
+        .show(ui, |ui| {
+            ui.weak("Slug");
+            ui.horizontal(|ui| {
+                if let Some(s) =
+                    text_commit(ui, bufs, &k("slug"), slug.as_str(), false, false, 110.0)
+                {
+                    match Slug::new(s.trim()) {
+                        Ok(to) => {
+                            push(
+                                &mut ps.pending,
+                                format!("Rename enum {slug} to {to}"),
+                                vec![Command::RenameEnum {
+                                    from: slug.clone(),
+                                    to: to.clone(),
+                                }],
+                            );
+                            ps.follow = Some(Follow::Enum(to));
+                        }
+                        Err(e) => ps.error = Some(format!("Bad slug: {e}")),
+                    }
+                }
+                ui.weak("(Enter renames)")
+                    .on_hover_text("Fields that use it follow");
+            });
+            ui.end_row();
+            ui.weak("Name");
+            let name = def.name.clone().unwrap_or_default();
+            if let Some(s) = text_commit(ui, bufs, &k("name"), &name, false, false, 150.0) {
+                let s = s.trim().to_string();
+                set_enum(ps, def, "name", |d| d.name = (!s.is_empty()).then_some(s));
+            }
+            ui.end_row();
+        });
+    ui.add_space(6.0);
+    ui.strong("Values");
+    ui.weak("What an enum field can hold. Changing a slug updates every stored value.");
+    let n = def.values.len();
+    egui::Grid::new(("enum values", slug.as_str()))
+        .num_columns(4)
+        .spacing([6.0, 4.0])
+        .show(ui, |ui| {
+            grid_headers(
+                ui,
+                &[("", 40.0), ("slug", 80.0), ("name", 100.0), ("", 66.0)],
+            );
+            for (i, v) in def.values.iter().enumerate() {
+                let k = |what: &str| format!("enum:{slug}:value:{i}:{what}");
+                let stored = v.color.as_ref().map(|c| c.as_str());
+                if let Some(hex) = super::panels::color_field(ui, bufs, &k("color"), stored)
+                    && let Ok(c) = Color::new(hex)
+                {
+                    set_enum(ps, def, "value color", |d| d.values[i].color = Some(c));
+                }
+                if let Some(s) =
+                    text_commit(ui, bufs, &k("slug"), v.slug.as_str(), false, false, 80.0)
+                {
+                    match Slug::new(s.trim()) {
+                        Ok(to) if def.has_value(to.as_str()) => {
+                            ps.error = Some(format!("Enum {slug} already has a value {to}"))
+                        }
+                        Ok(to) => push(
+                            &mut ps.pending,
+                            format!("Rename value {} of enum {slug} to {to}", v.slug),
+                            vec![Command::RenameEnumValue {
+                                enum_: slug.clone(),
+                                from: v.slug.clone(),
+                                to,
+                            }],
+                        ),
+                        Err(e) => ps.error = Some(format!("Bad slug: {e}")),
+                    }
+                }
+                let name = v.name.clone().unwrap_or_default();
+                if let Some(s) = text_commit(ui, bufs, &k("name"), &name, false, false, 100.0) {
+                    let s = s.trim().to_string();
+                    set_enum(ps, def, "value name", |d| {
+                        d.values[i].name = (!s.is_empty()).then_some(s)
+                    });
+                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(i > 0, egui::Button::new("⏶").small())
+                        .on_hover_text("Move up")
+                        .clicked()
+                    {
+                        set_enum(ps, def, "value order", |d| d.values.swap(i, i - 1));
+                    }
+                    if ui
+                        .add_enabled(i + 1 < n, egui::Button::new("⏷").small())
+                        .on_hover_text("Move down")
+                        .clicked()
+                    {
+                        set_enum(ps, def, "value order", |d| d.values.swap(i, i + 1));
+                    }
+                    let x = ui
+                        .add_enabled(n > 1, egui::Button::new("×").small())
+                        .on_hover_text(
+                            "Remove the value (fields that hold it show up in Problems until \
+                             changed; undo brings it back)",
+                        )
+                        .on_disabled_hover_text("An enum needs at least one value");
+                    mark(ui, &k("remove"), x.rect);
+                    if x.clicked() {
+                        set_enum(ps, def, "remove value", |d| {
+                            d.values.remove(i);
+                        });
+                    }
+                });
+                ui.end_row();
+            }
+        });
+    let r = ui.button("+ Value");
+    mark(ui, &format!("enum:{slug}:add value"), r.rect);
+    if r.clicked() {
+        set_enum(ps, def, "add value", |d| {
+            let s = super::defs::unique_slug("value", |s| d.has_value(s));
+            let c = COLORS[d.values.len() % COLORS.len()];
+            d.values.push(EnumValue {
+                name: Some(title(s.as_str())),
+                slug: s,
+                color: Some(color(c)),
+                icon: None,
+            });
+        });
+    }
+}
+
 // ---- tilesets ----
 
 /// A copy of tileset `def` changed by `f`, as one `set_tileset_def`.
@@ -1974,6 +2309,59 @@ mod tests {
             st.view.active_layer = doc.project.layers.iter().position(|l| l.slug == s);
         }
         ok
+    }
+
+    #[test]
+    fn add_an_enum_and_a_value_then_remove_it() {
+        let (_tmp, mut st) = state();
+        st.project.show_enum(None);
+        assert_eq!(st.project.section, Section::Enums);
+        assert_eq!(Section::parse("enums"), Some(Section::Enums));
+        // mini's level field `biome` uses enum biome.
+        let doc = st.doc.as_ref().unwrap();
+        assert_eq!(enum_uses(&doc.project, "biome"), ["level field biome"]);
+        let mut d = Driver::new(pane_frame);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        // A used enum's × does nothing.
+        let p = st.project.rects["enum:biome:remove"].center();
+        d.click(&mut st, p);
+        assert!(st.project.pending.is_empty());
+        let p = st.project.rects["add enum"].center();
+        d.click(&mut st, p);
+        let q = queued(&mut st);
+        assert_eq!(q.len(), 1, "{q:?}");
+        assert_eq!(q[0].0, "Add enum enum");
+        st.project.pending = q
+            .into_iter()
+            .map(|(label, commands)| Command::Batch { label, commands })
+            .collect();
+        apply(&mut st).unwrap();
+        assert_eq!(st.project.enum_.as_ref().unwrap().as_str(), "enum");
+        // + Value: a second value with a free slug.
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("enum:enum:add value").center());
+        apply(&mut st).unwrap();
+        let doc = st.doc.as_ref().unwrap();
+        let e = doc.project.enum_def("enum").unwrap();
+        let slugs: Vec<&str> = e.values.iter().map(|v| v.slug.as_str()).collect();
+        assert_eq!(slugs, ["value", "value_2"]);
+        // A value's ×: one value left.
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("enum:enum:value:0:remove").center());
+        apply(&mut st).unwrap();
+        let e = st.doc.as_ref().unwrap().project.enum_def("enum").unwrap();
+        assert_eq!(e.values.len(), 1);
+        assert_eq!(e.values[0].slug.as_str(), "value_2");
+        // Unused: × removes it, and the form closes.
+        d.frame(&mut st, vec![]);
+        let p = st.project.rects["enum:enum:remove"].center();
+        d.click(&mut st, p);
+        apply(&mut st).unwrap();
+        assert!(st.doc.as_ref().unwrap().project.enum_def("enum").is_none());
+        d.frame(&mut st, vec![]);
+        assert_eq!(st.project.enum_, None);
     }
 
     #[test]

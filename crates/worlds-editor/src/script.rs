@@ -545,15 +545,16 @@ pub struct ReferenceStep {
 }
 
 /// `{ "ui": "project", "add_layer"?: kind, "add_tileset"?: path,
-/// "section"?: "layers" | "tilesets" | "settings", "layer"?: slug,
-/// "tileset"?: slug }`: the Project pane in front. `add_layer` does what
+/// "section"?: "layers" | "tilesets" | "enums" | "settings" | "worlds",
+/// "layer"?: slug, "tileset"?: slug, "enum"?: slug }`: the Project pane in
+/// front. `add_layer` does what
 /// its + Layer menu does for that kind (`int_grid`, `tiles`, `auto`,
 /// `entities`: one entry, the new layer active and its form open);
 /// `add_tileset` what + Tileset… does with that PNG (relative to the
 /// current directory; an image outside the project is copied into `art/`;
 /// one entry, its form open). Then `section` shows that part, `layer` /
-/// `tileset` open that form (and its section). An unknown kind, section,
-/// layer or tileset, or a refused add, is an error.
+/// `tileset` / `enum` open that form (and its section). An unknown kind,
+/// section, layer, tileset or enum, or a refused add, is an error.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectStep {
@@ -567,6 +568,8 @@ pub struct ProjectStep {
     pub layer: Option<String>,
     #[serde(default)]
     pub tileset: Option<String>,
+    #[serde(default, rename = "enum")]
+    pub enum_: Option<String>,
 }
 
 /// `{ "ui": "layers", "active"?: slug, "visible"?: { slug: bool },

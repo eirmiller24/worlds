@@ -169,6 +169,14 @@ pub enum Action {
     UngroupSelection,
     /// The Preferences window (shortcuts).
     OpenPreferences,
+    /// Worlds > Open recent: open this project directory (asking first
+    /// when the open one has unsaved edits).
+    OpenRecent(std::path::PathBuf),
+    /// Worlds > Open recent > Clear the list.
+    ClearRecent,
+    /// Worlds > Open recent: open the last project when Worlds starts
+    /// (on or off).
+    SetOpenLast(bool),
 }
 
 impl Action {
@@ -324,6 +332,10 @@ impl Action {
         for (name, s) in [
             ("Project: layers (add, edit, reorder)", Section::Layers),
             ("Project: tilesets (add an image)", Section::Tilesets),
+            (
+                "Project: enums (value lists for enum fields)",
+                Section::Enums,
+            ),
             ("Project: settings (grid, collision)", Section::Settings),
         ] {
             v.push((name.into(), none(), Action::OpenProject(s)));

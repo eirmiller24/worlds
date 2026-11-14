@@ -897,6 +897,21 @@ fn approval_batches_build_on_their_scratch_and_apply_in_order() {
     assert_eq!(m.h.pending().len(), 2);
     assert_eq!(m.h.rev(), 0);
     m.h.apply_pending(&mut m.host, &first).unwrap();
+    // Each write's changes are kept for the History pane, in order.
+    let e = m.host.history.undo_entries().last().unwrap();
+    assert_eq!(e.parts.len(), 3);
+    assert_eq!(e.part_changes.len(), 3);
+    assert!(matches!(
+        e.part_changes[0][..],
+        [worlds_core::command::Change::Def { .. }]
+    ));
+    assert!(
+        e.part_changes[1..].iter().all(|c| c
+            .iter()
+            .any(|c| matches!(c, worlds_core::command::Change::Grid { .. }))),
+        "{:?}",
+        e.part_changes
+    );
     m.h.apply_pending(&mut m.host, &second).unwrap();
     assert_eq!(m.h.rev(), 2);
     let def = m.host.project.layer("hazards").unwrap().clone();

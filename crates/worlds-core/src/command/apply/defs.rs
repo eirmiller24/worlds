@@ -1050,7 +1050,7 @@ impl Project {
                 entity,
                 keep_instances: false,
             });
-            return self.batch(label, commands);
+            return self.batch(label, commands, None);
         }
         let def = self.entities.remove(k);
         Ok(Applied {

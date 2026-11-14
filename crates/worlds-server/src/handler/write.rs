@@ -247,17 +247,16 @@ impl Handler {
         match self.batches.get_mut(&client.conn) {
             Some(b) => {
                 b.inverses.push(applied.inverse);
-                b.parts.push(part);
+                b.parts.push((part, changes.clone()));
                 b.changes.extend(changes.iter().cloned());
                 b.last_activity = Instant::now();
             }
             None => {
-                host.doc().history.record_with(
+                host.doc().history.record_parts(
                     label.clone(),
                     client.origin(),
                     vec![applied.inverse],
-                    vec![part],
-                    &changes,
+                    vec![(part, changes.clone())],
                 );
                 self.agent_entry(client, &label, &changes, None);
             }

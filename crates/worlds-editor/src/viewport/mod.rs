@@ -70,6 +70,10 @@ pub enum Fit {
         center: [f64; 2],
         zoom: f64,
     },
+    /// This rect of world pixels in the middle, at the current zoom when it
+    /// fits there, else zoomed out until it does (never zoomed in: the
+    /// History pane's "show where this happened").
+    Show(WRect),
 }
 
 /// Status bar readout for the pointer.
@@ -410,6 +414,13 @@ impl Viewport {
             Fit::Rect(r) => r,
             Fit::Center { center, zoom } => {
                 self.camera = Camera::centered(center, zoom, self.size_px);
+                return;
+            }
+            Fit::Show(r) => {
+                let mut fitted = self.camera;
+                fitted.fit(r, self.size_px, 24.0);
+                let zoom = self.camera.zoom.min(fitted.zoom);
+                self.camera = Camera::centered(r.center(), zoom, self.size_px);
                 return;
             }
         };

@@ -47,6 +47,24 @@ impl Project {
         Ok(applied)
     }
 
+    /// [`Self::apply`] of `Command::Batch { label, commands }`, also
+    /// returning what each of `commands` changed, in order (one list per
+    /// command, empty for a no-op).
+    pub fn apply_batch_parts(
+        &mut self,
+        label: String,
+        commands: Vec<Command>,
+    ) -> Result<(Applied, Vec<Vec<Change>>)> {
+        let mut parts = Vec::with_capacity(commands.len());
+        let applied = self.batch(label, commands, Some(&mut parts))?;
+        for c in &applied.changes {
+            for f in c.files() {
+                self.files.mark_dirty(f);
+            }
+        }
+        Ok((applied, parts))
+    }
+
     fn apply_inner(&mut self, cmd: Command) -> Result<Applied> {
         use Command::*;
         match cmd {
@@ -554,7 +572,7 @@ impl Project {
                 keep_uses,
                 keep_empty,
             } => self.remove_stamp(layer, stamp, keep_uses, keep_empty),
-            Batch { label, commands } => self.batch(label, commands),
+            Batch { label, commands } => self.batch(label, commands, None),
             DuplicateLevel {
                 level,
                 slug,
@@ -1866,7 +1884,13 @@ impl Project {
 
     // ---- batch ----
 
-    fn batch(&mut self, label: String, commands: Vec<Command>) -> Result<Applied> {
+    /// `parts`: also collect each command's changes there.
+    fn batch(
+        &mut self,
+        label: String,
+        commands: Vec<Command>,
+        mut parts: Option<&mut Vec<Vec<Change>>>,
+    ) -> Result<Applied> {
         let mut inverses = Vec::with_capacity(commands.len());
         let mut changes = Vec::new();
         for (index, c) in commands.into_iter().enumerate() {
@@ -1874,6 +1898,9 @@ impl Project {
                 Ok(a) => {
                     if !a.inverse.is_noop() || !a.changes.is_empty() {
                         inverses.push(a.inverse);
+                    }
+                    if let Some(p) = parts.as_deref_mut() {
+                        p.push(a.changes.clone());
                     }
                     changes.extend(a.changes);
                 }

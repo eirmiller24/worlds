@@ -180,13 +180,7 @@ impl Handler {
         for b in self.batches.values_mut() {
             let inverses = std::mem::take(&mut b.inverses);
             let parts = std::mem::take(&mut b.parts);
-            if history.record_with(
-                b.label.clone(),
-                b.client.origin(),
-                inverses,
-                parts,
-                &b.changes[b.recorded_changes..],
-            ) {
+            if history.record_parts(b.label.clone(), b.client.origin(), inverses, parts) {
                 b.entries += 1;
             }
             b.recorded_changes = b.changes.len();

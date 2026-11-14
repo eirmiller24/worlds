@@ -10,10 +10,13 @@
 //! `WORLDS_CONFIG_DIR` replaces the whole `<config dir>/worlds` part (tests
 //! and portable installs use it).
 //!
-//! Today it holds one thing, the shortcuts that differ from the defaults:
+//! It holds the shortcuts that differ from the defaults, the projects
+//! opened lately (newest first) and whether to open the last one at start:
 //!
 //! ```json
-//! { "shortcuts": { "undo": ["Ctrl+U"], "view.grid": [] } }
+//! { "shortcuts": { "undo": ["Ctrl+U"], "view.grid": [] },
+//!   "recent_projects": ["/home/me/games/cave.worlds"],
+//!   "open_last_project": true }
 //! ```
 //!
 //! Only changed bindings are written, so the file stays small and a new
@@ -35,6 +38,9 @@ use crate::keymap::Keymap;
 
 /// The file's name in the config directory.
 pub const FILE_NAME: &str = "preferences.json";
+
+/// How many recent projects are kept.
+pub const MAX_RECENT: usize = 10;
 
 /// Replaces the config directory (the `worlds` folder itself).
 pub const ENV_DIR: &str = "WORLDS_CONFIG_DIR";
@@ -87,6 +93,12 @@ struct File {
     /// Command id → chords, for the bindings that aren't the default.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     shortcuts: BTreeMap<String, Vec<String>>,
+    /// Project directories opened lately, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    recent_projects: Vec<PathBuf>,
+    /// Open the newest of them when Worlds starts without a project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    open_last_project: bool,
     /// Whatever else is in there (a newer version's settings).
     #[serde(flatten)]
     other: serde_json::Map<String, serde_json::Value>,
@@ -106,6 +118,11 @@ pub struct Store {
     unknown: BTreeMap<String, Vec<String>>,
     /// The file was there but unreadable: back it up before overwriting.
     broken: bool,
+    /// Project directories opened lately, newest first (see
+    /// [`Self::opened`]).
+    pub recent: Vec<PathBuf>,
+    /// Open `recent[0]` when Worlds starts without a project.
+    pub open_last: bool,
     /// The last save failed with this (shown once, not every change).
     pub last_error: Option<String>,
 }
@@ -161,6 +178,9 @@ impl Store {
             .filter(|(id, _)| crate::keymap::Cmd::from_id(id).is_none())
             .collect();
         store.other = file.other;
+        store.recent = file.recent_projects;
+        store.recent.truncate(MAX_RECENT);
+        store.open_last = file.open_last_project;
         tracing::info!("preferences read from {}", path.display());
         (store, km)
     }
@@ -185,6 +205,32 @@ impl Store {
         r
     }
 
+    /// Project `dir` was opened: it goes to the front of [`Self::recent`]
+    /// (once; the oldest past [`MAX_RECENT`] drop off). Returns whether
+    /// the list changed.
+    pub fn opened(&mut self, dir: &Path) -> bool {
+        let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        if self.recent.first() == Some(&dir) {
+            return false;
+        }
+        self.recent.retain(|d| *d != dir);
+        self.recent.insert(0, dir);
+        self.recent.truncate(MAX_RECENT);
+        true
+    }
+
+    /// The project to open at start, if [`Self::open_last`] is on and the
+    /// newest recent project still has its `project.json`.
+    pub fn last_project(&self) -> Option<&Path> {
+        if !self.open_last {
+            return None;
+        }
+        self.recent
+            .first()
+            .filter(|d| d.join("project.json").is_file())
+            .map(PathBuf::as_path)
+    }
+
     fn write(&mut self, path: &Path, km: &Keymap) -> Result<(), String> {
         let mut shortcuts = km.overrides();
         for (id, v) in &self.unknown {
@@ -192,6 +238,8 @@ impl Store {
         }
         let file = File {
             shortcuts,
+            recent_projects: self.recent.clone(),
+            open_last_project: self.open_last,
             other: self.other.clone(),
         };
         if let Some(dir) = path.parent() {
@@ -289,6 +337,49 @@ mod tests {
             "{ not json"
         );
         assert!(std::fs::read_to_string(&path).unwrap().contains('{'));
+    }
+
+    #[test]
+    fn recent_projects_round_trip_newest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        let (mut store, km) = Store::load(Some(path.clone()), false);
+        assert!(store.recent.is_empty() && !store.open_last);
+        let a = tmp.path().join("a.worlds");
+        let b = tmp.path().join("b.worlds");
+        for d in [&a, &b] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(a.join("project.json"), "{}").unwrap();
+        assert!(store.opened(&a));
+        assert!(store.opened(&b));
+        assert!(store.opened(&a), "reopened: back to the front, once");
+        assert!(!store.opened(&a));
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+        assert_eq!(store.recent, [canon(&a), canon(&b)]);
+        assert_eq!(store.last_project(), None, "off by default");
+        store.open_last = true;
+        store.save(&km).unwrap();
+        let (mut back, _) = Store::load(Some(path.clone()), false);
+        assert_eq!(back.recent, store.recent);
+        assert_eq!(back.last_project(), Some(canon(&a).as_path()));
+        // A newest project that went away isn't opened.
+        back.opened(&b);
+        assert_eq!(back.last_project(), None);
+        for i in 0..MAX_RECENT + 3 {
+            back.opened(&tmp.path().join(format!("p{i}")));
+        }
+        assert_eq!(back.recent.len(), MAX_RECENT);
+    }
+
+    #[test]
+    fn a_file_without_recents_still_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        std::fs::write(&path, r#"{ "shortcuts": { "undo": ["F9"] } }"#).unwrap();
+        let (store, km) = Store::load(Some(path), false);
+        assert_eq!(km.chords(Cmd::Undo), &[Chord::parse("F9").unwrap()]);
+        assert!(store.recent.is_empty() && !store.open_last && !store.broken);
     }
 
     #[test]

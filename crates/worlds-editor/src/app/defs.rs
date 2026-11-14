@@ -78,6 +78,9 @@ pub struct TypesState {
     /// rename of the open type or field); dropped when one is refused, so
     /// the form stays on what is still there.
     pub follow: Option<Follow>,
+    /// Show the Project pane's Enums part (with this enum's form open, or
+    /// the list); the app hands it over after the frame.
+    pub show_enum: Option<Option<Slug>>,
 }
 
 /// A rename the Types pane follows after it applies ([`TypesState::follow`]).
@@ -1326,6 +1329,52 @@ fn type_options(
                         });
                     }
                 });
+            ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
+                if let EnumSource::Project(e) = src {
+                    let known = fx.doc.project.enum_def(e.as_str()).is_some();
+                    let r = ui
+                        .add_enabled(known, egui::Button::new(format!("Edit enum {e}…")))
+                        .on_hover_text(
+                            "Its values (add, rename, reorder, colors) in the Project pane's \
+                             Enums part; every field using the enum sees the change",
+                        )
+                        .on_disabled_hover_text(format!("There is no enum {e} (see Problems)"));
+                    ts.rects.insert(k("edit enum"), r.rect);
+                    if r.clicked() {
+                        ts.show_enum = Some(Some(e.clone()));
+                    }
+                }
+                let r = ui.button("New enum…").on_hover_text(
+                    "Make a new enum in the Project pane's Enums part, and use it for this \
+                         field",
+                );
+                ts.rects.insert(k("new enum"), r.rect);
+                if r.clicked() {
+                    // One entry: the enum, then the field switched to it.
+                    let (cmd, slug) = super::project_pane::new_enum(&fx.doc.project);
+                    let e = slug.clone();
+                    let before = ts.pending.len();
+                    set_field(ts, owner, f, "enum", |d| {
+                        d.ty = FieldType::Enum(EnumSource::Project(e));
+                        d.default = None;
+                    });
+                    let mut cmds = vec![cmd];
+                    for c in ts.pending.drain(before..) {
+                        match c {
+                            Command::Batch { commands, .. } => cmds.extend(commands),
+                            other => cmds.push(other),
+                        }
+                    }
+                    push(
+                        &mut ts.pending,
+                        format!("New enum {slug} for field {}", f.slug),
+                        cmds,
+                    );
+                    ts.show_enum = Some(Some(slug));
+                }
+            });
             ui.end_row();
             if let EnumSource::Inline(vals) = src {
                 ui.weak("Values");

@@ -6,6 +6,10 @@
 //! ("Opened" goes back before every entry); that is
 //! [`Action::HistoryJump`], the same steps as Ctrl+Z and Ctrl+Shift+Z.
 //!
+//! Each write of an expanded batch is a link: clicking it centers the map
+//! on where that write landed ([`part_region`]; zooming out only if the
+//! region doesn't fit), without stepping the history.
+//!
 //! The pane reads a snapshot of `worlds_core::History` that [`refresh`]
 //! rebuilds when the history changed (the command layer's revision or a
 //! stack length moved), so drawing it costs nothing per frame.
@@ -15,10 +19,13 @@ use std::time::SystemTime;
 
 use egui::{Color32, RichText};
 use worlds_core::History;
-use worlds_core::command::{Entry, Origin};
+use worlds_core::command::{Change, Entry, Origin};
 
 use super::EditorState;
 use super::actions::Action;
+use crate::doc::{Document, LevelIx};
+use crate::viewport::Fit;
+use crate::viewport::camera::WRect;
 
 /// One entry, as the pane shows it.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +36,8 @@ pub struct Row {
     /// Project-relative, `/`-separated.
     pub files: Vec<String>,
     pub parts: Vec<String>,
+    /// What each part changed, parallel to `parts` (empty when unknown).
+    pub part_changes: Vec<Vec<Change>>,
     /// On the undo stack (done), else undone.
     pub done: bool,
 }
@@ -50,6 +59,7 @@ impl Row {
                 })
                 .collect(),
             parts: e.parts.clone(),
+            part_changes: e.part_changes.clone(),
             done,
         }
     }
@@ -138,6 +148,167 @@ fn origin_color(o: &Origin, accent: Color32) -> Color32 {
     }
 }
 
+/// Where on the map a set of changes happened: the world (index into
+/// `project.worlds`), the level when they are in one, and a rect of world
+/// px around them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Region {
+    pub world: usize,
+    pub level: Option<LevelIx>,
+    pub rect: WRect,
+}
+
+/// The level `level` of world `world`, by slug.
+fn level_in(doc: &Document, world: &str, level: &str) -> Option<LevelIx> {
+    (0..doc.levels.len()).find(|&ix| {
+        let r = doc.levels[ix];
+        doc.project.worlds[r.world].slug == world && doc.level(ix).slug == level
+    })
+}
+
+fn level_wrect(doc: &Document, ix: LevelIx) -> WRect {
+    let [x, y, w, h] = doc.level_rect(ix);
+    WRect::from_pos_size([x, y], [w, h])
+}
+
+/// Where one change happened, as the document is now: painted cells, an
+/// entity's box (its level when it is gone), an annotation's box, a level
+/// (its metadata, layers or reference images). Definitions, settings and
+/// worlds have no place on the map: `None`, as for a deleted level.
+fn change_region(doc: &Document, c: &Change) -> Option<Region> {
+    let in_level = |ix: LevelIx, rect: WRect| Region {
+        world: doc.levels[ix].world,
+        level: Some(ix),
+        rect,
+    };
+    let whole = |world: &str, level: &str| {
+        level_in(doc, world, level).map(|ix| in_level(ix, level_wrect(doc, ix)))
+    };
+    match c {
+        Change::Grid {
+            world,
+            level,
+            layer,
+            rect,
+        }
+        | Change::Tiles {
+            world,
+            level,
+            layer,
+            rect,
+        } => {
+            let ix = level_in(doc, world.as_str(), level.as_str())?;
+            let g = doc
+                .project
+                .layer(layer.as_str())
+                .map_or(doc.project.grid_size.max(1), |d| doc.project.layer_grid(d))
+                as f64;
+            let o = doc.level(ix).world_px;
+            Some(in_level(
+                ix,
+                WRect::from_pos_size(
+                    [
+                        o[0] as f64 + rect.x as f64 * g,
+                        o[1] as f64 + rect.y as f64 * g,
+                    ],
+                    [rect.w as f64 * g, rect.h as f64 * g],
+                ),
+            ))
+        }
+        Change::Entity { world, level, id } | Change::EntityOutside { world, level, id } => {
+            if let Some((ix, layer, inst)) = doc.find_entity(id)
+                && let Some(def) = doc.project.entity_def(inst.ty.as_str())
+            {
+                let lg = doc
+                    .project
+                    .layer(layer.as_str())
+                    .map_or(doc.project.grid_size.max(1), |d| doc.project.layer_grid(d));
+                let [x, y, w, h] =
+                    crate::tools::entity_box(def, inst, lg, doc.project.grid_size.max(1));
+                let o = doc.level(ix).world_px;
+                return Some(in_level(
+                    ix,
+                    WRect::from_pos_size(
+                        [o[0] as f64 + x, o[1] as f64 + y],
+                        [w.max(1.0), h.max(1.0)],
+                    ),
+                ));
+            }
+            whole(world.as_str(), level.as_str())
+        }
+        Change::Note { world, level, id } => {
+            if let Some(r) = crate::annot::find_note(doc, id)
+                && let Some(b) = crate::annot::world_bbox(doc, r)
+            {
+                return Some(Region {
+                    world: crate::annot::note_world(doc, r.at),
+                    level: r.level(),
+                    rect: b,
+                });
+            }
+            level
+                .as_ref()
+                .and_then(|l| whole(world.as_str(), l.as_str()))
+        }
+        Change::Reference {
+            world,
+            level: Some(level),
+            ..
+        } => whole(world.as_str(), level.as_str()),
+        Change::LevelMeta { world, level, .. }
+        | Change::LevelCreated { world, level }
+        | Change::LayerState { world, level, .. }
+        | Change::EntityLayer { world, level, .. }
+        | Change::LevelRenamed {
+            world, to: level, ..
+        }
+        | Change::LayerFileRenamed { world, level, .. } => whole(world.as_str(), level.as_str()),
+        _ => None,
+    }
+}
+
+/// Where a part (one write of a batch) happened: [`change_region`] of each
+/// of its changes, joined (those in the first one's world), with some room
+/// around it (as an annotation is framed: 30 % more, at least 8 cells).
+/// `None` when nothing it changed is on the map.
+pub fn part_region(doc: &Document, changes: &[Change]) -> Option<Region> {
+    let mut out: Option<Region> = None;
+    for r in changes.iter().filter_map(|c| change_region(doc, c)) {
+        match &mut out {
+            None => out = Some(r),
+            Some(o) if o.world == r.world => {
+                o.rect = o.rect.union(&r.rect);
+                if o.level != r.level {
+                    o.level = o.level.or(r.level);
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    let mut out = out?;
+    let min = 8.0 * doc.project.grid_size.max(1) as f64;
+    let c = out.rect.center();
+    let w = (out.rect.width() * 1.3).max(min);
+    let h = (out.rect.height() * 1.3).max(min);
+    out.rect = WRect::new(
+        [c[0] - w / 2.0, c[1] - h / 2.0],
+        [c[0] + w / 2.0, c[1] + h / 2.0],
+    );
+    Some(out)
+}
+
+/// Center the map on `r` (its world shown, its level active).
+pub fn show_region(st: &mut EditorState, r: Region) {
+    let Some(doc) = st.doc.as_ref() else {
+        return;
+    };
+    st.view.set_world(doc, r.world);
+    if let Some(ix) = r.level {
+        st.view.active_level = Some(ix);
+    }
+    st.viewport.request_fit(Fit::Show(r.rect));
+}
+
 /// The History pane.
 pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
     if st.doc.is_none() {
@@ -145,6 +316,8 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
         return;
     }
     let accent = st.accent;
+    let mut show: Option<Region> = None;
+    let doc = st.doc.as_ref().expect("checked above");
     let hs = &mut st.history;
     let n = hs.rows.len();
     ui.horizontal(|ui| {
@@ -230,8 +403,24 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
                 }
                 if open && row.expandable() {
                     ui.indent(("history parts", i), |ui| {
-                        for p in &row.parts {
-                            ui.weak(format!("· {p}"));
+                        for (j, p) in row.parts.iter().enumerate() {
+                            let region = row.part_changes.get(j).and_then(|c| part_region(doc, c));
+                            let text = RichText::new(format!("· {p}"));
+                            let r = match region {
+                                Some(_) => ui
+                                    .link(text)
+                                    .on_hover_text("Center the map on where this happened"),
+                                None => ui.weak(format!("· {p}")).on_hover_text(
+                                    "Nothing on the map to show (a definition, a setting, \
+                                     or something no longer there)",
+                                ),
+                            };
+                            super::fields::mark(ui, &format!("history:{}:part:{j}", i + 1), r.rect);
+                            if r.clicked()
+                                && let Some(g) = region
+                            {
+                                show = Some(g);
+                            }
                         }
                         for f in &row.files {
                             ui.label(RichText::new(f).small().monospace());
@@ -242,6 +431,9 @@ pub fn pane(ui: &mut egui::Ui, st: &mut EditorState) {
         });
     if let Some(to) = jump {
         st.actions.push(Action::HistoryJump(to));
+    }
+    if let Some(r) = show {
+        show_region(st, r);
     }
 }
 
@@ -337,6 +529,77 @@ mod tests {
         // The batch opens to list its writes.
         d.click(&mut st, d.rect("history:2:expand").center());
         assert!(st.history.expanded.contains(&1));
+    }
+
+    #[test]
+    fn clicking_a_batch_write_centers_the_map_on_it() {
+        use super::super::testkit::{Driver, state};
+        use worlds_core::command::{DefKind, Rect};
+        let (_t, mut st) = state();
+        st.view.active_level = None;
+        let doc = st.doc.as_mut().unwrap();
+        let mut h = History::new();
+        let a = doc.project.apply(add_ref("refaaaaaa2")).unwrap();
+        let b = doc.project.apply(add_ref("refbbbbbb2")).unwrap();
+        // What the server keeps per write: a painted rect in crevasse, and
+        // a definition (nothing on the map).
+        let painted = Change::Grid {
+            world: worlds_core::slug("main"),
+            level: worlds_core::slug("crevasse"),
+            layer: worlds_core::slug("collision"),
+            rect: Rect::new(2, 1, 3, 2),
+        };
+        let def = Change::Def {
+            kind: DefKind::Enum,
+            slug: worlds_core::slug("biome"),
+        };
+        assert!(h.record_parts(
+            "claude: paint and define",
+            Origin::Agent("claude".into()),
+            vec![a.inverse, b.inverse],
+            vec![
+                ("Paint collision".into(), vec![painted.clone()]),
+                ("Set enum biome".into(), vec![def.clone()]),
+            ],
+        ));
+        assert_eq!(h.undo_entries()[0].part_changes.len(), 2);
+        // Cells 2..5 x 1..3 of a 16 px grid in a level at the origin.
+        let doc = st.doc.as_ref().unwrap();
+        let r = change_region(doc, &painted).unwrap();
+        assert_eq!(r.level, doc.level_ix("crevasse"));
+        assert_eq!(r.rect, WRect::from_pos_size([32.0, 16.0], [48.0, 32.0]));
+        assert_eq!(part_region(doc, &[def]), None);
+        refresh(&mut st.history, 1, Some(&h));
+        st.history.expand_all = true;
+        let mut d = Driver::new(pane);
+        d.frame(&mut st, vec![]);
+        d.frame(&mut st, vec![]);
+        d.click(&mut st, d.rect("history:1:part:0").center());
+        assert!(
+            st.actions.is_empty(),
+            "showing a write doesn't step the history"
+        );
+        assert_eq!(
+            st.view.active_level,
+            st.doc.as_ref().unwrap().level_ix("crevasse")
+        );
+        let Some(Fit::Show(shown)) = st.viewport.pending_fit() else {
+            panic!("no Show fit: {:?}", st.viewport.pending_fit());
+        };
+        assert_eq!(shown.center(), [56.0, 32.0]);
+        assert!(shown.width() >= 8.0 * 16.0);
+        // The definition has nowhere to go.
+        st.viewport.request_fit(Fit::World);
+        d.click(&mut st, d.rect("history:1:part:1").center());
+        assert_eq!(st.viewport.pending_fit(), Some(Fit::World));
+    }
+
+    fn add_ref(x: &str) -> Command {
+        Command::AddReference {
+            scope: NoteScope::Level(worlds_core::slug("crevasse")),
+            reference: Reference::new(worlds_core::Id::new(x).unwrap(), "a.png", [0, 0]),
+            index: None,
+        }
     }
 
     #[test]
