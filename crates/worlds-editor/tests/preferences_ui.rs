@@ -135,7 +135,13 @@ fn remap_undo_in_the_preferences_window() {
         t: 0.0,
     };
     r.frames(vec![], 3);
-    assert!(!prefs.exists(), "nothing is written before a change");
+    // Opening the project only put it on the recent list.
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&prefs).unwrap()).unwrap();
+    assert_eq!(
+        v,
+        serde_json::json!({ "recent_projects": [std::fs::canonicalize(&dir).unwrap()] })
+    );
 
     // Ctrl+, opens the window, its search box takes the keyboard.
     r.press(Key::Comma, Modifiers::COMMAND);
@@ -162,8 +168,8 @@ fn remap_undo_in_the_preferences_window() {
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&prefs).unwrap()).unwrap();
     assert_eq!(
-        v,
-        serde_json::json!({ "shortcuts": { "undo": [ch("Ctrl+U").to_string()] } })
+        v["shortcuts"],
+        serde_json::json!({ "undo": [ch("Ctrl+U").to_string()] })
     );
 
     // The palette and the tooltips print the new chord.
@@ -217,7 +223,9 @@ fn remap_undo_in_the_preferences_window() {
     // Reset all: the defaults, and a file with nothing in it.
     r.click("prefs:reset_all");
     assert_eq!(r.app.st.keymap, worlds_editor::keymap::Keymap::defaults());
-    assert_eq!(std::fs::read_to_string(&prefs).unwrap().trim(), "{}");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&prefs).unwrap()).unwrap();
+    assert!(v.get("shortcuts").is_none(), "{v}");
     r.press(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
     assert_eq!(r.app.undo_entries(), n, "Ctrl+Shift+Z redoes");
     r.press(Key::Z, Modifiers::COMMAND);
@@ -269,4 +277,63 @@ fn headless_runs_read_preferences_but_never_write_them() {
         std::fs::read_to_string(&prefs).unwrap(),
         r#"{ "shortcuts": { "view.grid": ["F2"] } }"#
     );
+}
+
+#[test]
+fn recent_projects_in_the_worlds_menu_and_open_last_at_start() {
+    if !gpu_tests() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let a = game_copy(&tmp.path().join("a"));
+    let b = game_copy(&tmp.path().join("b"));
+    let prefs = tmp.path().join("config").join("preferences.json");
+    let hl = Headless::new([1400, 900]).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = EditorApp::new(
+        &ctx,
+        hl.gpu.clone(),
+        worlds_editor::log::init(),
+        opts(&prefs),
+    );
+    app.set_commands(Box::new(worlds_editor::edit::Editing::new()));
+    assert!(!app.open_last_project(), "nothing recent yet");
+    app.open(&a);
+    app.open(&b);
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+    assert_eq!(app.recent_projects(), [canon(&b), canon(&a)]);
+    let mut r = Rig {
+        hl,
+        ctx,
+        app,
+        t: 0.0,
+    };
+    r.frames(vec![], 2);
+    // Open recent > a: it opens, and goes to the top.
+    r.app.st.actions.push(Action::OpenRecent(canon(&a)));
+    r.frames(vec![], 2);
+    assert_eq!(
+        r.app.st.doc.as_ref().map(|d| canon(&d.dir)),
+        Some(canon(&a))
+    );
+    assert_eq!(r.app.recent_projects()[0], canon(&a));
+    // The checkbox turns on "open the last project at start".
+    r.click("menu:worlds");
+    r.click("menu:recent");
+    r.click("menu:open last");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&prefs).unwrap()).unwrap();
+    assert_eq!(v["open_last_project"], true, "{v}");
+    // A new session opens it by itself.
+    let ctx2 = egui::Context::default();
+    let mut app2 = EditorApp::new(
+        &ctx2,
+        r.hl.gpu.clone(),
+        worlds_editor::log::init(),
+        opts(&prefs),
+    );
+    app2.set_commands(Box::new(worlds_editor::edit::Editing::new()));
+    drop(r);
+    assert!(app2.open_last_project());
+    assert_eq!(app2.st.doc.as_ref().map(|d| canon(&d.dir)), Some(canon(&a)));
 }

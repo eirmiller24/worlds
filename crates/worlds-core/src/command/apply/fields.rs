@@ -274,7 +274,7 @@ impl Project {
             let mut commands: Vec<Command> = holders.into_iter().map(|h| h.unset(&field)).collect();
             let label = Self::remove_field_command(owner, field.clone(), false).label();
             commands.push(Self::remove_field_command(owner, field, true));
-            return self.batch(label, commands);
+            return self.batch(label, commands, None);
         }
         let def = self.field_list_mut(owner)?.remove(i);
         Ok(Applied {

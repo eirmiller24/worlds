@@ -171,6 +171,16 @@ fn an_agent_batch_entry_lists_its_writes_and_files() {
         e.parts,
         ["Add reference image", "Paint 1 cell on collision"]
     );
+    // What each write changed, for the History pane to frame it.
+    assert_eq!(e.part_changes.len(), 2);
+    assert!(matches!(
+        e.part_changes[0][..],
+        [worlds_core::command::Change::Reference { .. }]
+    ));
+    assert!(matches!(
+        e.part_changes[1][..],
+        [worlds_core::command::Change::Grid { rect, .. }] if rect.x == 3 && rect.y == 1
+    ));
     assert_eq!(
         e.files,
         [

@@ -117,9 +117,9 @@ pub(crate) struct OpenBatch {
     pub client: Client,
     /// Inverses of the writes not recorded in the history yet.
     pub inverses: Vec<Command>,
-    /// The labels of those writes' commands (the entry's parts, for the
-    /// editor's History pane).
-    pub parts: Vec<String>,
+    /// The labels of those writes' commands and what each changed (the
+    /// entry's parts, for the editor's History pane).
+    pub parts: Vec<(String, Vec<Change>)>,
     /// Where in `changes` the unrecorded writes start.
     pub recorded_changes: usize,
     /// Every change of the batch so far (for `end_batch` and its event).

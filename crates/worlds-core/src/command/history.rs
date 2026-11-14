@@ -47,6 +47,9 @@ pub struct Entry {
     /// one for a single command, each write of an agent's batch, empty
     /// for a gesture.
     pub parts: Vec<String>,
+    /// What each part changed, parallel to `parts` (the History pane frames
+    /// a part's region with it). Empty when the recorder didn't say.
+    pub part_changes: Vec<Vec<Change>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -132,8 +135,10 @@ impl History {
             None => {
                 let mut files = Vec::new();
                 add_files(&mut files, &applied.changes);
+                let part_changes = vec![applied.changes.clone()];
                 self.push_entry(Entry {
                     parts: vec![label.clone()],
+                    part_changes,
                     label,
                     origin,
                     command: applied.inverse,
@@ -162,6 +167,7 @@ impl History {
             time: SystemTime::now(),
             files: g.files,
             parts: Vec::new(),
+            part_changes: Vec::new(),
         });
         true
     }
@@ -214,7 +220,30 @@ impl History {
             time: SystemTime::now(),
             files,
             parts,
+            part_changes: Vec::new(),
         });
+        true
+    }
+
+    /// [`Self::record_with`] where each part comes with what it changed
+    /// (kept in [`Entry::part_changes`], so the History pane can show where
+    /// each of an agent's writes landed). The entry's files are those of
+    /// every part's changes.
+    pub fn record_parts(
+        &mut self,
+        label: impl Into<String>,
+        origin: Origin,
+        inverses: Vec<Command>,
+        parts: Vec<(String, Vec<Change>)>,
+    ) -> bool {
+        let (parts, part_changes): (Vec<String>, Vec<Vec<Change>>) = parts.into_iter().unzip();
+        let all: Vec<Change> = part_changes.iter().flatten().cloned().collect();
+        if !self.record_with(label, origin, inverses, parts, &all) {
+            return false;
+        }
+        if let Some(e) = self.undo.last_mut() {
+            e.part_changes = part_changes;
+        }
         true
     }
 

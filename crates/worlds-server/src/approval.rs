@@ -132,10 +132,8 @@ impl Handler {
         self.flush_batches(host.doc().history);
         let applied = {
             let doc = host.doc();
-            doc.project.apply(Command::Batch {
-                label: p.label.clone(),
-                commands: p.commands.clone(),
-            })
+            doc.project
+                .apply_batch_parts(p.label.clone(), p.commands.clone())
         };
         let client = Client {
             conn: p.conn,
@@ -151,19 +149,23 @@ impl Handler {
                 self.agent_event(&client, Some(&p.id), &p.label, "failed");
                 Err(Some(err))
             }
-            Ok(a) => {
+            Ok((a, part_changes)) => {
                 let changes = coalesce(a.changes.clone());
                 let recorded = if a.changes.is_empty() {
                     false
                 } else {
                     self.mutated(host, &a.changes);
-                    let parts = p.commands.iter().map(Command::label).collect();
-                    host.doc().history.record_with(
+                    let parts = p
+                        .commands
+                        .iter()
+                        .map(Command::label)
+                        .zip(part_changes)
+                        .collect();
+                    host.doc().history.record_parts(
                         p.label.clone(),
                         client.origin(),
                         vec![a.inverse],
                         parts,
-                        &a.changes,
                     )
                 };
                 if recorded {
